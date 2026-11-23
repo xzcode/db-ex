@@ -1,0 +1,64 @@
+name: DB EX macOS ad-hoc RC1
+on:
+  push:
+    branches: [release/dbex-mac-adhoc-rc1]
+permissions:
+  contents: write
+jobs:
+  mac-rc:
+    if: "github.repository == 'xzcode/db-ex' && github.event.head_commit.message == 'release: publish macOS ad-hoc RC1'"
+    runs-on: macos-15
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - name: Create ad-hoc-signed DMG/ZIP
+        run: npm exec electron-builder -- --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Verify installed app signature and icon
+        run: bash scripts/verify-mac-package.sh
+      - name: Launch packaged app
+        run: npm run smoke:electron
+        env:
+          DB_EX_PACKAGED: '1'
+      - name: Verify installers and hash
+        run: node scripts/check-packages.mjs
+      - name: Publish macOS-only RC for installation verification
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="v0.5.0-macos-adhoc-rc1"
+          repo="$GITHUB_REPOSITORY"
+          # A new prerelease tag: never overwrite the published v0.5.0.
+          if gh api "repos/$repo/git/ref/tags/$tag" >/dev/null 2>&1 || gh api "repos/$repo/releases" --jq '.[].tag_name' | grep -Fxq "$tag"; then
+            echo "::error::RC tag or release already exists"
+            exit 1
+          fi
+          gh release create "$tag" --repo "$repo" --target "$GITHUB_SHA" --draft --prerelease \
+            --title "DB EX macOS Ad-hoc Test (0.5.0 RC1)" \
+            --notes "macOS ARM64 only. Ad-hoc signed like Shell EX, with a verified custom icon and packaged Electron smoke. NOT Developer ID notarized. Please confirm download SHA-256 before installing. Browser-downloaded apps may still require user approval via System Settings. The published v0.5.0 remains unchanged."
+          cp release/SHA256SUMS.txt release/SHA256SUMS-macOS-ARM64.txt
+          gh release upload "$tag" release/*.dmg release/*.zip release/SHA256SUMS-macOS-ARM64.txt --repo "$repo"
+          draft_json="$(gh api "repos/$repo/releases?per_page=100" | jq -c --arg tag "$tag" '[.[] | select(.tag_name == $tag and .draft == true)] | .[0]')"
+          release_id="$(jq -r '.id // empty' <<< "$draft_json")"
+          [[ -n "$release_id" ]] || { echo "::error::Cannot locate RC draft"; exit 1; }
+          [[ "$(jq -r '.target_commitish' <<< "$draft_json")" == "$GITHUB_SHA" ]] || { echo "::error::Wrong commit for release"; exit 1; }
+          names="$(jq -r '.assets[].name' <<< "$draft_json")"
+          for file in 'DB.EX-0.5.0-mac-arm64.dmg' 'DB.EX-0.5.0-mac-arm64.zip' 'SHA256SUMS-macOS-ARM64.txt'; do
+            grep -Fqx -- "$file" <<< "$names" || { echo "::error::Missing asset: $file"; exit 1; }
+          done
+          [[ "$(jq -r '.assets | length' <<< "$draft_json")" == 3 ]] || { echo "::error::Unexpected asset count"; exit 1; }
+          jq -e '[.assets[] | select(.state == "uploaded" and (.name | endswith(".txt") or .size > 1048576))] | length == 3' <<< "$draft_json"
+          gh api -X PATCH "repos/$repo/releases/$release_id" -F draft=false -F prerelease=true >/dev/null
+          tag_sha="$(gh api "repos/$repo/git/ref/tags/$tag" --jq '.object.sha')"
+          [[ "$tag_sha" == "$GITHUB_SHA" ]] || { echo "::error::Published tag mismatch"; exit 1; }
+          echo "Published macOS RC1 with signed DMG, ZIP and SHA-256 file"
