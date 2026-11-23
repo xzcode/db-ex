@@ -81,7 +81,7 @@ export async function openSshTunnel(
         password: options.authMode === 'password' ? options.password : undefined,
         privateKey: key, passphrase: options.passphrase, agent,
         hostHash: 'sha256',
-        hostVerifier: hash => {
+        hostVerifier: (hash: string) => {
           hostKeySeen = String(hash).toLowerCase()
           return Boolean(options.hostFingerprint) && options.hostFingerprint!.toLowerCase() === hostKeySeen
         },

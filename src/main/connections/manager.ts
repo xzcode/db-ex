@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
-import { MongoClient, EJSON } from 'mongodb'
+import { MongoClient, BSON } from 'mongodb'
 import mysql, { type Connection as MysqlConnection } from 'mysql2/promise'
 import { createClient } from 'redis'
 import type { ConnectionConfig, DataPreview, ExplorerNode, SessionInfo } from '../../shared/types'
@@ -27,7 +27,7 @@ function textCell(input: unknown): string {
   if (typeof input === 'string') return input.slice(0, 4096)
   if (typeof input === 'bigint') return String(input)
   if (typeof input === 'object') {
-    try { return EJSON.stringify(input).slice(0, 4096) } catch { return '[complex value]' }
+    try { return BSON.EJSON.stringify(input).slice(0, 4096) } catch { return '[complex value]' }
   }
   return String(input)
 }
@@ -78,7 +78,7 @@ export class SessionManager {
             host, port, user: config.username || undefined, password: config.password || undefined,
             database: config.database || undefined, connectTimeout: 12000,
             supportBigNumbers: true, bigNumberStrings: true,
-            ssl: tlsEnabled ? { ca, cert, key, rejectUnauthorized: true, servername } : undefined,
+            ssl: tlsEnabled ? { ca, cert, key, rejectUnauthorized: true } : undefined,
           })
           driver = { kind: 'mysql', client }
           break

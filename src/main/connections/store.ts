@@ -14,7 +14,7 @@ interface EncryptedEntry {
 interface StoreFile { version: 1; entries: EncryptedEntry[] }
 
 export class ConnectionStore {
-  private readonly filename = join(app.getPath('userData'), 'connections.secure.json')
+  private get filename(): string { return join(app.getPath('userData'), 'connections.secure.json') }
   private readonly entries = new Map<string, EncryptedEntry>()
 
   async init(): Promise<void> {
