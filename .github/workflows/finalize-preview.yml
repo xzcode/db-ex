@@ -1,5 +1,7 @@
 name: Finalize DB EX v0.5.0 after direct asset uploads
 on:
+  push:
+    branches: [master]
   workflow_run:
     workflows: ["Publish DB EX v0.5.0"]
     types: [completed]
@@ -7,29 +9,36 @@ permissions:
   contents: write
 jobs:
   finalize:
-    # This is a one-time guard for the original merge commit. The release uploader
-    # sanitizes spaces in asset names to dots, which the original finalizer omitted.
+    # A guarded one-time recovery: drafts do not expose a Git ref or
+    # GET releases/tags endpoint until they have been published.
     if: >-
       github.repository == 'xzcode/db-ex' &&
+      ((github.event_name == 'push' && github.event.head_commit.message == 'release-fix: finalize v0.5.0') ||
+      (github.event_name == 'workflow_run' &&
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_branch == 'master' &&
       github.event.workflow_run.head_sha == 'af576492d5627bde5d9f15aacda96f4a4224b0e7' &&
-      github.event.workflow_run.conclusion == 'failure'
+      github.event.workflow_run.conclusion == 'failure'))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Verify draft tag and assets then publish the prerelease
+      - name: Validate 8 uploaded files and publish by Release ID
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           repo="$GITHUB_REPOSITORY"
-          tag_sha="$(gh api "repos/$repo/git/ref/tags/v0.5.0" --jq '.object.sha')"
-          [[ "$tag_sha" == "af576492d5627bde5d9f15aacda96f4a4224b0e7" ]] || { echo "::error::Tag does not point to the verified merge"; exit 1; }
-          is_draft="$(gh release view v0.5.0 --repo "$repo" --json isDraft --jq '.isDraft')"
-          [[ "$is_draft" == "true" ]] || { echo "::error::Release is not draft"; exit 1; }
-          payload="$(gh api "repos/$repo/releases/tags/v0.5.0")"
+          release_id=455588430
+          expected_sha=af576492d5627bde5d9f15aacda96f4a4224b0e7
+          payload="$(gh api "repos/$repo/releases/$release_id")"
+          tag="$(jq -r '.tag_name' <<<"$payload")"
+          target="$(jq -r '.target_commitish' <<<"$payload")"
+          draft="$(jq -r '.draft' <<<"$payload")"
+          [[ "$tag" == v0.5.0 && "$target" == "$expected_sha" && "$draft" == true ]] || {
+            echo "::error::Draft release version, target commit, or status mismatch."
+            exit 1
+          }
           names="$(jq -r '.assets[].name' <<<"$payload")"
           for filename in 'DB.EX-0.5.0-mac-arm64.dmg' 'DB.EX-0.5.0-mac-arm64.zip' 'DB.EX-0.5.0-win-x64.exe' 'DB.EX-0.5.0-linux-x86_64.AppImage' 'DB.EX-0.5.0-linux-amd64.deb' 'SHA256SUMS-macOS-ARM64.txt' 'SHA256SUMS-Windows-X64.txt' 'SHA256SUMS-Linux-X64.txt'; do
             if ! grep -Fqx -- "$filename" <<<"$names"; then
@@ -37,7 +46,13 @@ jobs:
               exit 1
             fi
           done
-          bad="$(jq -r '.assets[] | select((.state != "uploaded") or (.size < 1048576 and (.name | endswith(".txt") | not))) | .name' <<<"$payload")"
-          [[ -z "$bad" ]] || { echo "::error::Incomplete or unexpectedly small release asset: $bad"; exit 1; }
-          gh release edit v0.5.0 --repo "$repo" --draft=false --prerelease
-          echo "Release v0.5.0 published with 5 installers and 3 SHA-256 files."
+          pending="$(jq -r '.assets[] | select(.state != "uploaded") | .name' <<<"$payload")"
+          [[ -z "$pending" ]] || { echo "::error::Unfinished upload: $pending"; exit 1; }
+          small="$(jq -r '.assets[] | select(.size < 1048576) | select(.name | endswith(".txt") | not) | .name' <<<"$payload")"
+          [[ -z "$small" ]] || { echo "::error::Installer too small: $small"; exit 1; }
+          published="$(gh api -X PATCH "repos/$repo/releases/$release_id" -F draft=false -F prerelease=true)"
+          [[ "$(jq -r '.draft' <<<"$published")" == false ]] || { echo "::error::Release is still a draft"; exit 1; }
+          [[ "$(jq -r '.tag_name' <<<"$published")" == v0.5.0 ]] || { echo "::error::Tag changed during publication"; exit 1; }
+          tag_sha="$(gh api "repos/$repo/git/ref/tags/v0.5.0" --jq '.object.sha')"
+          [[ "$tag_sha" == "$expected_sha" ]] || { echo "::error::Published tag target mismatch"; exit 1; }
+          echo "Release v0.5.0 published with 5 installers and 3 checksum files."
