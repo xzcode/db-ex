@@ -1,0 +1,36 @@
+name: Finalize macOS ad-hoc RC1
+on:
+  push:
+    branches: [release/dbex-mac-adhoc-rc1]
+permissions:
+  contents: write
+jobs:
+  finalize:
+    if: "github.repository == 'xzcode/db-ex' && github.event.head_commit.message == 'release-fix: finalize macOS ad-hoc RC1'"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Publish only the fully validated macOS candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          tag=v0.5.0-macos-adhoc-rc1
+          release_id=455722015
+          expected_sha=0cd9b618a4f907c8c33031142a4f9c0a029d6e8a
+          payload="$(gh api "repos/$repo/releases/$release_id")"
+          [[ "$(jq -r '.tag_name' <<< "$payload")" == "$tag" ]] || { echo "::error::Version mismatch"; exit 1; }
+          [[ "$(jq -r '.target_commitish' <<< "$payload")" == "$expected_sha" ]] || { echo "::error::Target commit mismatch"; exit 1; }
+          [[ "$(jq -r '.draft' <<< "$payload")" == 'true' ]] || { echo "::error::Not a draft"; exit 1; }
+          names="$(jq -r '.assets[].name' <<< "$payload")"
+          for f in 'DB.EX-0.5.0-mac-arm64.dmg' 'DB.EX-0.5.0-mac-arm64.zip' 'SHA256SUMS-macOS-ARM64.txt'; do
+            grep -Fqx -- "$f" <<< "$names" || { echo "::error::Missing $f"; exit 1; }
+          done
+          [[ "$(jq -r '.assets | length' <<< "$payload")" == 3 ]] || { echo "::error::Unexpected assets"; exit 1; }
+          jq -e '.assets | all(.[]; .state == "uploaded" and (if (.name | endswith(".txt")) then .size > 0 else .size > 1048576 end))' <<< "$payload"
+          gh api -X PATCH "repos/$repo/releases/$release_id" -F draft=false -F prerelease=true >/dev/null
+          actual="$(gh api "repos/$repo/git/ref/tags/$tag" --jq '.object.sha')"
+          [[ "$actual" == "$expected_sha" ]] || { echo "::error::Tag target mismatch"; exit 1; }
+          echo "Published macOS ad-hoc RC1 with three verified GitHub Release assets."
