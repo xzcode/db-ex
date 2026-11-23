@@ -1,0 +1,72 @@
+<script setup lang="ts">
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import * as monaco from 'monaco-editor/editor/editor.api'
+import 'monaco-editor/editor/browser/coreCommands'
+import 'monaco-editor/editor/contrib/dropOrPasteInto/browser/copyPasteContribution'
+import 'monaco-editor/editor/contrib/find/browser/findController'
+import 'monaco-editor/editor/contrib/suggest/browser/suggestController'
+import 'monaco-editor/languages/definitions/sql/register'
+import 'monaco-editor/language/json/monaco.contribution'
+import EditorWorker from 'monaco-editor/editor/editor.worker?worker'
+import JsonWorker from 'monaco-editor/language/json/json.worker?worker'
+
+const props = withDefaults(defineProps<{
+  modelValue: string
+  language?: string
+  readonly?: boolean
+  suggestions?: string[]
+}>(), { language: 'sql', readonly: false, suggestions: () => [] })
+const emit = defineEmits<{ 'update:modelValue': [value: string]; execute: [] }>()
+const host = ref<HTMLElement>()
+let editor: monaco.editor.IStandaloneCodeEditor | undefined
+let observer: MutationObserver | undefined
+let completion: monaco.IDisposable | undefined
+let change: monaco.IDisposable | undefined
+
+self.MonacoEnvironment = {
+  getWorker(_id: string, label: string) { return label === 'json' ? new JsonWorker() : new EditorWorker() },
+}
+
+function applyTheme() {
+  monaco.editor.setTheme(document.documentElement.dataset.theme === 'light' ? 'vs' : 'vs-dark')
+}
+onMounted(() => {
+  if (!host.value) return
+  editor = monaco.editor.create(host.value, {
+    value: props.modelValue, language: props.language, readOnly: props.readonly,
+    automaticLayout: true, minimap: { enabled: false }, fontSize: 13,
+    fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", monospace',
+    tabSize: 2, wordWrap: 'on', scrollBeyondLastLine: false,
+    padding: { top: 12, bottom: 12 }, fixedOverflowWidgets: true,
+  })
+  applyTheme()
+  change = editor.onDidChangeModelContent(() => emit('update:modelValue', editor!.getValue()))
+  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => emit('execute'))
+  completion = monaco.languages.registerCompletionItemProvider('sql', {
+    provideCompletionItems(model, position) {
+      if (model !== editor?.getModel()) return { suggestions: [] }
+      const word = model.getWordUntilPosition(position)
+      const range = new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn)
+      return { suggestions: props.suggestions.map(label => ({ label, insertText: '`' + label.replace(/`/g, '``') + '`', range, kind: monaco.languages.CompletionItemKind.Field })) }
+    },
+  })
+  observer = new MutationObserver(applyTheme)
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
+})
+watch(() => props.modelValue, value => { if (editor && editor.getValue() !== value) editor.setValue(value) })
+watch(() => props.language, value => { if (editor?.getModel()) monaco.editor.setModelLanguage(editor.getModel()!, value) })
+watch(() => props.readonly, value => editor?.updateOptions({ readOnly: value }))
+onBeforeUnmount(() => {
+  observer?.disconnect(); completion?.dispose(); change?.dispose()
+  const model = editor?.getModel(); editor?.dispose(); model?.dispose()
+})
+defineExpose({
+  selection: () => {
+    const selection = editor?.getSelection()
+    return selection && !selection.isEmpty() ? editor?.getModel()?.getValueInRange(selection) || '' : props.modelValue
+  },
+  focus: () => editor?.focus(),
+})
+</script>
+
+<template><div ref="host" class="code-editor" aria-label="代码编辑器"></div></template>

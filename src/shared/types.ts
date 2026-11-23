@@ -1,5 +1,7 @@
 export type DatabaseKind = 'mysql' | 'mongodb' | 'redis'
 export type EnvironmentKind = 'development' | 'testing' | 'production'
+export type SqlValue = string | number | boolean | null
+export type SqlRow = Record<string, SqlValue>
 
 export interface SshOptions {
   enabled: boolean
@@ -11,19 +13,27 @@ export interface SshOptions {
   privateKeyPath?: string
   passphrase?: string
   agentSocket?: string
-  /** SHA-256 of server public key, encoded as 64 lowercase hex characters. */
+  /** SHA-256 of the host public key, 64 lowercase hexadecimal characters. */
   hostFingerprint?: string
+  /** Ordered jump hosts preceding this final SSH server. Maximum three. */
+  jumps?: SshOptions[]
 }
-
+export interface ProxyOptions {
+  enabled: boolean
+  type: 'socks5' | 'http-connect'
+  host: string
+  port: number
+  username?: string
+  password?: string
+}
 export interface TlsOptions {
   enabled: boolean
   caPath?: string
   certPath?: string
   keyPath?: string
-  /** Override for certificate hostname verification when tunneled. */
   servername?: string
 }
-
+export interface Endpoint { host: string; port: number }
 export interface ConnectionConfig {
   id?: string
   name: string
@@ -36,12 +46,20 @@ export interface ConnectionConfig {
   database?: string
   authSource?: string
   redisDb?: number
-  /** MongoDB-only URI, stored encrypted; can contain credentials. */
   uri?: string
   ssh: SshOptions
   tls: TlsOptions
+  proxy?: ProxyOptions
+  redisMode?: 'standalone' | 'sentinel' | 'cluster'
+  nodes?: Endpoint[]
+  sentinelMaster?: string
+  sentinelUsername?: string
+  sentinelPassword?: string
+  sentinelTls?: boolean
+  mongoReplicaSet?: string
+  mongoDirect?: boolean
+  connectTimeoutMs?: number
 }
-
 export interface SavedConnection {
   id: string
   name: string
@@ -51,8 +69,9 @@ export interface SavedConnection {
   port: number
   sshEnabled: boolean
   tlsEnabled: boolean
+  proxyEnabled?: boolean
 }
-
+export interface ConnectionDraft { config: ConnectionConfig; secretFields: string[] }
 export interface SessionInfo {
   id: string
   connectionId?: string
@@ -60,8 +79,9 @@ export interface SessionInfo {
   kind: DatabaseKind
   environment: EnvironmentKind
   displayHost: string
+  writable: boolean
+  transaction: boolean
 }
-
 export interface ExplorerNode {
   id: string
   label: string
@@ -69,26 +89,93 @@ export interface ExplorerNode {
   database?: string
   entity?: string
 }
-
 export interface DataPreview {
   columns: string[]
   rows: Record<string, string>[]
   nextOffset?: number
-  nextCursor?: number
+  nextCursor?: string
   value?: string
 }
-
+export interface OperationResult extends DataPreview {
+  redisType?: string
+  ttl?: number
+  length?: number
+  rawRows?: SqlRow[]
+  documents?: string[]
+  affectedRows?: number
+  durationMs?: number
+  truncated?: boolean
+  message?: string
+  transaction?: boolean
+  disconnected?: boolean
+  primaryKeys?: string[]
+}
+interface Confirmed { confirmed?: boolean }
+interface Entity { database: string; entity: string }
+export type MysqlOperation =
+  | ({ action: 'mysql.query'; database?: string; sql: string; parameters?: SqlValue[]; limit?: number; offset?: number } & Confirmed)
+  | ({ action: 'mysql.structure' } & Entity)
+  | ({ action: 'mysql.insert'; values: SqlRow } & Entity & Confirmed)
+  | ({ action: 'mysql.update'; key: SqlRow; original: SqlRow; changes: SqlRow } & Entity & Confirmed)
+  | ({ action: 'mysql.delete'; key: SqlRow; original: SqlRow } & Entity & Confirmed)
+  | ({ action: 'mysql.import'; rows: SqlRow[] } & Entity & Confirmed)
+  | ({ action: 'mysql.begin' | 'mysql.commit' | 'mysql.rollback' } & Confirmed)
+export type MongoOperation =
+  | ({ action: 'mongo.find'; filter?: string; projection?: string; sort?: string; offset?: number; limit?: number } & Entity)
+  | ({ action: 'mongo.aggregate'; pipeline: string; limit?: number } & Entity)
+  | ({ action: 'mongo.insert'; documents: string[] } & Entity & Confirmed)
+  | ({ action: 'mongo.replace'; original: string; document: string } & Entity & Confirmed)
+  | ({ action: 'mongo.delete'; original: string } & Entity & Confirmed)
+  | ({ action: 'mongo.indexes' } & Entity)
+  | ({ action: 'mongo.createIndex'; keys: string; options?: string } & Entity & Confirmed)
+  | ({ action: 'mongo.dropIndex'; name: string } & Entity & Confirmed)
+export type RedisValueType = 'string' | 'hash' | 'list' | 'set' | 'zset' | 'stream'
+export type RedisOperation =
+  | { action: 'redis.scan'; cursor?: string; pattern?: string; node?: string }
+  | { action: 'redis.get'; key: string; cursor?: string; offset?: number }
+  | ({ action: 'redis.set'; key: string; value: string; ttl?: number; expected?: string } & Confirmed)
+  | ({ action: 'redis.mutate'; key: string; type: RedisValueType; command: string; args: string[] } & Confirmed)
+  | ({ action: 'redis.ttl'; key: string; ttl: number } & Confirmed)
+  | ({ action: 'redis.delete'; keys: string[] } & Confirmed)
+  | ({ action: 'redis.command'; args: string[] } & Confirmed)
+  | { action: 'redis.nodes' }
+export type DatabaseOperation = MysqlOperation | MongoOperation | RedisOperation
+export interface QuerySnippet {
+  id: string
+  name: string
+  kind: DatabaseKind
+  database?: string
+  text: string
+  favorite: boolean
+  updatedAt: string
+}
+export interface FileImport { name: string; text: string; format: 'csv' | 'json' | 'text' }
+export interface SshImportResult { hosts: { name: string; ssh: SshOptions }[]; warnings: string[] }
 export interface DbExAPI {
   listConnections(): Promise<SavedConnection[]>
-  saveConnection(config: ConnectionConfig): Promise<SavedConnection>
+  saveConnection(config: ConnectionConfig, clearSecrets?: string[]): Promise<SavedConnection>
+  editConnection(id: string): Promise<ConnectionDraft>
   deleteConnection(id: string): Promise<void>
   trustHostKey(id: string, fingerprint: string): Promise<void>
   connectSaved(id: string): Promise<SessionInfo>
-  connectTemporary(config: ConnectionConfig): Promise<SessionInfo>
+  connectTemporary(config: ConnectionConfig, clearSecrets?: string[]): Promise<SessionInfo>
+  testConnection(config: ConnectionConfig, clearSecrets?: string[]): Promise<string>
   disconnect(sessionId: string): Promise<void>
   roots(sessionId: string): Promise<ExplorerNode[]>
   children(sessionId: string, database: string): Promise<ExplorerNode[]>
   preview(sessionId: string, database: string, entity: string, offset?: number): Promise<DataPreview>
-  redisKeys(sessionId: string, cursor?: number, pattern?: string): Promise<DataPreview>
+  redisKeys(sessionId: string, cursor?: string, pattern?: string): Promise<DataPreview>
   redisValue(sessionId: string, key: string): Promise<DataPreview>
+  execute(sessionId: string, operation: DatabaseOperation): Promise<OperationResult>
+  cancel(sessionId: string): Promise<void>
+  setWriteAccess(sessionId: string, enabled: boolean): Promise<SessionInfo>
+  listSnippets(): Promise<QuerySnippet[]>
+  saveSnippet(snippet: Omit<QuerySnippet, 'id' | 'updatedAt'> & { id?: string }): Promise<QuerySnippet>
+  deleteSnippet(id: string): Promise<void>
+  importFile(): Promise<FileImport | null>
+  exportFile(name: string, content: string, format: 'csv' | 'json' | 'text'): Promise<boolean>
+  importConnections(): Promise<number>
+  exportConnections(): Promise<boolean>
+  importSshConfig(): Promise<SshImportResult | null>
 }
+

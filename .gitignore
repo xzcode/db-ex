@@ -11,3 +11,9 @@ coverage/
 !.env.example
 .idea/
 .vscode/
+
+
+# Local verification artifacts
+playwright-report/
+test-results/
+electron-smoke.png

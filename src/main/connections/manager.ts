@@ -1,270 +1,243 @@
 import { randomUUID } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
-import { MongoClient, BSON } from 'mongodb'
+import { readFile, stat } from 'node:fs/promises'
+import { MongoClient, type MongoClientOptions } from 'mongodb'
 import mysql, { type Connection as MysqlConnection } from 'mysql2/promise'
-import { createClient } from 'redis'
-import type { ConnectionConfig, DataPreview, ExplorerNode, SessionInfo } from '../../shared/types'
-import { openSshTunnel, type SshTunnel } from './ssh'
+import type { ConnectionOptions as TlsConnectionOptions } from 'node:tls'
+import { checkServerIdentity } from 'node:tls'
+import { isIP } from 'node:net'
+import type { ConnectionConfig, DatabaseOperation, DataPreview, ExplorerNode, MongoOperation, MysqlOperation, OperationResult, RedisOperation, SessionInfo } from '../../shared/types'
+import { createTransport, type ConnectionTransport } from './transport'
+import { createRedisClient, setRedisReadBudget, type RedisClient } from './redis-client'
 import { validateConnection, validateId } from './validation'
+import { secretValues } from './credentials'
+import { MysqlOperations } from '../operations/mysql'
+import { MongoOperations } from '../operations/mongodb'
+import { RedisOperations } from '../operations/redis'
+import { databaseError, resourceName, type OperationContext } from '../operations/common'
+import { quoteIdentifier } from '../operations/sql-policy'
 
-type RedisConnection = ReturnType<typeof createClient>
 type DriverSession =
-  | { kind: 'mysql'; client: MysqlConnection }
-  | { kind: 'mongodb'; client: MongoClient }
-  | { kind: 'redis'; client: RedisConnection }
-
+  | { kind: 'mysql'; client: MysqlConnection; operations: MysqlOperations }
+  | { kind: 'mongodb'; client: MongoClient; operations: MongoOperations }
+  | { kind: 'redis'; client: RedisClient; operations: RedisOperations }
 interface LiveSession {
   info: SessionInfo
+  config: ConnectionConfig
   driver: DriverSession
-  tunnel?: SshTunnel
-  database: string
-  redisDb: number
+  transport: ConnectionTransport
+  controller?: AbortController
 }
-
-function textCell(input: unknown): string {
-  if (input === null || input === undefined) return 'NULL'
-  if (Buffer.isBuffer(input)) return `base64:${input.toString('base64')}`
-  if (typeof input === 'string') return input.slice(0, 4096)
-  if (typeof input === 'bigint') return String(input)
-  if (typeof input === 'object') {
-    try { return BSON.EJSON.stringify(input).slice(0, 4096) } catch { return '[complex value]' }
-  }
-  return String(input)
+const ACTIONS = new Set(['mysql.query', 'mysql.structure', 'mysql.insert', 'mysql.update', 'mysql.delete', 'mysql.import', 'mysql.begin', 'mysql.commit', 'mysql.rollback', 'mongo.find', 'mongo.aggregate', 'mongo.insert', 'mongo.replace', 'mongo.delete', 'mongo.indexes', 'mongo.createIndex', 'mongo.dropIndex', 'redis.scan', 'redis.get', 'redis.set', 'redis.mutate', 'redis.ttl', 'redis.delete', 'redis.command', 'redis.nodes'])
+async function certificate(path?: string): Promise<Buffer | undefined> {
+  if (!path) return undefined
+  const info = await stat(path)
+  if (!info.isFile() || info.size > 2 * 1024 * 1024) throw new Error('TLS_CONFIG: 证书文件必须为不超过2 MiB的普通文件')
+  return readFile(path)
 }
-
-function grid(rows: Record<string, unknown>[], nextOffset?: number): DataPreview {
-  const columns = [...new Set(rows.flatMap(row => Object.keys(row)))].slice(0, 60)
-  return {
-    columns, rows: rows.map(row => Object.fromEntries(columns.map(key => [key, textCell(row[key])]))),
-    nextOffset,
-  }
-}
-
-function quoteIdentifier(identifier: string): string {
-  return `\`${identifier.replaceAll('`', '``')}\``
-}
-
+function hostForUri(host: string): string { return isIP(host) === 6 ? `[${host}]` : host }
 export class SessionManager {
-  private sessions = new Map<string, LiveSession>()
-
+  private readonly sessions = new Map<string, LiveSession>()
+  private pendingConnections = 0
+  private generation = 0
   private session(id: string): LiveSession {
     validateId(id)
-    const session = this.sessions.get(id)
-    if (!session) throw new Error('会话已关闭，请重新连接')
-    return session
+    const result = this.sessions.get(id)
+    if (!result) throw new Error('SESSION_CLOSED: 会话已关闭，请重新连接')
+    return result
   }
-
+  info(id: string): SessionInfo { return { ...this.session(id).info } }
+  redact(message: string, extra?: ConnectionConfig): string {
+    const values = [...this.sessions.values()].flatMap(session => secretValues(session.config))
+    if (extra) values.push(...secretValues(extra))
+    for (const value of values.sort((a, b) => b.length - a.length)) if (value) message = message.split(value).join('[redacted]')
+    return message.replace(/(?:mongodb(?:\+srv)?|redis|rediss|mysql):\/\/[^\s]+/gi, '[redacted URI]')
+      .replace(/((?:password|passphrase|pwd|proxyPassword)\s*[:=]\s*)[^\s&;,]+/gi, '$1[redacted]').slice(0, 1500)
+  }
   async connect(value: ConnectionConfig, connectionId?: string): Promise<SessionInfo> {
+    if (this.sessions.size + this.pendingConnections >= 20) throw new Error('SESSION_LIMIT: 最多同时打开20个连接')
     const config = validateConnection(value)
-    let tunnel: SshTunnel | undefined
+    const generation = this.generation
+    this.pendingConnections++
+    let transport: ConnectionTransport | undefined
     let driver: DriverSession | undefined
+    let mongoPending: MongoClient | undefined
     try {
-      let host = config.host
-      let port = config.port
-      if (config.ssh.enabled) {
-        tunnel = await openSshTunnel(config.ssh, host, port)
-        host = '127.0.0.1'
-        port = tunnel.port
-      }
-      const tlsEnabled = config.tls.enabled
-      const ca = tlsEnabled && config.tls.caPath ? await readFile(config.tls.caPath) : undefined
-      const cert = tlsEnabled && config.tls.certPath ? await readFile(config.tls.certPath) : undefined
-      const key = tlsEnabled && config.tls.keyPath ? await readFile(config.tls.keyPath) : undefined
-      const servername = config.tls.servername || config.host
-
+      transport = await createTransport({ ssh: config.ssh, proxy: config.proxy, timeoutMs: config.connectTimeoutMs })
+      const loadTls = config.tls.enabled || config.sentinelTls
+      const [ca, cert, key] = loadTls ? await Promise.all([certificate(config.tls.caPath), certificate(config.tls.certPath), certificate(config.tls.keyPath)]) : []
+      const tls: TlsConnectionOptions = { ca, cert, key, servername: config.tls.servername || undefined, rejectUnauthorized: true, minVersion: 'TLSv1.2' }
       switch (config.kind) {
         case 'mysql': {
-          const client = await mysql.createConnection({
-            host, port, user: config.username || undefined, password: config.password || undefined,
-            database: config.database || undefined, connectTimeout: 12000,
-            supportBigNumbers: true, bigNumberStrings: true,
-            ssl: tlsEnabled ? { ca, cert, key, rejectUnauthorized: true } : undefined,
-          })
-          driver = { kind: 'mysql', client }
+          const stream = await transport.open(config.host, config.port)
+          try {
+            const client = await mysql.createConnection({
+              host: config.tls.servername || config.host, port: config.port, stream,
+              user: config.username || undefined, password: config.password || undefined,
+              database: config.database || undefined, connectTimeout: config.connectTimeoutMs,
+              supportBigNumbers: true, bigNumberStrings: true, dateStrings: true, decimalNumbers: false, jsonStrings: true,
+              multipleStatements: false, flags: ['-LOCAL_FILES'],
+              ssl: config.tls.enabled ? { ca, cert, key, rejectUnauthorized: true, verifyIdentity: true, minVersion: 'TLSv1.2' } : undefined,
+            })
+            driver = { kind: 'mysql', client, operations: new MysqlOperations(client) }
+          } catch (error) { stream.destroy(); throw error }
           break
         }
         case 'mongodb': {
-          // SRV/replica discovery remains native when connecting directly. SSH is single-node only.
-          const uri = config.uri?.trim() || `mongodb://${host}:${port}/`
-          const client = new MongoClient(uri, {
-            ...(config.uri?.trim() ? {} : {
+          const nodes = config.nodes?.length ? config.nodes : [{ host: config.host, port: config.port }]
+          const uri = config.uri?.trim() || `mongodb://${nodes.map(node => `${hostForUri(node.host)}:${node.port}`).join(',')}/`
+          const options: MongoClientOptions = {
+            ...(config.uri ? {} : {
               auth: config.username ? { username: config.username, password: config.password || '' } : undefined,
-              authSource: config.authSource || 'admin',
+              authSource: config.authSource || 'admin', dbName: config.database || undefined,
             }),
-            directConnection: config.ssh.enabled ? true : undefined,
-            serverSelectionTimeoutMS: 12000, connectTimeoutMS: 12000,
-            maxPoolSize: 5,
-            tls: tlsEnabled ? true : undefined,
-            tlsCAFile: tlsEnabled ? config.tls.caPath || undefined : undefined,
-            tlsCertificateKeyFile: tlsEnabled && config.tls.certPath && config.tls.keyPath
-              ? config.tls.certPath : undefined,
-            // A separate key path is not supported by the MongoDB driver's TLS PEM option.
-          })
-          if (tlsEnabled && cert && key && config.tls.certPath !== config.tls.keyPath) {
-            throw new Error('TLS_ERROR: MongoDB 客户端证书与私钥需放在同一个 PEM 文件中')
+            serverSelectionTimeoutMS: config.connectTimeoutMs, connectTimeoutMS: config.connectTimeoutMs,
+            socketTimeoutMS: 30000, maxPoolSize: 5, minPoolSize: 0, waitQueueTimeoutMS: 10000,
+            retryWrites: false, retryReads: false,
+            promoteLongs: false, promoteValues: false,
+            ...(config.mongoReplicaSet ? { replicaSet: config.mongoReplicaSet } : {}),
+            ...(config.mongoDirect ? { directConnection: true } : {}),
+            ...(config.tls.enabled ? { tls: true, ca, cert, key, minVersion: 'TLSv1.2' } : {}),
+            ...(config.tls.servername ? { servername: config.tls.servername, checkServerIdentity: (_host, certificate) => checkServerIdentity(config.tls.servername!, certificate) } : {}),
           }
-          await client.connect()
-          driver = { kind: 'mongodb', client }
+          if (config.ssh.enabled || config.proxy?.enabled) {
+            const proxy = await transport.socks()
+            Object.assign(options, { proxyHost: proxy.host, proxyPort: proxy.port, proxyUsername: proxy.username, proxyPassword: proxy.password })
+          }
+          mongoPending = new MongoClient(uri, options)
+          await mongoPending.connect()
+          driver = { kind: 'mongodb', client: mongoPending, operations: new MongoOperations(mongoPending) }
+          mongoPending = undefined
           break
         }
         case 'redis': {
-          const client = createClient({
-            username: config.username || undefined,
-            password: config.password || undefined,
-            database: config.redisDb ?? 0,
-            socket: {
-              host, port, connectTimeout: 12000,
-              tls: tlsEnabled ? true : undefined,
-              ca, cert, key,
-              servername: tlsEnabled ? servername : undefined,
-              reconnectStrategy: false,
-            },
-          })
-          // node-redis emits errors on the EventEmitter even if connect() rejects.
-          client.on('error', () => {})
-          await client.connect()
-          driver = { kind: 'redis', client }
+          const client = await createRedisClient(config, transport, tls)
+          driver = { kind: 'redis', client, operations: new RedisOperations(client) }
           break
         }
       }
-      const id = randomUUID()
-      const info: SessionInfo = {
-        id, connectionId, name: config.name, kind: config.kind,
-        environment: config.environment, displayHost: config.host || 'MongoDB URI',
-      }
-      this.sessions.set(id, {
-        info, driver, tunnel, database: config.database || '', redisDb: config.redisDb ?? 0,
-      })
-      return info
+      if (generation !== this.generation) throw new Error('SESSION_CLOSED: 窗口已关闭，本次连接已取消')
+      const info: SessionInfo = { id: randomUUID(), connectionId, name: config.name, kind: config.kind, environment: config.environment,
+        displayHost: config.host || 'MongoDB URI', writable: false, transaction: false }
+      this.sessions.set(info.id, { info, driver, transport, config })
+      return { ...info }
     } catch (error) {
       if (driver) await this.closeDriver(driver)
-      if (tunnel) await tunnel.close()
-      throw error
-    }
+      await mongoPending?.close().catch(() => {})
+      await transport?.close().catch(() => {})
+      const original = error as { code?: string; name?: string; message?: string }
+      const message = original.message || '连接失败'
+      if (/^[A-Z_]+:/.test(message)) throw new Error(this.redact(message, config))
+      const code = String(original.code || original.name || 'NETWORK').replace(/[^A-Za-z0-9_-]/g, '')
+      throw new Error(`CONNECTION_FAILED: 连接失败（${code}），请检查认证、网络、TLS证书及拓扑配置`)
+    } finally { this.pendingConnections-- }
   }
-
   private async closeDriver(driver: DriverSession): Promise<void> {
-    try {
-      if (driver.kind === 'mysql') await driver.client.end()
-      else if (driver.kind === 'mongodb') await driver.client.close()
-      else if (driver.client.isOpen) await driver.client.quit()
-    } catch { /* Prefer closing tunnel and clearing session even on driver shutdown failure. */ }
+    if (driver.kind === 'mysql') { await driver.operations.close().catch(() => {}); driver.client.destroy() }
+    else if (driver.kind === 'mongodb') { driver.operations.cancel(); await driver.client.close().catch(() => {}) }
+    else driver.client.disconnect()
   }
-
   async disconnect(id: string): Promise<void> {
+    validateId(id)
     const session = this.sessions.get(id)
     if (!session) return
     this.sessions.delete(id)
-    await this.closeDriver(session.driver)
-    await session.tunnel?.close()
+    session.controller?.abort()
+    try { await this.closeDriver(session.driver) } finally { await session.transport.close() }
   }
-
-  async disconnectForConnection(connectionId: string): Promise<void> {
-    for (const [id, session] of this.sessions) {
-      if (session.info.connectionId === connectionId) await this.disconnect(id)
+  async cancel(id: string): Promise<void> { await this.disconnect(id) }
+  async disconnectForConnection(connectionId: string): Promise<void> { await Promise.all([...this.sessions.values()].filter(x => x.info.connectionId === connectionId).map(x => this.disconnect(x.info.id))) }
+  async closeAll(): Promise<void> { this.generation++; await Promise.allSettled([...this.sessions.keys()].map(id => this.disconnect(id))) }
+  async setWriteAccess(id: string, enabled: boolean): Promise<SessionInfo> {
+    if (typeof enabled !== 'boolean') throw new Error('权限参数无效')
+    const session = this.session(id)
+    if (session.controller) throw new Error('SESSION_BUSY: 请等待当前操作完成或取消')
+    if (!enabled && session.driver.kind === 'mysql' && session.driver.operations.transactionActive) await this.execute(id, { action: 'mysql.rollback' })
+    session.info.writable = enabled
+    return { ...session.info }
+  }
+  private async guard<T>(id: string, work: (session: LiveSession, context: OperationContext) => Promise<T>, confirmed = false): Promise<T> {
+    const session = this.session(id)
+    if (session.controller) throw new Error('SESSION_BUSY: 当前连接正在执行操作')
+    const controller = new AbortController()
+    session.controller = controller
+    const redisBudget = session.driver.kind === 'redis' ? setRedisReadBudget(session.driver.client, 8 * 1024 * 1024) : undefined
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    try {
+      return await Promise.race([
+        work(session, { writable: session.info.writable, confirmed, signal: controller.signal }),
+        new Promise<never>((_resolve, reject) => { timeout = setTimeout(() => { controller.abort(); void this.disconnect(id); reject(new Error('TIMEOUT: 操作超过30秒，连接已断开；未提交事务将回滚，写入结果请重连后核对')) }, 30000) }),
+      ])
+    } catch (error) {
+      if (session.driver.kind === 'mysql' && session.driver.operations.disconnected) await this.disconnect(id)
+      const e = error as { code?: unknown; name?: string }
+      if (e?.code !== undefined || e?.name?.startsWith('Mongo')) throw databaseError(error)
+      throw error
+    } finally {
+      if (timeout) clearTimeout(timeout)
+      if (session.driver.kind === 'redis') setRedisReadBudget(session.driver.client, undefined)
+      session.controller = undefined
+      if (redisBudget?.exceeded) { await this.disconnect(id); throw new Error('LIMIT_EXCEEDED: Redis回复超过8 MiB，连接已关闭；写操作可能部分完成，请重连核对') }
+      if (session.driver.kind === 'mysql') session.info.transaction = session.driver.operations.transactionActive
     }
   }
-
-  async closeAll(): Promise<void> {
-    for (const id of [...this.sessions.keys()]) await this.disconnect(id)
+  async execute(id: string, input: DatabaseOperation): Promise<OperationResult> {
+    if (!input || typeof input !== 'object' || !ACTIONS.has(input.action)) throw new Error('INVALID_OPERATION: 不支持的操作')
+    if (Buffer.byteLength(JSON.stringify(input)) > 4 * 1024 * 1024) throw new Error('LIMIT_EXCEEDED: 单次操作参数最多4 MiB')
+    const session = this.session(id)
+    const prefix = session.info.kind === 'mongodb' ? 'mongo.' : `${session.info.kind}.`
+    if (!input.action.startsWith(prefix)) throw new Error('INVALID_OPERATION: 操作与连接类型不匹配')
+    const result = await this.guard(id, async ({ driver }, context) => {
+      if (driver.kind === 'mysql') return driver.operations.execute(input as MysqlOperation, context)
+      if (driver.kind === 'mongodb') return driver.operations.execute(input as MongoOperation, context)
+      return driver.operations.execute(input as RedisOperation, context)
+    }, 'confirmed' in input && input.confirmed === true)
+    if (result.disconnected) await this.disconnect(id)
+    return result
   }
-
   async roots(id: string): Promise<ExplorerNode[]> {
-    const { driver, database, redisDb } = this.session(id)
-    if (driver.kind === 'mysql') {
-      const [rows] = await driver.client.query('SHOW DATABASES')
-      return (rows as Record<string, string>[]).map(row => {
-        const db = Object.values(row)[0]
-        return { id: `db:${db}`, label: db, kind: 'database', database: db }
-      })
-    }
-    if (driver.kind === 'mongodb') {
-      try {
-        const data = await driver.client.db().admin().listDatabases()
-        return data.databases.map(db => ({ id: `db:${db.name}`, label: db.name, kind: 'database', database: db.name }))
-      } catch {
-        const db = database || 'test'
-        return [{ id: `db:${db}`, label: db, kind: 'database', database: db }]
+    return this.guard(id, async (session, context) => {
+      const { driver, config } = session
+      if (driver.kind === 'mysql') {
+        const data = await driver.operations.execute({ action: 'mysql.query', sql: 'SHOW DATABASES' }, context)
+        return data.rows.map(row => { const db = Object.values(row)[0]; return { id: `db:${db}`, label: db, kind: 'database', database: db } })
       }
-    }
-    return [{ id: `db:${redisDb}`, label: `DB ${redisDb}`, kind: 'keyspace', database: String(redisDb) }]
+      if (driver.kind === 'mongodb') {
+        try {
+          const data = await driver.client.db().admin().listDatabases({ nameOnly: true, authorizedDatabases: true, maxTimeMS: 10000 })
+          return data.databases.slice(0, 500).map(db => ({ id: `db:${db.name}`, label: db.name, kind: 'database', database: db.name }))
+        } catch (error) {
+          if ((error as { code?: number }).code !== 13) throw error
+          const db = config.database || driver.client.db().databaseName
+          return [{ id: `db:${db}`, label: db, kind: 'database', database: db }]
+        }
+      }
+      return [{ id: `db:${config.redisDb || 0}`, label: config.redisMode === 'cluster' ? 'Cluster · DB 0' : `DB ${config.redisDb || 0}`, kind: 'keyspace', database: String(config.redisDb || 0) }]
+    })
   }
-
   async children(id: string, database: string): Promise<ExplorerNode[]> {
-    const { driver } = this.session(id)
-    if (!database || database.length > 200) throw new Error('数据库名称无效')
-    if (driver.kind === 'mysql') {
-      const [rows] = await driver.client.query(`SHOW FULL TABLES FROM ${quoteIdentifier(database)}`)
-      return (rows as Record<string, string>[]).map(row => {
-        const label = String(Object.values(row)[0])
-        return { id: `table:${database}:${label}`, label, kind: 'table', database, entity: label }
-      })
-    }
-    if (driver.kind === 'mongodb') {
-      const collections = await driver.client.db(database).listCollections({}, { nameOnly: true }).toArray()
-      return collections.map(item => ({
-        id: `collection:${database}:${item.name}`, label: item.name,
-        kind: 'collection', database, entity: item.name,
-      }))
-    }
-    return []
-  }
-
-  async preview(id: string, database: string, entity: string, offset = 0): Promise<DataPreview> {
-    const { driver } = this.session(id)
-    if (driver.kind === 'redis') throw new Error('请使用 Redis Key 浏览器')
-    if (!database || !entity || database.length > 200 || entity.length > 200) throw new Error('资源名称无效')
-    if (!Number.isInteger(offset) || offset < 0 || offset > 1_000_000) throw new Error('分页参数无效')
-    const batchSize = 100
-    if (driver.kind === 'mysql') {
-      const [rows] = await driver.client.query(
-        `SELECT * FROM ${quoteIdentifier(database)}.${quoteIdentifier(entity)} LIMIT ? OFFSET ?`,
-        [batchSize, offset],
-      )
-      const result = rows as Record<string, unknown>[]
-      return grid(result, result.length === batchSize ? offset + batchSize : undefined)
-    }
-    const documents = await driver.client.db(database).collection(entity)
-      .find({}).skip(offset).limit(batchSize).toArray()
-    return grid(documents, documents.length === batchSize ? offset + batchSize : undefined)
-  }
-
-  async redisKeys(id: string, cursor = 0, pattern = '*'): Promise<DataPreview> {
-    const { driver } = this.session(id)
-    if (driver.kind !== 'redis') throw new Error('不是 Redis 会话')
-    if (!Number.isInteger(cursor) || cursor < 0) throw new Error('Redis 游标无效')
-    if (typeof pattern !== 'string' || pattern.length > 256) throw new Error('Key 匹配模式无效')
-    const scanned = await driver.client.scan(cursor, { MATCH: pattern || '*', COUNT: 50 })
-    const rows: Record<string, string>[] = []
-    for (const key of scanned.keys) {
-      const [kind, ttl] = await Promise.all([driver.client.type(key), driver.client.ttl(key)])
-      rows.push({ key, type: kind, ttl: String(ttl) })
-    }
-    return { columns: ['key', 'type', 'ttl'], rows, nextCursor: scanned.cursor === 0 ? undefined : scanned.cursor }
-  }
-
-  async redisValue(id: string, key: string): Promise<DataPreview> {
-    const { driver } = this.session(id)
-    if (driver.kind !== 'redis') throw new Error('不是 Redis 会话')
-    if (!key || key.length > 2048) throw new Error('Key 无效')
-    const type = await driver.client.type(key)
-    const ttl = await driver.client.ttl(key)
-    let value: unknown
-    switch (type) {
-      case 'string': value = await driver.client.get(key); break
-      case 'hash': value = await driver.client.hGetAll(key); break
-      case 'list': value = await driver.client.lRange(key, 0, 99); break
-      case 'set': {
-        const response = await driver.client.sScan(key, 0, { COUNT: 100 })
-        value = { members: response.members, nextCursor: response.cursor }
-        break
+    resourceName(database, '数据库')
+    return this.guard(id, async ({ driver }, context) => {
+      if (driver.kind === 'mysql') {
+        const data = await driver.operations.execute({ action: 'mysql.query', sql: `SHOW FULL TABLES FROM ${quoteIdentifier(database)}` }, context)
+        return data.rows.map(row => { const entity = Object.values(row)[0]; return { id: `table:${database}:${entity}`, label: entity, kind: 'table', database, entity } })
       }
-      case 'zset': value = await driver.client.zRangeWithScores(key, 0, 99); break
-      case 'stream': value = await driver.client.xRange(key, '-', '+', { COUNT: 100 }); break
-      case 'none': value = '(key does not exist)'; break
-      default: value = `(unsupported type: ${type})`
-    }
-    const content = JSON.stringify({ key, type, ttl, value }, null, 2)
-    return { columns: ['value'], rows: [{ value: content.slice(0, 65536) }], value: content.slice(0, 65536) }
+      if (driver.kind === 'mongodb') {
+        const cursor = driver.client.db(database).listCollections({}, { nameOnly: true, authorizedCollections: true, batchSize: 100, maxTimeMS: 10000 })
+        const nodes: ExplorerNode[] = []
+        try { for await (const item of cursor) { nodes.push({ id: `collection:${database}:${item.name}`, label: item.name, kind: 'collection', database, entity: item.name }); if (nodes.length >= 500 || context.signal?.aborted) break } }
+        finally { await cursor.close() }
+        return nodes
+      }
+      return []
+    })
   }
+  preview(id: string, database: string, entity: string, offset = 0): Promise<DataPreview> {
+    resourceName(database, '数据库'); resourceName(entity, '表/集合')
+    const kind = this.session(id).info.kind
+    if (kind === 'mysql') return this.execute(id, { action: 'mysql.query', database, sql: `SELECT * FROM ${quoteIdentifier(database)}.${quoteIdentifier(entity)}`, offset, limit: 100 })
+    if (kind === 'mongodb') return this.execute(id, { action: 'mongo.find', database, entity, offset, limit: 100 })
+    throw new Error('此连接不支持表数据预览')
+  }
+  redisKeys(id: string, cursor = '0', pattern = '*'): Promise<DataPreview> { return this.execute(id, { action: 'redis.scan', cursor, pattern }) }
+  redisValue(id: string, key: string): Promise<DataPreview> { return this.execute(id, { action: 'redis.get', key }) }
 }

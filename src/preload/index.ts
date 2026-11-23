@@ -1,22 +1,31 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { ConnectionConfig, DbExAPI } from '../shared/types'
-
-// Expose only the narrow calls needed by the Renderer. No generic invoke/send bridge.
+import type { DbExAPI } from '../shared/types'
+// Every bridge method is explicit. Renderer receives no filesystem, raw IPC or driver handles.
 const api: DbExAPI = {
   listConnections: () => ipcRenderer.invoke('connections:list'),
-  saveConnection: (config: ConnectionConfig) => ipcRenderer.invoke('connections:save', config),
-  deleteConnection: (id: string) => ipcRenderer.invoke('connections:delete', id),
-  trustHostKey: (id: string, fingerprint: string) => ipcRenderer.invoke('connections:trust-host', id, fingerprint),
-  connectSaved: (id: string) => ipcRenderer.invoke('connections:connect-saved', id),
-  connectTemporary: (config: ConnectionConfig) => ipcRenderer.invoke('connections:connect-temporary', config),
-  disconnect: (sessionId: string) => ipcRenderer.invoke('connections:disconnect', sessionId),
-  roots: (sessionId: string) => ipcRenderer.invoke('explorer:roots', sessionId),
-  children: (sessionId: string, database: string) => ipcRenderer.invoke('explorer:children', sessionId, database),
-  preview: (sessionId: string, database: string, entity: string, offset?: number) =>
-    ipcRenderer.invoke('explorer:preview', sessionId, database, entity, offset),
-  redisKeys: (sessionId: string, cursor?: number, pattern?: string) =>
-    ipcRenderer.invoke('explorer:redis-keys', sessionId, cursor, pattern),
-  redisValue: (sessionId: string, key: string) => ipcRenderer.invoke('explorer:redis-value', sessionId, key),
+  saveConnection: (config, clearSecrets) => ipcRenderer.invoke('connections:save', config, clearSecrets),
+  editConnection: id => ipcRenderer.invoke('connections:edit', id),
+  deleteConnection: id => ipcRenderer.invoke('connections:delete', id),
+  trustHostKey: (id, fingerprint) => ipcRenderer.invoke('connections:trust-host', id, fingerprint),
+  connectSaved: id => ipcRenderer.invoke('connections:connect-saved', id),
+  connectTemporary: (config, clearSecrets) => ipcRenderer.invoke('connections:connect-temporary', config, clearSecrets),
+  testConnection: (config, clearSecrets) => ipcRenderer.invoke('connections:test', config, clearSecrets),
+  disconnect: id => ipcRenderer.invoke('connections:disconnect', id),
+  roots: id => ipcRenderer.invoke('explorer:roots', id),
+  children: (id, database) => ipcRenderer.invoke('explorer:children', id, database),
+  preview: (id, database, entity, offset) => ipcRenderer.invoke('explorer:preview', id, database, entity, offset),
+  redisKeys: (id, cursor, pattern) => ipcRenderer.invoke('explorer:redis-keys', id, cursor, pattern),
+  redisValue: (id, key) => ipcRenderer.invoke('explorer:redis-value', id, key),
+  execute: (id, operation) => ipcRenderer.invoke('sessions:execute', id, operation),
+  cancel: id => ipcRenderer.invoke('sessions:cancel', id),
+  setWriteAccess: (id, enabled) => ipcRenderer.invoke('sessions:write-access', id, enabled),
+  listSnippets: () => ipcRenderer.invoke('snippets:list'),
+  saveSnippet: value => ipcRenderer.invoke('snippets:save', value),
+  deleteSnippet: id => ipcRenderer.invoke('snippets:delete', id),
+  importFile: () => ipcRenderer.invoke('files:import'),
+  exportFile: (name, content, format) => ipcRenderer.invoke('files:export', name, content, format),
+  importConnections: () => ipcRenderer.invoke('connections:import'),
+  exportConnections: () => ipcRenderer.invoke('connections:export'),
+  importSshConfig: () => ipcRenderer.invoke('connections:ssh-config'),
 }
-
 contextBridge.exposeInMainWorld('dbex', api)

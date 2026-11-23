@@ -1,258 +1,156 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import ConnectionDialog from './ConnectionDialog.vue'
-import type { ConnectionConfig, DataPreview, ExplorerNode, SavedConnection, SessionInfo } from '../shared/types'
+import DatabaseWorkbench from './DatabaseWorkbench.vue'
+import ConfirmDialog from './components/ConfirmDialog.vue'
+import { useConfirmation } from './composables/useConfirmation'
+import type { ConnectionDraft, ExplorerNode, SavedConnection, SessionInfo } from '../shared/types'
 
+interface ExplorerState { roots: ExplorerNode[]; children: Record<string, ExplorerNode[]>; expanded: string[]; selected?: ExplorerNode; busy: boolean; loading: Set<string> }
 const connections = ref<SavedConnection[]>([])
 const sessions = ref<SessionInfo[]>([])
+const explorers = reactive<Record<string, ExplorerState>>({})
 const current = ref<string | null>(null)
-const roots = ref<ExplorerNode[]>([])
-const childNodes = ref<Record<string, ExplorerNode[]>>({})
-const expanded = ref<string[]>([])
-const selected = ref<ExplorerNode | null>(null)
-const preview = ref<DataPreview | null>(null)
+const activeSession = computed(() => sessions.value.find(item => item.id === current.value))
+const currentExplorer = computed(() => current.value ? explorers[current.value] : undefined)
 const busy = ref(false)
-const message = ref('')
+const error = ref('')
+const notice = ref('')
 const dialogOpen = ref(false)
-const trustCandidate = ref<{ id: string; fingerprint: string } | null>(null)
-const redisPattern = ref('*')
+const connectionDraft = ref<ConnectionDraft>()
+const filterConnections = ref('')
+const filteredConnections = computed(() => connections.value.filter(item => `${item.name} ${item.host} ${item.kind}`.toLowerCase().includes(filterConnections.value.toLowerCase())))
 const theme = ref<'dark' | 'light'>('dark')
-const activeSession = () => sessions.value.find(item => item.id === current.value)
+const sidebarWidth = ref(270)
+const explorerWidth = ref(220)
+const { confirmation, confirm, answer } = useConfirmation()
+let stopResize: (() => void) | undefined
 
-function setError(error: unknown, connectionId?: string) {
-  message.value = error instanceof Error ? error.message : String(error)
-  const match = /SSH_HOST_KEY_UNTRUSTED:\s*([a-f\d]{64})/i.exec(message.value)
-  trustCandidate.value = match && connectionId ? { id: connectionId, fingerprint: match[1].toLowerCase() } : null
+function messageOf(reason: unknown) { return reason instanceof Error ? reason.message : String(reason) }
+async function task<T>(callback: () => Promise<T>): Promise<T | undefined> {
+  if (busy.value) return undefined
+  busy.value = true; error.value = ''; notice.value = ''
+  try { return await callback() } catch (reason) { error.value = messageOf(reason); return undefined }
+  finally { busy.value = false }
 }
 async function refreshConnections() {
-  try { connections.value = await window.dbex.listConnections() }
-  catch (error) { setError(error) }
+  try { connections.value = await window.dbex.listConnections() } catch (reason) { error.value = messageOf(reason) }
 }
-async function run<T>(callback: () => Promise<T>): Promise<T | undefined> {
-  busy.value = true
-  message.value = ''
-  trustCandidate.value = null
-  try { return await callback() }
-  catch (error) { setError(error); return undefined }
-  finally { busy.value = false }
+async function refreshRoots(id: string) {
+  const state = explorers[id]
+  if (!state || state.busy) return
+  state.busy = true
+  try {
+    const roots = await window.dbex.roots(id)
+    if (explorers[id] !== state) return
+    state.roots = roots; state.children = {}; state.expanded = []
+    if (sessions.value.find(item => item.id === id)?.kind === 'redis') state.selected = roots[0]
+  } catch (reason) { if (explorers[id] === state) error.value = messageOf(reason) }
+  finally { if (explorers[id] === state) state.busy = false }
 }
-async function startSession(info: SessionInfo) {
-  sessions.value = [...sessions.value, info]
-  await switchSession(info.id)
+async function startSession(session: SessionInfo) {
+  if (sessions.value.some(item => item.id === session.id)) { current.value = session.id; return }
+  explorers[session.id] = { roots: [], children: {}, expanded: [], busy: false, loading: new Set() }
+  sessions.value.push(session); current.value = session.id
+  await refreshRoots(session.id)
 }
-async function connectSaved(config: SavedConnection) {
-  busy.value = true
-  message.value = ''
-  trustCandidate.value = null
-  try { await startSession(await window.dbex.connectSaved(config.id)) }
-  catch (error) { setError(error, config.id) }
-  finally { busy.value = false }
+function updateSession(session: SessionInfo) { sessions.value = sessions.value.map(item => item.id === session.id ? session : item) }
+async function connectSaved(connection: SavedConnection) {
+  const session = await task(() => window.dbex.connectSaved(connection.id))
+  if (session) await startSession(session)
 }
-async function trustHost() {
-  const candidate = trustCandidate.value
-  if (!candidate) return
-  const config = connections.value.find(item => item.id === candidate.id)
-  if (!config) return
-  const done = await run(async () => {
-    await window.dbex.trustHostKey(candidate.id, candidate.fingerprint)
-    await refreshConnections()
-    return true
-  })
-  if (done) await connectSaved(config)
+function newConnection() { connectionDraft.value = undefined; dialogOpen.value = true }
+async function editConnection(connection: SavedConnection) {
+  const draft = await task(() => window.dbex.editConnection(connection.id))
+  if (draft) { connectionDraft.value = draft; dialogOpen.value = true }
 }
-async function saveConfig(config: ConnectionConfig) {
-  const saved = await run(async () => window.dbex.saveConnection(config))
-  if (!saved) return
-  dialogOpen.value = false
-  await refreshConnections()
-  await connectSaved(saved)
+async function deleteConnection(connection: SavedConnection) {
+  if (!await confirm({ title: '删除保存的连接', message: `删除“${connection.name}”的本地连接配置，并断开其活动会话。未提交事务将回滚；数据库中已提交的数据不受影响。`, danger: true, confirmLabel: '删除配置' })) return
+  await task(async () => { await window.dbex.deleteConnection(connection.id); for (const session of [...sessions.value]) if (session.connectionId === connection.id) removeSession(session.id); await refreshConnections() })
 }
-async function temporaryConfig(config: ConnectionConfig) {
-  const session = await run(() => window.dbex.connectTemporary(config))
-  if (session) { dialogOpen.value = false; await startSession(session) }
-}
-async function deleteSaved(config: SavedConnection) {
-  if (!window.confirm(`删除已保存连接“${config.name}”？这不会删除数据库中的数据。`)) return
-  const result = await run(async () => {
-    await window.dbex.deleteConnection(config.id)
-    sessions.value = sessions.value.filter(item => item.connectionId !== config.id)
-    if (!sessions.value.some(item => item.id === current.value)) current.value = null
-    await refreshConnections()
-    return true
-  })
-  if (result && current.value === null && sessions.value.length) await switchSession(sessions.value[0].id)
+function removeSession(id: string) {
+  sessions.value = sessions.value.filter(item => item.id !== id)
+  delete explorers[id]
+  if (current.value === id) current.value = sessions.value[0]?.id || null
 }
 async function disconnect(id: string) {
-  await run(() => window.dbex.disconnect(id))
-  sessions.value = sessions.value.filter(item => item.id !== id)
-  if (current.value === id) {
-    const next = sessions.value[0]
-    if (next) await switchSession(next.id)
-    else { current.value = null; roots.value = []; selected.value = null; preview.value = null }
-  }
-}
-async function switchSession(id: string) {
-  current.value = id
-  selected.value = null
-  preview.value = null
-  childNodes.value = {}
-  expanded.value = []
-  await run(async () => { roots.value = await window.dbex.roots(id) })
+  const session = sessions.value.find(item => item.id === id)
+  if (!session) return
+  if (session.transaction && !await confirm({ title: '断开并回滚事务', message: `“${session.name}”仍有打开的事务。断开连接会回滚尚未提交的修改。`, danger: true, confirmLabel: '回滚并断开' })) return
+  await task(async () => { await window.dbex.disconnect(id); removeSession(id) })
 }
 async function toggleRoot(node: ExplorerNode) {
-  if (!current.value) return
-  selected.value = node
-  if (node.kind === 'keyspace') { await searchRedis(); return }
-  if (expanded.value.includes(node.id)) {
-    expanded.value = expanded.value.filter(id => id !== node.id)
-    return
-  }
-  expanded.value.push(node.id)
-  await run(async () => { childNodes.value[node.id] = await window.dbex.children(current.value!, node.database!) })
+  const id = current.value
+  const state = id ? explorers[id] : undefined
+  if (!id || !state || state.loading.has(node.id)) return
+  state.selected = node
+  if (node.kind === 'keyspace') return
+  if (state.expanded.includes(node.id)) { state.expanded = state.expanded.filter(value => value !== node.id); return }
+  state.expanded.push(node.id)
+  if (state.children[node.id]) return
+  state.loading.add(node.id)
+  try {
+    const children = await window.dbex.children(id, node.database || node.label)
+    if (explorers[id] === state) state.children[node.id] = children
+  } catch (reason) { if (explorers[id] === state) error.value = messageOf(reason) }
+  finally { if (explorers[id] === state) state.loading.delete(node.id) }
 }
-async function selectEntity(node: ExplorerNode) {
-  if (!current.value || !node.database || !node.entity) return
-  selected.value = node
-  preview.value = null
-  await run(async () => { preview.value = await window.dbex.preview(current.value!, node.database!, node.entity!) })
+function selectEntity(node: ExplorerNode) { if (currentExplorer.value) currentExplorer.value.selected = node }
+async function importConnections() {
+  await task(async () => { const count = await window.dbex.importConnections(); await refreshConnections(); notice.value = `已导入 ${count} 个连接配置` })
 }
-async function loadMore() {
-  if (!current.value || !preview.value || !selected.value) return
-  const previous = preview.value
-  const node = selected.value
-  const next = await run(() => node.kind === 'keyspace'
-    ? window.dbex.redisKeys(current.value!, previous.nextCursor, redisPattern.value)
-    : window.dbex.preview(current.value!, node.database!, node.entity!, previous.nextOffset))
-  if (next) preview.value = {
-    ...next,
-    columns: [...new Set([...previous.columns, ...next.columns])],
-    rows: [...previous.rows, ...next.rows],
-  }
+async function exportConnections() {
+  await task(async () => { if (await window.dbex.exportConnections()) notice.value = '已导出不含密码、认证 URI 和主机信任信息的连接模板' })
 }
-async function searchRedis() {
-  if (!current.value) return
-  const node = roots.value[0]
-  if (!node) return
-  selected.value = node
-  const result = await run(() => window.dbex.redisKeys(current.value!, 0, redisPattern.value))
-  if (result) preview.value = result
+function persistView() {
+  try { localStorage.setItem('dbex.view', JSON.stringify({ theme: theme.value, sidebar: sidebarWidth.value, explorer: explorerWidth.value })) } catch { /* UI preferences are optional. */ }
 }
-async function showRedisValue(key: string) {
-  if (!current.value) return
-  const result = await run(() => window.dbex.redisValue(current.value!, key))
-  if (result) {
-    selected.value = { id: `key:${key}`, label: key, kind: 'collection', entity: key }
-    preview.value = result
-  }
+function changeTheme() { theme.value = theme.value === 'dark' ? 'light' : 'dark'; document.documentElement.dataset.theme = theme.value; persistView() }
+function resize(event: PointerEvent, pane: 'sidebar' | 'explorer') {
+  event.preventDefault(); stopResize?.()
+  const start = event.clientX
+  const width = pane === 'sidebar' ? sidebarWidth : explorerWidth
+  const initial = width.value
+  function move(value: PointerEvent) { width.value = Math.max(170, Math.min(400, initial + value.clientX - start)) }
+  function stop() { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', stop); document.body.classList.remove('resizing'); persistView(); stopResize = undefined }
+  stopResize = stop
+  document.body.classList.add('resizing')
+  window.addEventListener('pointermove', move); window.addEventListener('pointerup', stop, { once: true })
 }
-function changeTheme() {
-  theme.value = theme.value === 'dark' ? 'light' : 'dark'
-  document.documentElement.dataset.theme = theme.value
+function resizeKey(event: KeyboardEvent, pane: 'sidebar' | 'explorer') {
+  if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return
+  event.preventDefault()
+  const width = pane === 'sidebar' ? sidebarWidth : explorerWidth
+  width.value = Math.max(170, Math.min(400, width.value + (event.key === 'ArrowRight' ? 10 : -10))); persistView()
 }
-function kindIcon(kind: string) { return kind === 'mysql' ? '▤' : kind === 'mongodb' ? '◈' : '⬡' }
 function kindLabel(kind: string) { return kind === 'mysql' ? 'MySQL' : kind === 'mongodb' ? 'MongoDB' : 'Redis' }
-function environmentLabel(kind: string) { return kind === 'production' ? 'PROD' : kind === 'testing' ? 'TEST' : 'DEV' }
-onMounted(refreshConnections)
+function kindIcon(kind: string) { return kind === 'mysql' ? '▤' : kind === 'mongodb' ? '◈' : '⬡' }
+function environmentLabel(environment: string) { return environment === 'production' ? 'PROD' : environment === 'testing' ? 'TEST' : 'DEV' }
+onMounted(() => {
+  try {
+    const saved = JSON.parse(localStorage.getItem('dbex.view') || '{}')
+    if (saved.theme === 'light' || saved.theme === 'dark') theme.value = saved.theme
+    if (Number.isFinite(saved.sidebar)) sidebarWidth.value = Math.max(170, Math.min(400, saved.sidebar))
+    if (Number.isFinite(saved.explorer)) explorerWidth.value = Math.max(170, Math.min(400, saved.explorer))
+  } catch { /* Ignore invalid preference data. */ }
+  document.documentElement.dataset.theme = theme.value
+  void refreshConnections()
+})
+onBeforeUnmount(() => stopResize?.())
 </script>
 
 <template>
-  <main class="desktop">
-    <header class="topbar">
-      <div class="brand"><span class="brand-symbol">▦</span><strong>DB EX</strong><span class="brand-subtitle">DATABASE EXPLORER</span></div>
-      <div class="top-actions">
-        <span class="top-hint">Local-first · Private workspace</span>
-        <button class="icon-button" :title="theme === 'dark' ? '浅色主题' : '深色主题'" @click="changeTheme">{{ theme === 'dark' ? '☼' : '◐' }}</button>
-        <button class="btn primary" @click="dialogOpen = true"><span>＋</span> 新建连接</button>
-      </div>
-    </header>
-    <div class="workspace">
-      <aside class="sidebar">
-        <div class="sidebar-label"><span>CONNECTIONS</span><button class="ghost-icon" title="刷新" @click="refreshConnections">↻</button></div>
-        <div v-if="!connections.length" class="sidebar-empty">尚无已保存连接。<br />点击右上角创建第一个连接。</div>
-        <div class="saved-list">
-          <div v-for="item in connections" :key="item.id" class="connection-item" :class="{ production: item.environment === 'production' }" @dblclick="connectSaved(item)">
-            <div class="db-icon" :class="item.kind">{{ kindIcon(item.kind) }}</div>
-            <div class="connection-description"><strong :title="item.name">{{ item.name }}</strong><small>{{ item.host }} · {{ kindLabel(item.kind) }}</small></div>
-            <span :class="['env-tag', item.environment]">{{ environmentLabel(item.environment) }}</span>
-            <button class="ghost-icon connect-action" title="连接" :disabled="busy" @click="connectSaved(item)">⏵</button>
-            <button class="ghost-icon delete-action" title="删除配置" :disabled="busy" @click="deleteSaved(item)">×</button>
-          </div>
-        </div>
-        <div class="sidebar-label section-gap"><span>ACTIVE SESSIONS</span><span class="small-count">{{ sessions.length }}</span></div>
-        <div v-for="session in sessions" :key="session.id" :class="['active-item', { selected: session.id === current }]" @click="switchSession(session.id)">
-          <span class="status-dot"></span><span class="ellipsis">{{ session.name }}</span>
-          <button class="ghost-icon" title="断开" @click.stop="disconnect(session.id)">×</button>
-        </div>
-        <div class="sidebar-bottom"><span class="status-dot"></span> 本地工作空间 <span class="sidebar-version">v0.1</span></div>
-      </aside>
-      <section class="main-panel">
-        <div class="tabbar">
-          <div v-if="!sessions.length" class="tab welcome-tab">◈ &nbsp; 欢迎</div>
-          <button v-for="session in sessions" :key="session.id" :class="['tab', { active: session.id === current }]" @click="switchSession(session.id)">
-            <span class="db-small-icon">{{ kindIcon(session.kind) }}</span>{{ session.name }}<span class="tab-close" @click.stop="disconnect(session.id)">×</span>
-          </button>
-          <div class="tab-filler"></div><span class="tab-trailing">DB EX CORE</span>
-        </div>
-        <div v-if="message" class="error-message" role="alert">
-          <span>⚠</span><div class="error-text">{{ message }}
-            <div v-if="trustCandidate" class="trust-panel"><strong>需要核验 SSH 服务器身份</strong><p>请先通过服务器管理员或可信命令独立核对这段 SHA-256 指纹，确认一致后才接受：</p><code>{{ trustCandidate.fingerprint }}</code><button class="btn secondary" :disabled="busy" @click="trustHost">已独立核对，信任并重连</button></div>
-          </div><button class="ghost-icon" title="关闭提示" @click="message = ''; trustCandidate = null">×</button>
-        </div>
-        <div v-if="!current" class="welcome-body">
-          <div class="welcome-illustration">▤</div><span class="eyebrow">YOUR DATA, YOUR WORKSPACE</span>
-          <h1>连接你的数据库，<br /><span>专注于真正重要的工作。</span></h1>
-          <p>统一管理 MySQL、MongoDB 和 Redis。安全的 SSH 隧道、TLS 连接与只读数据预览。</p>
-          <button class="btn primary large" @click="dialogOpen = true">＋ &nbsp; 创建第一个连接</button>
-          <div class="welcome-features"><span>◉ 本地优先</span><span>◇ 安全隧道</span><span>▤ 多数据库</span></div>
-        </div>
-        <div v-else class="data-area">
-          <div class="explorer-pane">
-            <div class="panel-heading"><span>EXPLORER</span><button class="ghost-icon" title="刷新资源列表" @click="current && switchSession(current)">↻</button></div>
-            <div class="resource-list">
-              <template v-for="node in roots" :key="node.id">
-                <button :class="['resource-node', { active: selected?.id === node.id }]" @click="toggleRoot(node)">
-                  <span class="arrow">{{ node.kind === 'keyspace' ? '⬡' : expanded.includes(node.id) ? '⌄' : '›' }}</span><span>▤</span><span class="ellipsis">{{ node.label }}</span>
-                </button>
-                <template v-if="expanded.includes(node.id)">
-                  <button v-for="child in childNodes[node.id] || []" :key="child.id" :class="['resource-node', 'child-node', { active: selected?.id === child.id }]" @click="selectEntity(child)">
-                    <span>▦</span><span class="ellipsis">{{ child.label }}</span>
-                  </button>
-                </template>
-              </template>
-            </div>
-          </div>
-          <div class="content-pane">
-            <div class="content-head">
-              <div><span class="eyebrow">{{ activeSession()?.kind.toUpperCase() }} / DATA BROWSER</span><h2>{{ selected?.label || activeSession()?.name || 'Database Explorer' }}</h2></div>
-              <span :class="['env-badge', activeSession()?.environment]">{{ environmentLabel(activeSession()?.environment || '') }}</span>
-            </div>
-            <div v-if="activeSession()?.kind === 'redis'" class="content-toolbar">
-              <input v-model="redisPattern" aria-label="Redis Key 匹配表达式" placeholder="Key pattern, e.g. session:*" @keyup.enter="searchRedis" />
-              <button class="btn secondary" :disabled="busy" @click="searchRedis">搜索 Key</button>
-            </div>
-            <div v-else class="content-toolbar"><span class="readonly-pill">◎ 只读预览</span><span class="toolbar-info">首批版本 · 每页最多 100 条 · 写入工具将在 M2–M4 提供</span></div>
-            <div class="preview-container">
-              <div v-if="!selected" class="no-selection"><span>▤</span><strong>选择一个数据库或集合</strong><p>从左侧资源浏览器展开数据库并查看记录。</p></div>
-              <div v-else-if="!preview" class="no-selection"><span>▦</span><strong>资源已选择</strong><p>{{ busy ? '正在加载…' : '展开数据库或选择表/集合以预览数据。' }}</p></div>
-              <div v-else class="table-wrap">
-                <table class="data-table">
-                  <thead><tr><th class="number-cell">#</th><th v-for="column in preview.columns" :key="column">{{ column }}</th></tr></thead>
-                  <tbody>
-                    <tr v-for="(row, index) in preview.rows" :key="index" :class="{ 'clickable-row': activeSession()?.kind === 'redis' && selected?.kind === 'keyspace' }" @click="activeSession()?.kind === 'redis' && selected?.kind === 'keyspace' && showRedisValue(row.key)">
-                      <td class="number-cell">{{ index + 1 }}</td><td v-for="column in preview.columns" :key="column" :title="row[column]">{{ row[column] ?? '—' }}</td>
-                    </tr>
-                    <tr v-if="preview.rows.length === 0"><td :colspan="preview.columns.length + 1" class="no-data">暂无记录</td></tr>
-                  </tbody>
-                </table>
-                <div v-if="preview.value" class="value-preview"><pre>{{ preview.value }}</pre></div>
-              </div>
-            </div>
-            <div class="result-footer"><span>记录 {{ preview?.rows.length ?? 0 }} 条{{ busy ? ' · 加载中…' : '' }}</span><button v-if="preview && (preview.nextOffset !== undefined || preview.nextCursor !== undefined)" class="btn secondary small" :disabled="busy" @click="loadMore">加载下一页 →</button><span v-else>READ ONLY</span></div>
-          </div>
-        </div>
+  <main class="desktop" :style="{ '--sidebar-width': sidebarWidth + 'px', '--explorer-width': explorerWidth + 'px' }">
+    <header class="topbar"><div class="brand"><span class="brand-symbol">▦</span><strong>DB EX</strong><span class="brand-subtitle">DATABASE WORKSPACE</span></div><div class="top-actions"><span class="top-hint">本地优先 · 凭据加密</span><button class="icon-button" :title="theme === 'dark' ? '浅色主题' : '深色主题'" @click="changeTheme">{{ theme === 'dark' ? '☼' : '◐' }}</button><button class="btn primary" :disabled="busy" @click="newConnection">＋ 新建连接</button></div></header>
+    <div class="workspace"><aside class="sidebar"><div class="sidebar-label"><span>连接</span><button class="ghost-icon" title="刷新连接" @click="refreshConnections">↻</button></div><div class="sidebar-search"><input v-model="filterConnections" aria-label="筛选连接" placeholder="搜索名称 / 主机" /></div><div class="saved-list"><div v-for="connection in filteredConnections" :key="connection.id" class="connection-item" :class="{ production: connection.environment === 'production' }" @dblclick="connectSaved(connection)"><span :class="['db-icon', connection.kind]">{{ kindIcon(connection.kind) }}</span><div class="connection-description"><strong :title="connection.name">{{ connection.name }}</strong><small :title="connection.host">{{ connection.host }} · {{ kindLabel(connection.kind) }}</small><div class="connection-meta"><span :class="['env-tag', connection.environment]">{{ environmentLabel(connection.environment) }}</span><span v-if="connection.sshEnabled">SSH</span><span v-if="connection.tlsEnabled">TLS</span><span v-if="connection.proxyEnabled">PROXY</span></div></div><div class="connection-actions"><button class="ghost-icon" title="连接" :disabled="busy" @click="connectSaved(connection)">▶</button><button class="ghost-icon" title="编辑连接" :disabled="busy" @click="editConnection(connection)">✎</button><button class="ghost-icon" title="删除配置" :disabled="busy" @click="deleteConnection(connection)">×</button></div></div><div v-if="!filteredConnections.length" class="sidebar-empty">{{ connections.length ? '没有匹配的连接' : '创建连接，或导入已有连接模板。' }}</div></div><div class="sidebar-label"><span>活动会话</span><span>{{ sessions.length }}</span></div><div class="active-list"><button v-for="session in sessions" :key="session.id" :class="['active-item', { selected: current === session.id }]" @click="current = session.id"><span class="status-dot"></span><span class="ellipsis">{{ session.name }}</span><span v-if="session.transaction" class="tiny-badge">TX</span><span v-if="session.writable" class="tiny-badge write">RW</span></button></div><div class="sidebar-bottom"><button class="btn secondary small" :disabled="busy" @click="importConnections">导入连接</button><button class="btn secondary small" :disabled="busy || !connections.length" @click="exportConnections">导出模板</button></div></aside>
+      <div class="resize-handle" role="separator" aria-label="调整连接列表宽度" aria-orientation="vertical" :aria-valuenow="sidebarWidth" :aria-valuemin="170" :aria-valuemax="400" tabindex="0" @pointerdown="resize($event, 'sidebar')" @keydown="resizeKey($event, 'sidebar')"></div>
+      <section class="main-panel"><div class="tabbar"><div v-if="!sessions.length" class="tab active">欢迎</div><div v-for="session in sessions" :key="session.id" :class="['session-tab', { active: current === session.id }]"><button class="tab" @click="current = session.id"><span :class="['db-small-icon', session.kind]">{{ kindIcon(session.kind) }}</span>{{ session.name }}</button><button class="tab-close" :title="`断开 ${session.name}`" :disabled="busy" @click="disconnect(session.id)">×</button></div><div class="tab-filler"></div><span v-if="busy" class="tab-trailing">正在连接 / 处理…</span></div><div v-if="error" class="inline-message error" role="alert">{{ error }}<button class="ghost-icon" aria-label="关闭错误" @click="error = ''">×</button></div><div v-if="notice" class="inline-message notice">{{ notice }}</div>
+        <div v-if="!current" class="welcome-body"><div class="welcome-mark">▦</div><span class="eyebrow">YOUR DATA, YOUR WORKSPACE</span><h1>一个工作空间，<br /><span>连接你的数据库。</span></h1><p>MySQL 查询与事务、MongoDB 文档、Redis 数据管理。<br />SSH 多跳、代理与 TLS，按你的网络方式连接。</p><button class="btn primary large" @click="newConnection">＋ 创建数据库连接</button><div class="welcome-features"><span>MySQL</span><span>MongoDB</span><span>Redis</span></div></div>
+        <div v-else class="data-area"><aside class="explorer-pane"><div class="panel-heading"><span>资源浏览器</span><button class="ghost-icon" title="刷新资源树" :disabled="currentExplorer?.busy" @click="current && refreshRoots(current)">↻</button></div><div v-if="currentExplorer?.busy" class="compact-help">正在加载资源…</div><div class="resource-list"><template v-for="node in currentExplorer?.roots || []" :key="node.id"><button :class="['resource-node', { active: currentExplorer?.selected?.id === node.id }]" @click="toggleRoot(node)"><span class="arrow">{{ node.kind === 'keyspace' ? '⬡' : currentExplorer?.expanded.includes(node.id) ? '⌄' : '›' }}</span><span>▤</span><span class="ellipsis">{{ node.label }}</span><span v-if="currentExplorer?.loading.has(node.id)">…</span></button><template v-if="currentExplorer?.expanded.includes(node.id)"><button v-for="child in currentExplorer.children[node.id] || []" :key="child.id" :class="['resource-node', 'child-node', { active: currentExplorer.selected?.id === child.id }]" @click="selectEntity(child)"><span>▦</span><span class="ellipsis">{{ child.label }}</span></button><span v-if="!currentExplorer.loading.has(node.id) && !currentExplorer.children[node.id]?.length" class="empty-tree">无可见对象</span></template></template></div></aside><div class="resize-handle" role="separator" aria-label="调整资源树宽度" aria-orientation="vertical" :aria-valuenow="explorerWidth" :aria-valuemin="170" :aria-valuemax="400" tabindex="0" @pointerdown="resize($event, 'explorer')" @keydown="resizeKey($event, 'explorer')"></div><div class="content-pane"><DatabaseWorkbench v-for="session in sessions" v-show="session.id === current" :key="session.id" :session="session" :node="explorers[session.id]?.selected" @update-session="updateSession" @disconnect="removeSession(session.id)" @refresh-tree="refreshRoots(session.id)" /></div></div>
       </section>
     </div>
-    <footer class="statusbar"><span class="status-dot"></span> Ready <span class="separator">|</span> {{ activeSession()?.name || 'No active connection' }} <span class="status-right">Electron · Vue 3 · DB EX 0.1</span></footer>
-    <ConnectionDialog v-if="dialogOpen" @close="dialogOpen = false" @save="saveConfig" @temporary="temporaryConfig" />
+    <footer class="statusbar"><span class="status-dot"></span>{{ activeSession ? activeSession.displayHost : 'Ready' }}<span class="separator">|</span>{{ activeSession?.name || '未连接数据库' }}<span v-if="activeSession?.transaction" class="transaction-text">事务尚未提交</span><span class="status-right">DB EX · Core Preview</span></footer>
+    <ConnectionDialog v-if="dialogOpen" :draft="connectionDraft" @close="dialogOpen = false" @saved="refreshConnections" @connected="startSession" />
+    <ConfirmDialog v-if="confirmation" v-bind="confirmation" @confirm="answer(true)" @cancel="answer(false)" />
   </main>
 </template>

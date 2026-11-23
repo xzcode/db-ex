@@ -1,21 +1,117 @@
-name: CI
+name: Verify DB EX
 on:
   push:
     branches: [master]
   pull_request:
     branches: [master]
+  workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: verify-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 jobs:
-  build:
+  verify:
+    name: Typecheck, security, database integration, UI
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: dbex-test
+          MYSQL_ROOT_HOST: '%'
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pdbex-test"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+      mongodb:
+        image: mongo:7
+        ports: ['27017:27017']
+        options: >-
+          --health-cmd="mongosh --quiet --eval 'db.adminCommand({ping:1})'"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s --health-timeout=5s --health-retries=30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
-      - run: npm install --no-audit --no-fund
+          node-version: 22
+          cache: npm
+      - run: npm ci
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
       - run: npm run typecheck
+      - run: npm test
+        env:
+          DB_EX_INTEGRATION: '1'
+          MYSQL_URL: mysql://root:dbex-test@127.0.0.1:3306
+          MONGODB_URI: mongodb://127.0.0.1:27017
+          REDIS_URL: redis://127.0.0.1:6379
       - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:ui
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: ui-failure-evidence
+          path: test-results/
+          retention-days: 7
+  packages:
+    name: Desktop package (${{ matrix.os }})
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - name: Linux desktop runtime dependencies
+        if: runner.os == 'Linux'
+        run: npx playwright install-deps chromium
+      - name: Build unsigned preview installer
+        run: npm exec electron-builder -- --publish never --config.mac.hardenedRuntime=false
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Real Electron smoke (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm run smoke:electron
+        env:
+          DB_EX_PACKAGED: '1'
+      - name: Real Electron smoke (macOS / Windows)
+        if: runner.os != 'Linux'
+        run: npm run smoke:electron
+        env:
+          DB_EX_PACKAGED: '1'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: db-ex-0.5.0-${{ runner.os }}-${{ runner.arch }}-unsigned
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.exe
+            release/*.AppImage
+            release/*.deb
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: electron-smoke-${{ runner.os }}
+          path: electron-smoke.png
+          if-no-files-found: ignore
+          retention-days: 7

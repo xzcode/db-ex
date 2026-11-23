@@ -1,11 +1,36 @@
-# Security policy
+# Security policy / 安全说明
 
-DB EX manages database credentials and can access sensitive production data. Do not commit credentials, private keys, TLS client keys, full connection URIs containing passwords, customer data or production dumps.
+DB EX 会保存数据库连接并访问业务数据。禁止在仓库、日志、公开问题、测试快照或截图中提交真实密码、私钥内容、含认证信息的 URI、客户记录或生产导出文件。自动化测试只使用隔离服务和明确的测试凭据。
 
-- Electron Renderer is sandboxed and has no database driver access.
-- Stored connection settings must be encrypted with OS-backed Electron `safeStorage`. Refuse plaintext fallback.
-- Verify SSH host keys and TLS certificates by default; do not add an insecure one-click bypass.
-- Keep tunnel sockets bound to loopback only and close all channels when sessions end.
-- Restrict database browsing to bounded result sets, and require explicit confirmation for mutation operations as they are implemented.
+## 权限边界
 
-For suspected vulnerabilities, report privately to the repository owner instead of opening a public issue containing secrets.
+- Renderer 开启 sandbox、contextIsolation、webSecurity，关闭 nodeIntegration。数据库驱动、凭据解密和文件访问只在主进程。
+- Preload 仅暴露声明过的方法。主进程检查调用方窗口、主 frame 和精确 Renderer URL，拒绝其他来源；禁止新窗口、任意导航、webview、下载和不需要的浏览器权限。
+- 所有会话初始只读。写入必须解锁会话、声明确认意图，再由主进程原生对话框确认。生产环境会额外突出提示；断开后解锁状态不继承。
+- 客户端限制不能替代数据库权限。生产浏览应使用只读数据库账号，维护账号只授予需要的操作权限。
+
+## 凭据和本地文件
+
+连接完整配置和查询记录使用 Electron `safeStorage` 加密；拒绝 Linux `basic_text` 明文回退。系统密钥环不可用时拒绝持久化，仍可临时连接。磁盘写入使用队列、受限权限临时文件及原子重命名。连接名称/类型等定位元数据可能明文存在，它们不应包含密码。
+
+已保存密码、口令、完整 MongoDB URI 不回传 Renderer。用户新输入凭据会短暂存在于表单内存，经固定 IPC 交给主进程；这不等于能防御已受控的操作系统或被植入代码的应用进程。修改端点或认证身份时不自动继承旧密钥。
+
+连接导出会脱敏，但主机、用户名、本机文件路径及指纹仍需在分享前审阅。数据导出包含用户主动选择的当前结果页，写入用户通过系统保存对话框选定的位置；它不是加密备份。查询历史可能包含 SQL/EJSON 字面量，因此也使用系统加密保存。
+
+## 网络信任
+
+SSH 每一级都固定验证主机公钥 SHA-256 指纹；未知或变更指纹拒绝连接。不自动信任、不运行 ProxyCommand/远程 shell、不转发 SSH Agent。本地 SOCKS 和转发监听只绑定 loopback；SOCKS 使用随机会话凭据，生命周期随数据库会话结束。
+
+TLS 验证证书链和逻辑节点主机名，要求 TLS 1.2 或更高；不能通过 URI 选项关闭校验。代理和 SSH 不改变节点证书身份。HTTP CONNECT 代理本身未增加 HTTPS/NTLM 支持，部署方应选择可信传输路径。
+
+## 数据操作保护
+
+MySQL 单语句策略拒绝可执行注释、文件输出、自定义/存储函数及管理/会话控制；只读 SQL 同时在服务端只读事务内执行。单行写入使用参数绑定、真实主键和原始完整行比较。MongoDB 用 Canonical EJSON 保留 BSON 类型，用字面量比较完整原文档，拒绝聚合写阶段和服务端 JavaScript。Redis 命令台采用完整命令/参数白名单；只提供用于 String 并发比较的固定内部脚本。
+
+单会话串行操作、超时、取消、分页、游标和输出预算限制误操作影响。MySQL/MongoDB 的单值大小在驱动解码后判断，超大协议值的瞬时内存仍是需要继续验证的边界。Redis 使用解析前网络预算，超过预算断开连接。取消/断线不保证撤销已提交写入；MongoDB 批量新增、Redis 跨 Key 删除也不保证全批原子性，应依据错误提示与数据库实际状态核对后重试。
+
+## 发行与报告
+
+当前为功能预览版本，尚不宣称通过独立安全审计或全部真实部署验收。无发行证书时产生 unsigned preview；代码签名、公证和系统安装验证需在发行环境完成。支持状态和验证证据见 [docs/ROADMAP.md](docs/ROADMAP.md)。
+
+如发现漏洞，请向仓库所有者私下报告。提供最小复现、受影响版本和脱敏配置；不要在公开 Issue 中粘贴可用凭据、私钥或业务数据。

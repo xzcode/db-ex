@@ -1,56 +1,115 @@
-import type { ConnectionConfig, DatabaseKind } from '../../shared/types'
+import type { ConnectionConfig, Endpoint, ProxyOptions, SshOptions, TlsOptions } from '../../shared/types'
 
-const kinds: DatabaseKind[] = ['mysql', 'mongodb', 'redis']
-const validEnv = ['development', 'testing', 'production']
-
-function assertText(value: unknown, field: string, max = 512): asserts value is string {
-  if (typeof value !== 'string' || !value.trim() || value.length > max) {
-    throw new Error(`INVALID_CONNECTION: ${field} 不能为空或超出长度限制`)
-  }
+function object(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(`INVALID_CONNECTION: ${label}格式错误`)
+  return value as Record<string, unknown>
 }
-
-export function validateConnection(value: unknown): ConnectionConfig {
-  if (!value || typeof value !== 'object') throw new Error('INVALID_CONNECTION: 参数错误')
-  const config = value as ConnectionConfig
-  assertText(config.name, '连接名称', 100)
-  if (!kinds.includes(config.kind)) throw new Error('INVALID_CONNECTION: 不支持的数据库类型')
-  if (!validEnv.includes(config.environment)) throw new Error('INVALID_CONNECTION: 环境无效')
-  if (config.kind !== 'mongodb' || !config.uri?.trim()) {
-    assertText(config.host, '数据库地址')
-    if (!Number.isInteger(config.port) || config.port < 1 || config.port > 65535) {
-      throw new Error('INVALID_CONNECTION: 数据库端口无效')
-    }
-  } else {
-    if (!/^mongodb(\+srv)?:\/\//i.test(config.uri)) throw new Error('INVALID_CONNECTION: MongoDB URI 无效')
-    if (config.uri.length > 4096) throw new Error('INVALID_CONNECTION: MongoDB URI 过长')
+function text(value: unknown, label: string, max = 512, required = false): string | undefined {
+  if (value === undefined || value === null || value === '') {
+    if (required) throw new Error(`INVALID_CONNECTION: 请填写${label}`)
+    return undefined
   }
-  if (!config.ssh || !config.tls) throw new Error('INVALID_CONNECTION: SSH/TLS 参数缺失')
-  if (config.ssh.enabled) {
-    assertText(config.ssh.host, 'SSH 地址')
-    assertText(config.ssh.username, 'SSH 用户名')
-    if (!Number.isInteger(config.ssh.port) || config.ssh.port < 1 || config.ssh.port > 65535) {
-      throw new Error('INVALID_CONNECTION: SSH 端口无效')
-    }
-    if (!['password', 'private-key', 'agent'].includes(config.ssh.authMode)) {
-      throw new Error('INVALID_CONNECTION: SSH 认证方式无效')
-    }
-    if (config.ssh.authMode === 'password') assertText(config.ssh.password, 'SSH 密码', 1024)
-    if (config.ssh.authMode === 'private-key') assertText(config.ssh.privateKeyPath, 'SSH 私钥路径')
-    if (config.kind === 'mongodb' && config.uri?.trim()) {
-      throw new Error('INVALID_CONNECTION: M1 版本不支持 MongoDB URI 与 SSH 隧道组合，请使用主机/端口模式')
-    }
-  }
-  if (config.tls.enabled && config.tls.certPath && !config.tls.keyPath) {
-    throw new Error('INVALID_CONNECTION: 客户端证书需要配套私钥')
-  }
-  if (config.kind === 'redis' && (config.redisDb ?? 0) !== 0) {
-    if (!Number.isInteger(config.redisDb) || config.redisDb! < 0 || config.redisDb! > 15) {
-      throw new Error('INVALID_CONNECTION: Redis DB 序号应为 0–15（实例实际 DB 数量以服务端为准）')
-    }
-  }
-  return config
+  if (typeof value !== 'string' || value.length > max || value.includes('\0')) throw new Error(`INVALID_CONNECTION: ${label}格式错误`)
+  return value
 }
-
-export function validateId(id: unknown): asserts id is string {
-  assertText(id, '会话标识', 128)
+function bool(value: unknown, label: string, fallback = false): boolean {
+  if (value === undefined) return fallback
+  if (typeof value !== 'boolean') throw new Error(`INVALID_CONNECTION: ${label}必须是布尔值`)
+  return value
 }
+function integer(value: unknown, label: string, min: number, max: number, fallback?: number): number {
+  if (value === undefined && fallback !== undefined) return fallback
+  if (!Number.isInteger(value) || (value as number) < min || (value as number) > max) throw new Error(`INVALID_CONNECTION: ${label}必须在 ${min}–${max} 之间`)
+  return value as number
+}
+function endpoint(value: unknown): Endpoint {
+  const v = object(value, '节点')
+  const host = text(v.host, '主机', 253, true)!
+  if (/[\s/@?#\\]/.test(host)) throw new Error('INVALID_CONNECTION: 主机只填写 DNS 名称或 IP 地址')
+  return { host, port: integer(v.port, '端口', 1, 65535) }
+}
+function ssh(value: unknown, nested = false, allowMissingSecrets = false): SshOptions {
+  const v = object(value, 'SSH')
+  const enabled = bool(v.enabled, 'SSH')
+  if (!enabled) return { enabled: false, host: '', port: 22, username: '', authMode: 'agent' }
+  const target = endpoint(v)
+  const username = text(v.username, 'SSH 用户名', 256, true)!
+  if (!['password', 'private-key', 'agent'].includes(String(v.authMode))) throw new Error('INVALID_CONNECTION: SSH 认证方式错误')
+  const password = text(v.password, 'SSH 密码', 8192)
+  const privateKeyPath = text(v.privateKeyPath, 'SSH 私钥路径', 4096)
+  if (v.authMode === 'password' && password === undefined && !allowMissingSecrets) throw new Error('INVALID_CONNECTION: 请填写 SSH 密码')
+  if (v.authMode === 'private-key' && !privateKeyPath) throw new Error('INVALID_CONNECTION: 请填写私钥路径')
+  const fingerprint = text(v.hostFingerprint, 'SSH 指纹', 64)
+  if (fingerprint && !/^[a-f\d]{64}$/i.test(fingerprint)) throw new Error('INVALID_CONNECTION: SSH 指纹应为64位 SHA-256 十六进制')
+  let jumps: SshOptions[] | undefined
+  if (v.jumps !== undefined) {
+    if (!Array.isArray(v.jumps) || v.jumps.length > 3 || (nested && v.jumps.length)) throw new Error('INVALID_CONNECTION: 最多支持三个前置跳板，不能嵌套跳板')
+    jumps = v.jumps.map(j => {
+      const result = ssh(j, true, allowMissingSecrets)
+      if (!result.enabled) throw new Error('INVALID_CONNECTION: 前置跳板必须启用')
+      return result
+    })
+  }
+  return { enabled, ...target, username, authMode: v.authMode as SshOptions['authMode'], password, privateKeyPath,
+    passphrase: text(v.passphrase, '私钥密码', 8192), agentSocket: text(v.agentSocket, 'Agent 路径', 4096),
+    hostFingerprint: fingerprint?.toLowerCase(), jumps }
+}
+function tls(value: unknown): TlsOptions {
+  const v = object(value, 'TLS')
+  const enabled = bool(v.enabled, 'TLS')
+  const caPath = text(v.caPath, 'CA 路径', 4096)
+  const certPath = text(v.certPath, '客户端证书', 4096)
+  const keyPath = text(v.keyPath, '客户端密钥', 4096)
+  if (Boolean(certPath) !== Boolean(keyPath)) throw new Error('INVALID_CONNECTION: 客户端证书与私钥必须同时配置')
+  const servername = text(v.servername, 'TLS 服务器名称', 253)
+  if (servername && /[\s/@?#\\]/.test(servername)) throw new Error('INVALID_CONNECTION: TLS 服务器名称无效')
+  return { enabled, caPath, certPath, keyPath, servername }
+}
+function proxy(value: unknown): ProxyOptions | undefined {
+  if (value === undefined) return undefined
+  const v = object(value, '代理')
+  const enabled = bool(v.enabled, '代理')
+  if (!enabled) return { enabled: false, type: 'socks5', host: '', port: 1080 }
+  if (!['socks5', 'http-connect'].includes(String(v.type))) throw new Error('INVALID_CONNECTION: 不支持此代理类型')
+  return { enabled, type: v.type as ProxyOptions['type'], ...endpoint(v), username: text(v.username, '代理用户名', 255), password: text(v.password, '代理密码', 255) }
+}
+export function validateConnection(value: unknown, allowMissingSecrets = false): ConnectionConfig {
+  const v = object(value, '连接')
+  const name = text(v.name, '连接名称', 100, true)!
+  if (!['mysql', 'mongodb', 'redis'].includes(String(v.kind))) throw new Error('INVALID_CONNECTION: 数据库类型错误')
+  if (!['development', 'testing', 'production'].includes(String(v.environment))) throw new Error('INVALID_CONNECTION: 环境类型错误')
+  const kind = v.kind as ConnectionConfig['kind']
+  const uri = text(v.uri, 'MongoDB URI', 8192)
+  if (uri) {
+    if (kind !== 'mongodb' || !/^mongodb(?:\+srv)?:\/\//i.test(uri)) throw new Error('INVALID_CONNECTION: URI 仅支持 mongodb:// 或 mongodb+srv://')
+    const query = new URLSearchParams(uri.slice(uri.indexOf('?') + 1))
+    for (const [key, val] of query) {
+      const k = key.toLowerCase()
+      if ((['tlsinsecure', 'tlsallowinvalidcertificates', 'tlsallowinvalidhostnames'].includes(k) && val.toLowerCase() !== 'false') || k.startsWith('proxy')) throw new Error('INVALID_CONNECTION: URI 不允许跳过 TLS 校验或覆盖代理配置')
+      if (['tlscafile', 'tlscertificatekeyfile', 'tlscrlfile'].includes(k)) throw new Error('INVALID_CONNECTION: 请在 TLS 页配置证书路径')
+      if (v.tls && (v.tls as TlsOptions).enabled && ['ssl', 'tls'].includes(k) && val.toLowerCase() === 'false') throw new Error('INVALID_CONNECTION: URI 与 TLS 配置冲突')
+    }
+  }
+  const target = uri && !v.host ? { host: '', port: integer(v.port, '端口', 1, 65535, 27017) } : endpoint(v)
+  const redisMode = v.redisMode === undefined ? 'standalone' : v.redisMode
+  if (!['standalone', 'sentinel', 'cluster'].includes(String(redisMode))) throw new Error('INVALID_CONNECTION: Redis 拓扑模式无效')
+  let nodes: Endpoint[] | undefined
+  if (v.nodes !== undefined) {
+    if (!Array.isArray(v.nodes) || v.nodes.length > 20) throw new Error('INVALID_CONNECTION: 种子节点最多20个')
+    nodes = v.nodes.map(endpoint)
+  }
+  if (kind === 'redis' && redisMode !== 'standalone' && !nodes?.length) throw new Error('INVALID_CONNECTION: 集群或 Sentinel 至少需要一个种子节点')
+  const redisDb = integer(v.redisDb, 'Redis DB', 0, 1023, 0)
+  if (kind === 'redis' && redisMode === 'cluster' && redisDb !== 0) throw new Error('INVALID_CONNECTION: Redis Cluster 只能使用 DB 0')
+  const sentinelMaster = text(v.sentinelMaster, 'Sentinel master 名称', 128)
+  if (kind === 'redis' && redisMode === 'sentinel' && !sentinelMaster) throw new Error('INVALID_CONNECTION: 请填写 Sentinel master 名称')
+  const id = text(v.id, '连接 ID', 128)
+  return { id, name, kind, environment: v.environment as ConnectionConfig['environment'], ...target,
+    username: text(v.username, '数据库用户名', 512), password: text(v.password, '数据库密码', 8192),
+    database: text(v.database, '数据库名称', 200), authSource: text(v.authSource, '认证数据库', 200), redisDb, uri,
+    ssh: ssh(v.ssh, false, allowMissingSecrets), tls: tls(v.tls), proxy: proxy(v.proxy), redisMode: redisMode as ConnectionConfig['redisMode'], nodes,
+    sentinelMaster, sentinelUsername: text(v.sentinelUsername, 'Sentinel 用户名', 512), sentinelPassword: text(v.sentinelPassword, 'Sentinel 密码', 8192),
+    sentinelTls: bool(v.sentinelTls, 'Sentinel TLS'), mongoReplicaSet: text(v.mongoReplicaSet, '副本集名称', 200), mongoDirect: bool(v.mongoDirect, 'MongoDB 直连'),
+    connectTimeoutMs: integer(v.connectTimeoutMs, '连接超时毫秒', 1000, 60000, 12000) }
+}
+export function validateId(value: unknown): asserts value is string { text(value, 'ID', 128, true) }
