@@ -65,7 +65,10 @@
       "category": "public.app-category.developer-tools",
       "hardenedRuntime": true,
       "notarize": false,
-      "icon": "build/icon.icns"
+      "icon": "build/icon.icns",
+      "identity": "-",
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
     },
     "win": {
       "target": [

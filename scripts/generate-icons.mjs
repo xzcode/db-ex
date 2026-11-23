@@ -63,6 +63,20 @@ function raster(size) {
           b = blend(b, blend(244, 248, mix), ink)
         }
       }
+      // Three minimal signal points mirror the user-approved DB EX design.
+      for (const [cx, cy, cr, cg, cb] of [
+        [678, 510, 48, 225, 241],
+        [678, 614, 176, 143, 245],
+        [678, 718, 48, 213, 243],
+      ]) {
+        const point = Math.hypot(x - cx, y - cy)
+        const strength = clamp(0.5 + (13 - point) / scale)
+        if (strength > 0) {
+          r = blend(r, cr, strength)
+          g = blend(g, cg, strength)
+          b = blend(b, cb, strength)
+        }
+      }
       data[off] = r
       data[off + 1] = g
       data[off + 2] = b

@@ -35,8 +35,16 @@ DB EX v0.5.0 是开发预览版。该版本的 macOS ARM64 DMG/ZIP **没有 Deve
 
 未签名应用的 spctl 评估失败属于预期情况；请提供完整错误文本，不要上传密码或敏感连接信息。
 
+## 两种不同的签名路径
+
+**Shell EX** 使用 Tauri 的 `signingIdentity: "-"`，它是 Ad-hoc 签名。**DB EX v0.5.0** 则完全跳过了代码签名。这是已确认的打包差异。
+
+下次构建的 DB EX 在 Electron Builder 中设置 `mac.identity: "-"`，并配置 JIT / Library Validation entitlement。CI 必须使用 `codesign --verify --deep --strict` 确认完整应用已临时签名，并测试打包后的真实可执行文件。
+
+Ad-hoc 签名不提供 Apple Developer 身份和公证，也不能保证每个浏览器下载的应用自动通过 Gatekeeper。它是个人开发预览版的合理改进，但不能标成正式公证。
+
 ## 正式消除 Gatekeeper 拦截
 
 必须使用有效的 Apple Developer ID Application 证书签名 macOS App，并完成 notarization、公证凭据配置及 stapling，在干净 macOS 设备上从浏览器重新下载后实测。**仅更换图标、改名或再次生成 DMG 不能实现这个目标。**
 
-接下来的开发分支已经提供自定义应用图标（macOS ICNS、Windows ICO、Linux PNG），但它只会出现在使用该分支重新打包的后续版本，不能回溯修改 v0.5.0 已发布文件。
+接下来的开发分支已经提供使用你选定的青蓝色数据库标识的自定义应用图标（macOS ICNS、Windows ICO、Linux PNG），但它只会出现在使用该分支重新打包的后续版本，不能回溯修改 v0.5.0 已发布文件。
