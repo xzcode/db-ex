@@ -28,6 +28,8 @@ jobs:
         run: npm exec electron-builder -- --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          # Safe here: this PR job has no certificates, credentials or user secrets.
+          CSC_FOR_PULL_REQUEST: 'true'
       - name: Assert valid ad-hoc signature and embedded custom icon
         run: bash scripts/verify-mac-package.sh
       - name: Launch signed application for real desktop smoke
