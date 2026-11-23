@@ -138,7 +138,17 @@ export class RedisOperations {
       case 'redis.scan': {
         const client = this.node(op.node)
         const pattern = op.pattern === undefined ? '*' : string(op.pattern, 'Key匹配', 1024)
-        const [next, keys] = await client.scan(cursor(op.cursor), 'MATCH', pattern, 'COUNT', PAGE)
+        const [nextBuffer, encodedKeys] = await client.scanBuffer(cursor(op.cursor), 'MATCH', pattern, 'COUNT', PAGE)
+        const next = nextBuffer.toString('ascii')
+        const keys: string[] = []
+        let skippedKeys = 0
+        for (const bytes of encodedKeys) {
+          try {
+            const decoded = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes)
+            key(decoded)
+            keys.push(decoded)
+          } catch { skippedKeys++ }
+        }
         const unique = [...new Set(keys)]
         // SCAN COUNT is a hint. A large compact result is shown in a bounded page.
         const visible = unique.slice(0, 500)
@@ -150,7 +160,7 @@ export class RedisOperations {
           }))
           rows.push(...chunk)
         }
-        return result(rows, { nextCursor: next === '0' ? undefined : next, truncated: unique.length > 500, message: unique.length > 500 ? 'SCAN 单次返回超过500项，已截断；请缩小匹配条件后重查' : `节点 ${client.options.host}:${client.options.port}；SCAN 可能重复或暂时返回空页` })
+        return result(rows, { nextCursor: next === '0' ? undefined : next, truncated: unique.length > 500, message: `${unique.length > 500 ? 'SCAN 单次返回超过500项，已截断；请缩小匹配条件后重查' : `节点 ${client.options.host}:${client.options.port}；SCAN 可能重复或暂时返回空页`}${skippedKeys ? `；跳过 ${skippedKeys} 个非UTF-8、含NUL或超长Key，防止错误解码后操作另一Key` : ''}` })
       }
       case 'redis.get': return this.get(key(op.key), op.cursor, op.offset)
       case 'redis.set': {
@@ -223,7 +233,7 @@ export class RedisOperations {
       const length = await this.client.strlen(name)
       const buffer = await this.client.getrangeBuffer(name, 0, MAX_STRING - 1)
       let value: string; let binary = false
-      try { value = new TextDecoder('utf-8', { fatal: true }).decode(buffer) } catch { value = buffer.toString('base64'); binary = true }
+      try { value = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(buffer) } catch { value = buffer.toString('base64'); binary = true }
       return result([{ key: name, type, ttl: String(ttl), bytes: String(length) }], { ...meta, length, value, truncated: length > MAX_STRING || binary, message: binary ? '二进制内容以Base64预览，文本编辑已禁用' : length > MAX_STRING ? '仅预览前64 KiB；禁止用截断值覆盖原值' : undefined })
     }
     let rows: Record<string, string>[] = []; let nextCursor: string | undefined; let nextOffset: number | undefined; let length: number | undefined

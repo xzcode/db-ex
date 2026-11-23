@@ -86,6 +86,20 @@ async function openAdmin(port: number, tracked: Set<Redis>): Promise<Redis> {
   await client.connect()
   return client
 }
+/** Failover may close observer sockets too. Reconnect only these read-only probes, never FAILOVER or writes. */
+async function observerRead<T>(client: Redis, read: () => Promise<T>): Promise<T | undefined> {
+  try {
+    if (client.status === 'end') await client.connect()
+    if (client.status !== 'ready') return undefined
+    return await read()
+  } catch (error) {
+    const failure = error as { code?: string; message?: string }
+    if (['ECONNRESET', 'ECONNREFUSED', 'EPIPE', 'ETIMEDOUT'].includes(failure.code || '') ||
+        failure.message === 'Connection is closed.' ||
+        failure.message?.startsWith("Stream isn't writeable")) return undefined
+    throw error
+  }
+}
 async function eventually<T>(description: string, probe: () => Promise<T | undefined>, timeoutMs = 20000): Promise<T> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
@@ -111,12 +125,12 @@ test('real Redis Cluster: authenticated proxy covers all masters, cross-slot CRU
   const primary = await openAdmin(7000, admins)
   await openAdmin(7001, admins)
   await openAdmin(7002, admins)
-  const slots = await primary.cluster('slots') as [number, number, [string, number, string]][]
+  const slots = await primary.cluster('SLOTS')
   assert.equal(new Set(slots.map(range => range[2][1])).size, 3)
   const byNode = new Map<number, string>()
   for (let candidate = 0; candidate < 100 && byNode.size < 3; candidate++) {
     const name = `${prefix}{slot-${candidate}}`
-    const slot = Number(await primary.cluster('keyslot', name))
+    const slot = Number(await primary.cluster('KEYSLOT', name))
     const owner = slots.find(range => slot >= range[0] && slot <= range[1])
     assert.ok(owner)
     if (!byNode.has(owner[2][1])) { byNode.set(owner[2][1], name); keys.add(name) }
@@ -185,8 +199,8 @@ test('real Redis Sentinel: authenticated proxy, failover rediscovery, and no rep
   })
   const promoted = dataNodes.get(promotedPort)!
   await eventually('the old master to become a replica', async () => {
-    const role = await initialMaster.call('ROLE') as unknown[]
-    return role[0] === 'slave' ? true : undefined
+    const role = await observerRead(initialMaster, () => initialMaster.call('ROLE') as Promise<unknown[]>)
+    return role?.[0] === 'slave' ? true : undefined
   })
 
   // Submit this mutation exactly once. A READONLY failure must reconnect without replaying it.
@@ -207,7 +221,8 @@ test('real Redis Sentinel: authenticated proxy, failover rediscovery, and no rep
   assert.equal(observedCounter, acknowledged ? '2' : '1', 'the submitted mutation must never be replayed after reconnect')
   assert.equal((await manager.execute(session.id, { action: 'redis.get', key: before })).value, 'replicated-before-failover')
   await manager.execute(session.id, { action: 'redis.set', key: after, value: 'written-to-promoted-master', confirmed: true })
-  assert.equal(await promoted.get(after), 'written-to-promoted-master')
+  const persisted = await eventually('the promoted-node observer to reconnect', () => observerRead(promoted, () => promoted.get(after)))
+  assert.equal(persisted, 'written-to-promoted-master')
   const nodes = await manager.execute(session.id, { action: 'redis.nodes' })
   assert.equal(nodes.rows[0].port, String(promotedPort), 'node metadata must report the current primary')
   assert.equal((await manager.execute(session.id, { action: 'redis.get', key: after })).value, 'written-to-promoted-master')

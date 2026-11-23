@@ -17,9 +17,10 @@ test('Redis 7 integration: data types, write gates, CAS, TTL, bounded reads, and
   client.on('error', () => {})
   const prefix = `dbex:integration:${randomUUID()}:`
   const keys = new Set<string>()
+  const bufferKeys: Buffer[] = []
   const key = (suffix: string): string => { const name = prefix + suffix; keys.add(name); return name }
   t.after(async () => {
-    try { if (client.status === 'ready' && keys.size) await client.unlink(...keys) }
+    try { if (client.status === 'ready' && (keys.size || bufferKeys.length)) await client.unlink(...keys, ...bufferKeys) }
     finally { client.disconnect() }
   })
   await client.connect()
@@ -57,6 +58,24 @@ test('Redis 7 integration: data types, write gates, CAS, TTL, bounded reads, and
     await execute({ action: 'redis.ttl', key: name, ttl: -1 })
     assert.equal(await client.ttl(name), -1)
     await assert.rejects(execute({ action: 'redis.ttl', key: name, ttl: 0 }), /TTL/)
+  })
+
+  await t.test('String previews preserve a UTF-8 BOM and remain valid CAS originals', async () => {
+    const name = key('bom')
+    const original = '\uFEFForiginal'
+    const updated = '\uFEFFupdated'
+    await client.set(name, Buffer.from(original, 'utf8'))
+    const preview = await execute({ action: 'redis.get', key: name }, read)
+    assert.equal(preview.value, original)
+    assert.equal(preview.value!.charCodeAt(0), 0xfeff)
+    assert.equal(preview.truncated, false)
+    assert.equal(preview.length, Buffer.byteLength(original))
+    const consolePreview = await execute({ action: 'redis.command', args: ['GET', name] }, read)
+    assert.equal(consolePreview.value, original)
+    await execute({ action: 'redis.set', key: name, value: updated, expected: preview.value })
+    assert.deepEqual(await client.getBuffer(name), Buffer.from(updated, 'utf8'))
+    assert.equal((await execute({ action: 'redis.get', key: name }, read)).value, updated)
+    await assert.rejects(execute({ action: 'redis.set', key: name, value: 'stale', expected: original }), /CONFLICT/)
   })
 
   await t.test('Hash fields can be added, changed, incremented, and removed', async () => {
@@ -154,6 +173,42 @@ test('Redis 7 integration: data types, write gates, CAS, TTL, bounded reads, and
     for (const args of [['FLUSHDB'], ['KEYS', prefix + '*'], ['EVAL', 'return 1', '0'], ['CONFIG', 'GET', '*'], ['MULTI'], ['SUBSCRIBE', name], ['BLPOP', name, '0'], ['HGETALL', name], ['LRANGE', name, '0', '-1'], ['SCAN', '0', 'COUNT', '10000']]) {
       await assert.rejects(execute({ action: 'redis.command', args }, read))
     }
+  })
+
+  await t.test('SCAN never aliases an invalid UTF-8 key to a valid replacement-character key', async () => {
+    const collisionPrefix = `${prefix}collision:`
+    const binaryKey = Buffer.concat([Buffer.from(collisionPrefix), Buffer.from([0xff])])
+    bufferKeys.push(binaryKey)
+    const legalKey = key('collision:\uFFFD')
+    await client.set(binaryKey, 'binary-key-value')
+    await client.set(legalKey, 'legal-key-value')
+    assert.equal(await client.exists(binaryKey, legalKey), 2)
+    const scan = async () => {
+      const rows: Record<string, string>[] = []
+      const messages: string[] = []
+      let cursor: string | undefined
+      const deadline = Date.now() + 10000
+      do {
+        assert.ok(Date.now() < deadline, 'bounded collision fixture scan')
+        const page = await execute({ action: 'redis.scan', cursor, pattern: `${collisionPrefix}*` }, read)
+        rows.push(...page.rows)
+        if (page.message) messages.push(page.message)
+        cursor = page.nextCursor
+      } while (cursor)
+      return { rows, messages }
+    }
+    const both = await scan()
+    assert.ok(both.rows.length > 0)
+    assert.ok(both.rows.every(row => row.key === legalKey && row.type === 'string'))
+    assert.deepEqual(new Set(both.rows.map(row => row.key)), new Set([legalKey]))
+    assert.ok(both.messages.some(message => /跳过 \d+ 个非UTF-8/.test(message)), 'unsupported key count must be visible')
+    assert.equal((await execute({ action: 'redis.get', key: legalKey }, read)).value, 'legal-key-value')
+    await execute({ action: 'redis.delete', keys: [legalKey] })
+    assert.equal(await client.exists(legalKey), 0)
+    assert.equal(await client.get(binaryKey), 'binary-key-value', 'deleting the displayed legal key must preserve the distinct binary key')
+    const binaryOnly = await scan()
+    assert.deepEqual(binaryOnly.rows, [], 'an invalid key must not create a phantom replacement-character row')
+    assert.ok(binaryOnly.messages.some(message => /跳过 \d+ 个非UTF-8/.test(message)))
   })
 
   await t.test('SCAN is scoped by pattern and bulk deletion accepts only explicit selected keys', async () => {

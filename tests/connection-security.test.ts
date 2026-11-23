@@ -70,3 +70,12 @@ test('portable configuration cannot import or export an unverified SSH trust dec
   assert.equal(portable.config.id, undefined)
   assert.equal(redactConnection(config).config.ssh.hostFingerprint, 'a'.repeat(64))
 })
+
+test('MySQL TLS refuses ambiguous IP identity and accepts an explicit certificate DNS name', () => {
+  const config = connection(); config.kind = 'mysql'; config.host = '127.0.0.1'; config.port = 3306
+  assert.throws(() => validateConnection(config), /TLS_IDENTITY_REQUIRED/)
+  config.tls.servername = 'db.internal'
+  assert.equal(validateConnection(config).tls.servername, 'db.internal')
+  config.tls.servername = '192.0.2.10'
+  assert.throws(() => validateConnection(config), /TLS_IDENTITY_REQUIRED/)
+})

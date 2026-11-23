@@ -92,7 +92,8 @@ export class SessionManager {
             }),
             serverSelectionTimeoutMS: config.connectTimeoutMs, connectTimeoutMS: config.connectTimeoutMs,
             socketTimeoutMS: 30000, maxPoolSize: 5, minPoolSize: 0, waitQueueTimeoutMS: 10000,
-            retryWrites: false, retryReads: false,
+            // Only retry driver-classified reads after topology changes; never replay writes.
+            retryWrites: false, retryReads: true,
             promoteLongs: false, promoteValues: false,
             ...(config.mongoReplicaSet ? { replicaSet: config.mongoReplicaSet } : {}),
             ...(config.mongoDirect ? { directConnection: true } : {}),

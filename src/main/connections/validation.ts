@@ -1,3 +1,4 @@
+import { isIP } from 'node:net'
 import type { ConnectionConfig, Endpoint, ProxyOptions, SshOptions, TlsOptions } from '../../shared/types'
 
 function object(value: unknown, label: string): Record<string, unknown> {
@@ -104,10 +105,14 @@ export function validateConnection(value: unknown, allowMissingSecrets = false):
   const sentinelMaster = text(v.sentinelMaster, 'Sentinel master 名称', 128)
   if (kind === 'redis' && redisMode === 'sentinel' && !sentinelMaster) throw new Error('INVALID_CONNECTION: 请填写 Sentinel master 名称')
   const id = text(v.id, '连接 ID', 128)
+  const tlsOptions = tls(v.tls)
+  if (!allowMissingSecrets && kind === 'mysql' && tlsOptions.enabled && isIP(tlsOptions.servername || target.host)) {
+    throw new Error('TLS_IDENTITY_REQUIRED: MySQL TLS 连接请填写证书中的 DNS 名称（TLS / SSL → 证书主机名）；当前驱动不支持可靠校验仅有 IP 身份的证书')
+  }
   return { id, name, kind, environment: v.environment as ConnectionConfig['environment'], ...target,
     username: text(v.username, '数据库用户名', 512), password: text(v.password, '数据库密码', 8192),
     database: text(v.database, '数据库名称', 200), authSource: text(v.authSource, '认证数据库', 200), redisDb, uri,
-    ssh: ssh(v.ssh, false, allowMissingSecrets), tls: tls(v.tls), proxy: proxy(v.proxy), redisMode: redisMode as ConnectionConfig['redisMode'], nodes,
+    ssh: ssh(v.ssh, false, allowMissingSecrets), tls: tlsOptions, proxy: proxy(v.proxy), redisMode: redisMode as ConnectionConfig['redisMode'], nodes,
     sentinelMaster, sentinelUsername: text(v.sentinelUsername, 'Sentinel 用户名', 512), sentinelPassword: text(v.sentinelPassword, 'Sentinel 密码', 8192),
     sentinelTls: bool(v.sentinelTls, 'Sentinel TLS'), mongoReplicaSet: text(v.mongoReplicaSet, '副本集名称', 200), mongoDirect: bool(v.mongoDirect, 'MongoDB 直连'),
     connectTimeoutMs: integer(v.connectTimeoutMs, '连接超时毫秒', 1000, 60000, 12000) }

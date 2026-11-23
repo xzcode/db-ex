@@ -61,7 +61,7 @@ UI 测试首次需 `npx playwright install chromium`；Linux CI 使用 `--with-d
 
 SSH 每一级都要提供独立核验过的 SHA-256 主机指纹，不自动信任首次出现的主机。SSH config 只解析明确的 Host 和安全选项，绝不执行 `ProxyCommand`、`Match exec` 或配置中的 shell 命令。包含这些能力的配置会跳过或给出提示。
 
-代理与 SSH 都保留数据库目标主机名进行 TLS 校验。MongoDB 的 `mongodb+srv` 仍需本机能够解析 DNS SRV/TXT；TCP 数据路径经过所选代理/隧道。Redis Sentinel/Cluster 发布的地址必须能被最后一级网络出口访问，且 TLS 证书需覆盖对应名称。
+代理与 SSH 都保留数据库目标主机名进行 TLS 校验。MySQL TLS 需要证书 DNS 身份：目标可以是 IP，但应另填证书覆盖的 DNS 名称；仅 IP SAN 的 MySQL 证书会被明确拒绝，避免驱动回退验证错误主机。MongoDB 的 `mongodb+srv` 仍需本机能够解析 DNS SRV/TXT；TCP 数据路径经过所选代理/隧道。Redis Sentinel/Cluster 发布的地址必须能被最后一级网络出口访问，且 TLS 证书需覆盖对应名称。
 
 Linux 系统密钥环不可用或回退为 `basic_text` 时，保存连接与查询历史会被拒绝，临时连接仍可使用。连接导出不包含密码、URI 凭据或私钥口令；导入后需重新补齐认证信息。详见 [安全说明](SECURITY.md)。
 
