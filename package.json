@@ -38,11 +38,36 @@
   "build": {
     "appId": "dev.dbex.desktop",
     "productName": "DB EX",
-    "files": ["dist/**/*", "dist-electron/**/*", "package.json"],
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json"
+    ],
     "asar": true,
-    "mac": {"target": ["dmg", "zip"], "category": "public.app-category.developer-tools"},
-    "win": {"target": ["nsis"]},
-    "linux": {"target": ["AppImage", "deb"], "category": "Development"}
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.developer-tools"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Development"
+    },
+    "directories": {
+      "output": "release"
+    }
   },
-  "engines": {"node": ">=22"}
+  "engines": {
+    "node": ">=22"
+  }
 }
