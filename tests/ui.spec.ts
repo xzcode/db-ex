@@ -63,9 +63,16 @@ async function openUsers(page: Page, database = 'app') {
 }
 async function replaceEditor(page: Page, selector: string, text: string) {
   const editor = page.locator(selector).last()
-  await editor.click({ position: { x: 150, y: 30 } })
-  await page.keyboard.press('ControlOrMeta+A')
+  // Focus Monaco's actual input surface (textarea or native EditContext), rather
+  // than a coordinate which may land on a view overlay while it is rendering.
+  const input = editor.getByRole('textbox')
+  await input.focus()
+  await expect(input).toBeFocused()
+  await input.press('ControlOrMeta+A')
   await page.keyboard.insertText(text)
+  // The tests replace short, single-line fixtures. Verify the real rendered
+  // document has changed before clicking Save; never set editor/Vue state.
+  await expect.poll(async () => (await editor.locator('.view-lines').textContent() || '').replace(/\u00a0/g, ' ')).toBe(text)
 }
 test.beforeEach(async ({ page }) => { await installBridge(page); await page.goto('/') })
 
@@ -174,5 +181,16 @@ test('large result grids render a bounded row window and retain the original row
   await expect(page.locator('.document-editor')).toContainText('User 451')
   await replaceEditor(page, '.document-editor .monaco-editor', '{"id":"451","name":"Edited 451","email":"user451@example.test"}')
   await page.getByRole('button', { name: '审阅并保存', exact: true }).click()
-  await expect.poll(() => page.evaluate(() => (window as any).__dbexCalls.some((call: any) => call.action === 'mysql.update' && call.key.id === '451' && call.original.name === 'User 451' && call.changes.name === 'Edited 451'))).toBe(true)
+  await expect.poll(() => page.evaluate(() => {
+    const updates = (window as any).__dbexCalls.filter((call: any) => call.action === 'mysql.update')
+    // These are generated test records only. A failure prints the actual bridge
+    // payload or the visible validation error instead of an uninformative false.
+    return updates[updates.length - 1] || {
+      action: 'missing mysql.update',
+      errors: Array.from(document.querySelectorAll('[role="alert"]'), element => element.textContent),
+    }
+  })).toMatchObject({
+    sessionId: 'sql', action: 'mysql.update', confirmed: true,
+    key: { id: '451' }, original: { id: '451', name: 'User 451' }, changes: { name: 'Edited 451' },
+  })
 })
