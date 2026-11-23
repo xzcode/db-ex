@@ -1,0 +1,118 @@
+name: Publish DB EX v0.5.0
+on:
+  push:
+    branches: [master]
+permissions:
+  contents: write
+concurrency:
+  group: db-ex-release-0.5.0
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: "github.repository == 'xzcode/db-ex' && startsWith(github.event.head_commit.message, 'release: DB EX v0.5.0 preview')"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create or validate draft preview release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view v0.5.0 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            tag_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v0.5.0" --jq '.object.sha')"
+            is_draft="$(gh release view v0.5.0 --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')"
+            if [[ "$tag_sha" != "$GITHUB_SHA" || "$is_draft" != "true" ]]; then
+              echo "::error::Existing v0.5.0 does not match this commit or is already published."
+              exit 1
+            fi
+          else
+            if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v0.5.0" >/dev/null 2>&1; then
+              echo "::error::Tag v0.5.0 already exists without the expected draft release."
+              exit 1
+            fi
+            gh release create v0.5.0 --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "DB EX v0.5.0 (Core Preview)" --notes-file docs/RELEASE_v0.5.0.md --draft --prerelease
+          fi
+
+  packages:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - name: Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: npx playwright install-deps chromium
+      - name: Build unsigned preview installers
+        run: npm exec electron-builder -- --publish never --config.mac.hardenedRuntime=false
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Test packaged application on Linux
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm run smoke:electron
+        env:
+          DB_EX_PACKAGED: '1'
+      - name: Test packaged application on macOS / Windows
+        if: runner.os != 'Linux'
+        run: npm run smoke:electron
+        env:
+          DB_EX_PACKAGED: '1'
+      - name: Check installer sizes and calculate SHA-256
+        run: node scripts/check-packages.mjs
+      - name: Upload installers directly to GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(release/*.dmg release/*.zip release/*.exe release/*.AppImage release/*.deb)
+          if (( ${#files[@]} == 0 )); then
+            echo "::error::No installer files were built."
+            exit 1
+          fi
+          cp release/SHA256SUMS.txt "release/SHA256SUMS-$RUNNER_OS-$RUNNER_ARCH.txt"
+          files+=("release/SHA256SUMS-$RUNNER_OS-$RUNNER_ARCH.txt")
+          gh release upload v0.5.0 "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+
+  publish:
+    needs: packages
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Verify all five installer types and three checksums, then publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/v0.5.0")"
+          names="$(jq -r '.assets[].name' <<<"$release_json")"
+          for filename in 'DB EX-0.5.0-mac-arm64.dmg' 'DB EX-0.5.0-mac-arm64.zip' 'DB EX-0.5.0-win-x64.exe' 'DB EX-0.5.0-linux-x86_64.AppImage' 'DB EX-0.5.0-linux-amd64.deb' 'SHA256SUMS-macOS-ARM64.txt' 'SHA256SUMS-Windows-X64.txt' 'SHA256SUMS-Linux-X64.txt'; do
+            if ! grep -Fqx -- "$filename" <<<"$names"; then
+              echo "::error::Missing Release asset: $filename"
+              exit 1
+            fi
+          done
+          small_installer="$(jq -r '.assets[] | select(.name | test("\\.(dmg|zip|exe|AppImage|deb)$")) | select(.size < 1048576) | .name' <<<"$release_json")"
+          if [[ -n "$small_installer" ]]; then
+            echo "::error::Unexpectedly small installer: $small_installer"
+            exit 1
+          fi
+          tag_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v0.5.0" --jq '.object.sha')"
+          [[ "$tag_sha" == "$GITHUB_SHA" ]] || { echo "::error::Release tag does not point to the triggering commit"; exit 1; }
+          gh release edit v0.5.0 --repo "$GITHUB_REPOSITORY" --draft=false --prerelease
+          echo "Published DB EX v0.5.0 with verified platform installers."

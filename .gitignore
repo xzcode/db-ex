@@ -1,0 +1,19 @@
+node_modules/
+dist/
+dist-electron/
+dist-electron-builder/
+release/
+coverage/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+.idea/
+.vscode/
+
+
+# Local verification artifacts
+playwright-report/
+test-results/
+electron-smoke.png
