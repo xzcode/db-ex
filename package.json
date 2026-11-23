@@ -9,7 +9,7 @@
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && npm run build:main && npm run build:preload && electron . --dev\"",
     "build:main": "esbuild src/main/index.ts --bundle --platform=node --format=cjs --target=node22 --outfile=dist-electron/main.cjs --packages=external --external:electron",
     "build:preload": "esbuild src/preload/index.ts --bundle --platform=node --format=cjs --target=node22 --outfile=dist-electron/preload.cjs --external:electron",
-    "build": "npm run build:main && npm run build:preload && vite build",
+    "build": "npm run icons && npm run build:main && npm run build:preload && vite build",
     "typecheck": "vue-tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.main.json",
     "start": "electron .",
     "pack": "npm run build && electron-builder --dir",
@@ -19,7 +19,8 @@
     "test:ui": "playwright test",
     "verify": "npm run typecheck && npm test && npm run build",
     "smoke:electron": "node scripts/smoke-electron.mjs",
-    "test:topology": "node --import tsx --test tests/mongo-topology.test.ts tests/redis-topology.test.ts"
+    "test:topology": "node --import tsx --test tests/mongo-topology.test.ts tests/redis-topology.test.ts",
+    "icons": "node scripts/generate-icons.mjs"
   },
   "dependencies": {
     "ioredis": "^5.11.1",
@@ -63,12 +64,17 @@
       ],
       "category": "public.app-category.developer-tools",
       "hardenedRuntime": true,
-      "notarize": false
+      "notarize": false,
+      "icon": "build/icon.icns",
+      "identity": "-",
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
     },
     "win": {
       "target": [
         "nsis"
-      ]
+      ],
+      "icon": "build/icon.ico"
     },
     "linux": {
       "target": [
@@ -76,7 +82,8 @@
         "deb"
       ],
       "category": "Development",
-      "maintainer": "xzcode"
+      "maintainer": "xzcode",
+      "icon": "build/icon.png"
     },
     "directories": {
       "output": "release"

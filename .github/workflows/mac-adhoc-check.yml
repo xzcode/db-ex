@@ -1,0 +1,38 @@
+name: Verify macOS ad-hoc packaged app
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - 'package.json'
+      - 'build/entitlements.mac.plist'
+      - 'scripts/generate-icons.mjs'
+      - 'scripts/verify-mac-package.sh'
+      - 'assets/db-ex-icon.svg'
+      - '.github/workflows/mac-adhoc-check.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  mac-adhoc:
+    runs-on: macos-15
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Package with ad-hoc code signing
+        run: npm exec electron-builder -- --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          # Safe here: this PR job has no certificates, credentials or user secrets.
+          CSC_FOR_PULL_REQUEST: 'true'
+      - name: Assert valid ad-hoc signature and embedded custom icon
+        run: bash scripts/verify-mac-package.sh
+      - name: Launch signed application for real desktop smoke
+        run: npm run smoke:electron
+        env:
+          DB_EX_PACKAGED: '1'

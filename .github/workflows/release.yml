@@ -34,11 +34,12 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          MAC_CSC_IDENTITY: ${{ secrets.MAC_CSC_IDENTITY }}
         run: |
-          node -e "const keys=['CSC_LINK','CSC_KEY_PASSWORD',...(process.platform==='darwin'?['APPLE_ID','APPLE_APP_SPECIFIC_PASSWORD','APPLE_TEAM_ID']:[])];if(keys.some(k=>!process.env[k])){console.error('Signing credentials missing; refusing an unsigned fallback');process.exit(1)}"
-      - name: Package unsigned preview
+          node -e "const keys=['CSC_LINK','CSC_KEY_PASSWORD',...(process.platform==='darwin'?['APPLE_ID','APPLE_APP_SPECIFIC_PASSWORD','APPLE_TEAM_ID','MAC_CSC_IDENTITY']:[])];if(keys.some(k=>!process.env[k]) || (process.platform==='darwin' && process.env.MAC_CSC_IDENTITY==='-')){console.error('Signing credentials or real macOS identity missing; refusing an ad-hoc fallback');process.exit(1)}"
+      - name: Package macOS ad-hoc signed / other preview
         if: ${{ !inputs.signed || runner.os == 'Linux' }}
-        run: npm run dist -- --publish never --config.mac.hardenedRuntime=false
+        run: npm run dist -- --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       - name: Sign Windows
@@ -49,13 +50,17 @@ jobs:
           CSC_KEY_PASSWORD: ${{ runner.os == 'macOS' && secrets.MAC_CSC_KEY_PASSWORD || secrets.WIN_CSC_KEY_PASSWORD }}
       - name: Sign and notarize macOS
         if: inputs.signed && runner.os == 'macOS'
-        run: npm run dist -- --publish never --config.forceCodeSigning=true --config.mac.notarize=true
+        run: npm run dist -- --publish never --config.forceCodeSigning=true --config.mac.notarize=true --config.mac.identity="$MAC_CSC_IDENTITY"
         env:
           CSC_LINK: ${{ runner.os == 'macOS' && secrets.MAC_CSC_LINK || secrets.WIN_CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ runner.os == 'macOS' && secrets.MAC_CSC_KEY_PASSWORD || secrets.WIN_CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          MAC_CSC_IDENTITY: ${{ secrets.MAC_CSC_IDENTITY }}
+      - name: Verify macOS preview ad-hoc signature
+        if: runner.os == 'macOS' && !inputs.signed
+        run: bash scripts/verify-mac-package.sh
       - uses: actions/upload-artifact@v4
         with:
           name: db-ex-release-${{ runner.os }}-${{ runner.arch }}

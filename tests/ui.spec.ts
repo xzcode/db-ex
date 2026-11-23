@@ -69,6 +69,10 @@ async function replaceEditor(page: Page, selector: string, text: string) {
   await input.focus()
   await expect(input).toBeFocused()
   await input.press('ControlOrMeta+A')
+  await page.keyboard.press('Backspace')
+  // Assert deletion settled before inserting: Monaco may otherwise leave the
+  // trailing brace of the previous JSON document under CI scheduling pressure.
+  await expect.poll(async () => (await editor.locator('.view-lines').textContent() || '').trim()).toBe('')
   await page.keyboard.insertText(text)
   // The tests replace short, single-line fixtures. Verify the real rendered
   // document has changed before clicking Save; never set editor/Vue state.

@@ -97,3 +97,7 @@ npm run test:integration
 - [连接与拓扑](docs/CONNECTIONS.md)
 - [路线图、已知限制与交接](docs/ROADMAP.md)
 - [安全约束](SECURITY.md)
+
+## macOS installation notes
+
+v0.5.0 was an unsigned preview; the next macOS build uses ad-hoc signing (like Shell EX), still without notarization. See [macOS install and Gatekeeper troubleshooting](docs/MAC_INSTALL.md) before bypassing the "app is damaged" warning. Native application icons for the next build are generated reproducibly with `npm run icons` (macOS ICNS, Windows ICO and Linux PNG).

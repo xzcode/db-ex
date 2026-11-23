@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <title>DB EX application icon</title>
+  <defs>
+    <linearGradient id="tile" x1="0" x2="0" y1="0" y2="1">
+      <stop stop-color="#131E46"/>
+      <stop offset="1" stop-color="#0B112F"/>
+    </linearGradient>
+    <linearGradient id="ink" x1="0" x2="0" y1="0" y2="1">
+      <stop stop-color="#3EE6F4"/>
+      <stop offset="1" stop-color="#307FF8"/>
+    </linearGradient>
+  </defs>
+  <rect x="48" y="48" width="928" height="928" rx="229" fill="url(#tile)"/>
+  <g fill="none" stroke="url(#ink)" stroke-width="38" stroke-linecap="round" stroke-linejoin="round">
+    <ellipse cx="512" cy="388" rx="226" ry="77"/>
+    <path d="M286 388V697C286 762 738 762 738 697V388"/>
+    <path d="M286 496C286 559 738 559 738 496"/>
+    <path d="M286 595C286 660 738 660 738 595"/>
+  </g>
+  <circle cx="678" cy="510" r="13" fill="#30E1F1"/>
+  <circle cx="678" cy="614" r="13" fill="#B08FF5"/>
+  <circle cx="678" cy="718" r="13" fill="#30D5F3"/>
+</svg>
