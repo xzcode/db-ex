@@ -116,6 +116,7 @@ test('Sentinel discovery and failover resolve all endpoints through the same tra
   await ready
   assert.equal(await client.get('key'), 'new-primary')
   assert.ok(opened.includes('primary-two.internal:6379'))
+  assert.equal(client.options.host, 'primary-two.internal')
   assert.equal(opened.filter(endpoint => endpoint === 'sentinel.internal:26379').length, 2)
 })
 

@@ -18,7 +18,8 @@
     "test:integration": "node --import tsx --test tests/db-integration.test.ts tests/redis-integration.test.ts tests/session-integration.test.ts",
     "test:ui": "playwright test",
     "verify": "npm run typecheck && npm test && npm run build",
-    "smoke:electron": "node scripts/smoke-electron.mjs"
+    "smoke:electron": "node scripts/smoke-electron.mjs",
+    "test:topology": "node --import tsx --test tests/mongo-topology.test.ts tests/redis-topology.test.ts"
   },
   "dependencies": {
     "ioredis": "^5.11.1",

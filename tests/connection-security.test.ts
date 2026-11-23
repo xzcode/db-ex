@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import type { ConnectionConfig } from '../src/shared/types'
 import { validateConnection } from '../src/main/connections/validation'
-import { mergeConnectionSecrets, redactConnection } from '../src/main/connections/credentials'
+import { mergeConnectionSecrets, portableConnection, redactConnection } from '../src/main/connections/credentials'
 const connection = (): ConnectionConfig => ({
   id: 'test-connection', name: 'Test', kind: 'redis', environment: 'testing', host: 'db.internal', port: 6379,
   username: 'app', password: 'synthetic-test-secret', redisMode: 'sentinel', sentinelMaster: 'primary',
@@ -58,4 +58,15 @@ test('runtime validation rejects wrong boolean types, nested jumps, and cluster 
   assert.throws(() => validateConnection({ ...config, redisMode: 'cluster', redisDb: 1 }))
   config.ssh.jumps![0].jumps = [config.ssh.jumps![0]]
   assert.throws(() => validateConnection(config))
+})
+
+test('portable configuration cannot import or export an unverified SSH trust decision', () => {
+  const config = connection()
+  config.ssh.hostFingerprint = 'a'.repeat(64)
+  config.ssh.jumps![0].hostFingerprint = 'b'.repeat(64)
+  const portable = portableConnection(config)
+  assert.equal(portable.config.ssh.hostFingerprint, undefined)
+  assert.equal(portable.config.ssh.jumps![0].hostFingerprint, undefined)
+  assert.equal(portable.config.id, undefined)
+  assert.equal(redactConnection(config).config.ssh.hostFingerprint, 'a'.repeat(64))
 })

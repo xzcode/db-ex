@@ -32,14 +32,14 @@ async function installBridge(page: Page) {
         if (op.action === 'mysql.structure') return { ...grid([{ name: 'id', type: 'int', key: 'PRI' }, { name: 'name', type: 'varchar', key: '' }]), primaryKeys: ['id'] }
         if (op.action === 'mysql.query') {
           if (op.sql.includes('slow_query')) await new Promise(resolve => setTimeout(resolve, 400))
-          const values = id === 'sql2' ? [{ id: '2', name: 'Grace', email: 'grace@example.test' }] : rows
+          const values = (window as any).__dbexLargeGrid ? Array.from({ length: 500 }, (_, index) => ({ id: String(index + 1), name: 'User ' + (index + 1), email: 'user' + (index + 1) + '@example.test' })) : id === 'sql2' ? [{ id: '2', name: 'Grace', email: 'grace@example.test' }] : rows
           return { ...grid(values), rawRows: values, durationMs: 4, transaction: false }
         }
         if (op.action === 'mysql.begin') return { columns: [], rows: [], transaction: true }
         if (op.action === 'mysql.commit' || op.action === 'mysql.rollback') return { columns: [], rows: [], transaction: false }
         if (op.action === 'mongo.find' || op.action === 'mongo.aggregate') return { ...grid([{ _id: '64b000000000000000000001', name: 'Ada' }]), documents: [document], durationMs: 3 }
         if (op.action === 'mongo.indexes') return grid([{ name: '_id_', key: '{"_id":1}' }])
-        if (op.action === 'redis.nodes') return grid([{ node: '127.0.0.1:6379' }])
+        if (op.action === 'redis.nodes') return grid([{ id: '127.0.0.1:6379', host: '127.0.0.1', port: '6379', role: 'master' }, { id: '127.0.0.2:6379', host: '127.0.0.2', port: '6379', role: 'master' }])
         if (op.action === 'redis.scan') return { ...grid([{ key: 'profile:1', type: 'string', ttl: '-1' }]), nextCursor: undefined }
         if (op.action === 'redis.get') return { ...grid([{ value: 'hello' }]), value: 'hello', redisType: 'string', ttl: -1, length: 5, truncated: false }
         return { columns: [], rows: [], affectedRows: 1, message: '操作已完成' }
@@ -130,6 +130,7 @@ test('Redis uses SCAN and compare-and-set string updates with explicit write per
   await connect(page, 'Redis Local')
   await expect(page.getByText('profile:1', { exact: true })).toBeVisible()
   await page.getByLabel('Redis Key 匹配模式').fill('profile:*')
+  await page.getByLabel('Cluster 节点', { exact: true }).selectOption('127.0.0.2:6379')
   await page.getByRole('button', { name: '扫描 Key', exact: true }).click()
   await page.getByText('profile:1', { exact: true }).dblclick()
   await expect(page.getByRole('button', { name: '保存 String', exact: true })).toBeDisabled()
@@ -137,7 +138,7 @@ test('Redis uses SCAN and compare-and-set string updates with explicit write per
   await replaceEditor(page, '.redis-value-editor .monaco-editor', 'updated value')
   await page.getByRole('button', { name: '保存 String', exact: true }).click()
   await expect.poll(() => page.evaluate(() => (window as any).__dbexCalls.some((call: any) => call.action === 'redis.set' && call.expected === 'hello' && call.value === 'updated value' && call.confirmed))).toBe(true)
-  await expect.poll(() => page.evaluate(() => (window as any).__dbexCalls.some((call: any) => call.action === 'redis.scan' && call.pattern === 'profile:*'))).toBe(true)
+  await expect.poll(() => page.evaluate(() => (window as any).__dbexCalls.some((call: any) => call.action === 'redis.scan' && call.pattern === 'profile:*' && call.node === '127.0.0.2:6379'))).toBe(true)
 })
 
 test('switching sessions keeps pending results and editor state bound to their session', async ({ page }) => {
@@ -152,4 +153,26 @@ test('switching sessions keeps pending results and editor state bound to their s
   await page.locator('.session-tab').filter({ hasText: 'MySQL Local' }).locator('.tab').click()
   await expect(page.locator('.workbench:visible .query-editor')).toContainText('slow_query')
   await expect(page.locator('.workbench:visible .data-table')).toContainText('Ada')
+})
+
+
+test('large result grids render a bounded row window and retain the original row identity', async ({ page }) => {
+  await page.evaluate(() => { (window as any).__dbexLargeGrid = true })
+  await connect(page, 'MySQL Local')
+  await page.locator('.resource-node').filter({ hasText: 'app' }).first().click()
+  await page.locator('.child-node').filter({ hasText: 'users' }).click()
+  const grid = page.locator('.workbench:visible .grid-scroll')
+  const rows = grid.locator('tr[data-row-index]')
+  await expect(rows.first()).toContainText('User 1')
+  expect(await rows.count()).toBeLessThan(80)
+  await grid.evaluate(element => { element.scrollTop = 34 * 440 })
+  const target = grid.locator('tr[data-row-index="450"]')
+  await expect(target).toBeVisible()
+  await target.click()
+  await page.getByRole('button', { name: '只读 · 启用写入', exact: true }).click()
+  await page.getByRole('button', { name: '编辑', exact: true }).click()
+  await expect(page.locator('.document-editor')).toContainText('User 451')
+  await replaceEditor(page, '.document-editor .monaco-editor', '{"id":"451","name":"Edited 451","email":"user451@example.test"}')
+  await page.getByRole('button', { name: '审阅并保存', exact: true }).click()
+  await expect.poll(() => page.evaluate(() => (window as any).__dbexCalls.some((call: any) => call.action === 'mysql.update' && call.key.id === '451' && call.original.name === 'User 451' && call.changes.name === 'Edited 451'))).toBe(true)
 })

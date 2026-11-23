@@ -151,6 +151,8 @@ export async function createRedisClient(
       try {
         const address = this.options.name ? await this.resolveMaster() : { host: this.options.host || config.host, port: this.options.port || config.port }
         const raw = await transport.open(address.host, address.port)
+        // Keep the node panel accurate after Sentinel promotes a different endpoint.
+        if (this.options.name) { this.options.host = address.host; this.options.port = address.port }
         if (!this.connecting) { raw.destroy(); throw new Error('REDIS_CLOSED: Redis 连接已关闭') }
         this.stream = socketLike(raw)
         const tls = this.options.tls

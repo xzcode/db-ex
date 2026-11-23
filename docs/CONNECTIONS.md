@@ -80,3 +80,5 @@ Key 浏览在 Cluster 中按主节点进行 SCAN，不承诺全局排序或一�
 `SSH_HOST_KEY_UNTRUSTED` / `SSH_HOST_KEY_MISMATCH` 表示指纹待核对或已变化；`PROXY_AUTH_FAILED` 表示代理认证失败；`SSH_FORWARD_FAILED` 表示最终出口无法连接目标或禁用了 TCP 转发。TLS 失败须检查信任链、有效期及名称，不能禁用校验绕过。
 
 `SESSION_BUSY` 表示当前会话已有操作；`TIMEOUT` / `CANCELLED` 后会话会断开；`EDIT_CONFLICT` / `CONFLICT` 表示数据已变化。数据库错误只公开稳定代码和经过脱敏的提示，不回传可能包含凭据或记录内容的原始驱动异常。
+
+连接模板不携带 SSH 主机信任决策：导出和导入均移除主机指纹，导入后必须重新独立核验。已保存连接的编辑仍保留原有、已经核验的指纹。

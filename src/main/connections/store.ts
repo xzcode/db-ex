@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { ConnectionConfig, ConnectionDraft, SavedConnection } from '../../shared/types'
 import { validateConnection, validateId } from './validation'
-import { mergeConnectionSecrets, redactConnection } from './credentials'
+import { mergeConnectionSecrets, portableConnection, redactConnection } from './credentials'
 import { decrypt, encrypt, readJson, SerialWrites, writeJson } from '../storage/secure-json'
 
 interface EncryptedEntry { id: string; name: string; kind: ConnectionConfig['kind']; encrypted: string }
@@ -68,7 +68,7 @@ export class ConnectionStore {
   }
   exportPublic(): unknown {
     return { format: 'db-ex-connections', version: 1, exportedAt: new Date().toISOString(),
-      connections: [...this.entries.keys()].map(id => { const result = this.edit(id); delete result.config.id; return result }) }
+      connections: [...this.entries.keys()].map(id => portableConnection(this.get(id))) }
   }
   importPublic(input: unknown): Promise<number> {
     return this.writes.run(async () => {
@@ -79,7 +79,7 @@ export class ConnectionStore {
       const configs = value.connections.map(item => {
         const draft = item as ConnectionDraft
         if (!draft || !draft.config || !Array.isArray(draft.secretFields)) throw new Error('连接条目格式不正确')
-        const copy = redactConnection(draft.config).config
+        const copy = portableConnection(draft.config).config
         delete copy.id
         if (!copy.host && !copy.uri) { copy.host = 'localhost'; copy.name += ' (需配置 URI)' }
         return validateConnection(copy, true)

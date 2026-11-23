@@ -8,10 +8,10 @@
 |---|---|---|
 | M0 | 已建立并更新 | 产品范围、分层架构、安全边界、连接规格、交接文档 |
 | M1 | 已扩展 | Electron 桌面壳、连接新增/编辑/测试/保存/删除、三库会话与资源浏览、深浅主题、可调整侧栏、加密凭据 |
-| M2 | 核心功能已实现，集成验收中 | Monaco SQL 编辑与选区执行、参数绑定、结果分页、结构/索引查看、单行 CRUD、事务、CSV/JSON 小批量导入与当前页导出、查询历史/收藏 |
-| M3 | 核心功能已实现，集成验收中 | Canonical Extended JSON 文档读写、Filter/Projection/Sort、只读聚合、索引查看/创建/删除、EJSON 导入与当前页导出 |
-| M4 | 核心功能已实现，集成验收中 | Redis String/Hash/List/Set/ZSet/Stream 浏览与类型操作、TTL、白名单命令台、显式选择 Key 后批量删除 |
-| M5 | 高级连接与加固已实现，发行验收中 | SOCKS5、HTTP CONNECT、最多三个前置 SSH 跳板、SSH config 导入、MongoDB 拓扑路由、Redis Sentinel/Cluster、连接脱敏导入导出、安全与跨平台构建流程 |
+| M2 | 核心功能已实现，基本集成通过 | Monaco SQL 编辑与选区执行、参数绑定、结果分页、结构/索引查看、单行 CRUD、事务、CSV/JSON 小批量导入与当前页导出、查询历史/收藏 |
+| M3 | 核心功能已实现，基本集成通过 | Canonical Extended JSON 文档读写、Filter/Projection/Sort、只读聚合、索引查看/创建/删除、EJSON 导入与当前页导出 |
+| M4 | 核心功能已实现，基本集成通过 | Redis String/Hash/List/Set/ZSet/Stream 浏览与类型操作、TTL、白名单命令台、显式选择 Key 后批量删除 |
+| M5 | 高级连接与加固已实现，三平台构建/启动通过 | SOCKS5、HTTP CONNECT、最多三个前置 SSH 跳板、SSH config 导入、MongoDB 拓扑路由、Redis Sentinel/Cluster、连接脱敏导入导出、安全与跨平台构建流程 |
 
 ## M2：MySQL 的具体行为
 
@@ -72,7 +72,9 @@ MySQL/MongoDB 的单值尺寸需在驱动接收和解码之后才能判断；上
 
 ## 验证状态与复现
 
-本轮单元与本地协议测试已通过；CI 真实三库集成及三平台打包验证进行中。最终提交必须记录对应的 CI 结果，不能把跳过的集成测试计为通过。真实部署的 SSH 多跳、企业代理、证书体系、Sentinel 切换和 Cluster 扩缩容仍需用户环境验收。
+首轮 CI（提交 `898ff9c`，[运行记录](https://github.com/xzcode/db-ex/actions/runs/45169885032)）已通过57项单元/协议/真实三库集成测试、5项UI测试，以及macOS ARM64、Windows x64、Linux x64安装包构建和打包后启动。三个平台的安装包/截图上传均因账号Actions存储配额耗尽而被GitHub拒绝，不能提供该轮产物下载。
+
+后续加固增加了连接模板信任隔离、结果虚拟滚动及第6项UI回归、真实Mongo副本集/Redis Cluster/Sentinel故障切换验收。工作流按当前提交持续执行这些强制校验，最新结果见[Actions](https://github.com/xzcode/db-ex/actions)与[PR #1](https://github.com/xzcode/db-ex/pull/1)；跳过的测试不计为通过。仅诊断截图和安装包上传可因配额受限而非阻塞，代码、集成、UI、打包、真实启动和产物哈希检查仍为强制步骤。企业代理、证书体系和长期故障场景仍需对应部署环境验收。
 
 ```bash
 npm ci
@@ -82,7 +84,7 @@ npm run build
 npm run dev
 ```
 
-MySQL/MongoDB 集成测试用 `DB_EX_INTEGRATION=1` 显式开启，连接 `MYSQL_URL` 和 `MONGODB_URI` 指定的 localhost 测试服务，创建随机 `dbex_it_*` 数据库后清理。没有该开关时会明确跳过，不接触用户已有业务数据库。Redis 及网络协议测试使用本地隔离服务/协议夹具。
+MySQL/MongoDB 集成测试用 `DB_EX_INTEGRATION=1` 显式开启，连接 `MYSQL_URL` 和 `MONGODB_URI` 指定的 localhost 测试服务，创建随机 `dbex_it_*` 数据库后清理。没有该开关时会明确跳过，不接触用户已有业务数据库。Redis实际集成使用本地隔离服务；协议测试使用独立本地TCP/SSH/TLS夹具。`DB_EX_TOPOLOGY=1`启用脚本创建的三成员Mongo副本集、Redis三主Cluster及Sentinel实际切换测试，读取和写入都经过认证SOCKS代理，未确认结果的写操作不会自动重放。
 
 ## 后续发行验收清单
 

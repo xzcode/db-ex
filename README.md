@@ -70,7 +70,7 @@ Linux 系统密钥环不可用或回退为 `basic_text` 时，保存连接与查
 [Verify DB EX](.github/workflows/ci.yml) 在 PR 上执行：
 
 1. 类型检查、安全/协议测试。
-2. 临时 MySQL 8.4、MongoDB 7、Redis 7 服务上的真实集成测试，包括经认证 SOCKS 路由的 SessionManager 连接。
+2. 临时 MySQL 8.4、MongoDB 7、Redis 7 服务上的真实集成测试，包括经认证 SOCKS 路由的 SessionManager 连接、三成员 Mongo 副本集主节点切换、Redis 三主节点 Cluster 及 Sentinel 切换。
 3. Playwright 工作区交互测试。
 4. macOS、Windows、Linux 生成预览安装包，并启动打包后的 Electron 应用验证 sandbox、preload IPC、Monaco 与查询界面。
 
@@ -84,7 +84,9 @@ REDIS_URL=redis://127.0.0.1:6379 \
 npm run test:integration
 ```
 
-安装包产物保存在 GitHub Actions Artifacts，默认未做受信任发行签名，不能把预览构建描述为完成公证或商业发行。
+拓扑测试由 CI 中的 `scripts/start-mongo-replica.sh` 与 `scripts/start-redis-topologies.sh` 初始化独立测试进程；仅 `DB_EX_TOPOLOGY=1` 时执行 `npm run test:topology`，不会使用外部业务 URI。
+
+安装包上传成功时可在 GitHub Actions Artifacts 下载，默认未做受信任发行签名。2026-11-23 验证发现当前账号 Actions 存储配额已满，GitHub 拒绝上传；代码构建与打包后启动验证仍独立执行，工作流摘要记录产物哈希。CI 的可选上传失败不等于产物可下载，正式发行工作流仍要求上传成功。不能把预览构建描述为完成公证或商业发行。
 
 [Release candidates](.github/workflows/release.yml) 可手动生成发行候选包。选择签名时需要分别配置 `MAC_CSC_LINK` / `MAC_CSC_KEY_PASSWORD`、`WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD`；macOS 公证还需要 `APPLE_ID`、`APPLE_APP_SPECIFIC_PASSWORD`、`APPLE_TEAM_ID`。缺少凭据会失败，不会悄悄退回未签名产物。工作流不自动发布 GitHub Release。
 

@@ -56,3 +56,11 @@ export function secretValues(config: ConnectionConfig): string[] {
   walk(config, (o, key) => { if (typeof o[key] === 'string' && o[key]) values.push(o[key] as string) })
   return values
 }
+
+/** Portable files are templates, never an independent SSH trust source. */
+export function portableConnection(config: ConnectionConfig): ConnectionDraft {
+  const draft = redactConnection(config)
+  delete draft.config.id
+  for (const host of [...(draft.config.ssh?.jumps || []), draft.config.ssh]) if (host) delete host.hostFingerprint
+  return draft
+}

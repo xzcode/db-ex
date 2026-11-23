@@ -21,19 +21,19 @@ jobs:
         env:
           MYSQL_ROOT_PASSWORD: dbex-test
           MYSQL_ROOT_HOST: '%'
-        ports: ['3306:3306']
+        ports: ['127.0.0.1:3306:3306']
         options: >-
           --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pdbex-test"
           --health-interval=5s --health-timeout=5s --health-retries=30
       mongodb:
         image: mongo:7
-        ports: ['27017:27017']
+        ports: ['127.0.0.1:27017:27017', '127.0.0.1:27018:27018', '127.0.0.1:27019:27019', '127.0.0.1:27020:27020']
         options: >-
           --health-cmd="mongosh --quiet --eval 'db.adminCommand({ping:1})'"
           --health-interval=5s --health-timeout=5s --health-retries=30
       redis:
         image: redis:7
-        ports: ['6379:6379']
+        ports: ['127.0.0.1:6379:6379', '127.0.0.1:6380:6380', '127.0.0.1:6381:6381', '127.0.0.1:26379:26379', '127.0.0.1:7000:7000', '127.0.0.1:7001:7001', '127.0.0.1:7002:7002']
         options: >-
           --health-cmd="redis-cli ping"
           --health-interval=5s --health-timeout=5s --health-retries=30
@@ -47,9 +47,14 @@ jobs:
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
       - run: npm run typecheck
+      - name: Start isolated MongoDB replica set
+        run: bash scripts/start-mongo-replica.sh "${{ job.services.mongodb.id }}"
+      - name: Start isolated Redis Cluster and Sentinel
+        run: bash scripts/start-redis-topologies.sh "${{ job.services.redis.id }}"
       - run: npm test
         env:
           DB_EX_INTEGRATION: '1'
+          DB_EX_TOPOLOGY: '1'
           MYSQL_URL: mysql://root:dbex-test@127.0.0.1:3306
           MONGODB_URI: mongodb://127.0.0.1:27017
           REDIS_URL: redis://127.0.0.1:6379
@@ -57,6 +62,7 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm run test:ui
       - uses: actions/upload-artifact@v4
+        continue-on-error: true
         if: failure()
         with:
           name: ui-failure-evidence
@@ -97,7 +103,13 @@ jobs:
         run: npm run smoke:electron
         env:
           DB_EX_PACKAGED: '1'
-      - uses: actions/upload-artifact@v4
+      - name: Verify installer files and record hashes
+        run: node scripts/check-packages.mjs
+      # Upload delivery is optional: the account may have exhausted its Actions storage quota.
+      # Typecheck, integration, UI, installer generation, hashes and packaged smoke stay required.
+      - name: Upload installers (requires Actions storage)
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: db-ex-0.5.0-${{ runner.os }}-${{ runner.arch }}-unsigned
           path: |
@@ -106,9 +118,11 @@ jobs:
             release/*.exe
             release/*.AppImage
             release/*.deb
+            release/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 14
       - uses: actions/upload-artifact@v4
+        continue-on-error: true
         if: always()
         with:
           name: electron-smoke-${{ runner.os }}
