@@ -1,7 +1,7 @@
 name: CI
 on:
   push:
-    branches: [master, 'feature/**', 'codex/**']
+    branches: [master]
   pull_request:
     branches: [master]
 permissions:
@@ -15,5 +15,7 @@ jobs:
         with:
           node-version: '22'
       - run: npm install --no-audit --no-fund
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
       - run: npm run typecheck
       - run: npm run build
