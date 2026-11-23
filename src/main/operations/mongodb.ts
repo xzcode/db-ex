@@ -127,13 +127,16 @@ export class MongoOperations {
     const database = resourceName(operation.database, '数据库')
     const entity = resourceName(operation.entity, '集合')
     const collection = this.client.db(database).collection(entity)
-    const options = { maxTimeMS: TIMEOUT_MS, timeoutMS: TIMEOUT_MS, signal }
+    // Protocol metadata (especially error.code) must remain JavaScript numbers:
+    // the driver uses their numeric identity for SDAM and retryable-read checks.
+    // Decode only raw user documents with BSON wrappers below, not whole replies.
+    const options = { maxTimeMS: TIMEOUT_MS, timeoutMS: TIMEOUT_MS, signal, promoteValues: true, promoteLongs: true }
     switch (operation.action) {
       case 'mongo.find': {
         const { limit, offset } = page(operation)
         const cursor = collection.find(objectEjson(operation.filter, 'Filter'), {
           ...options, projection: projectionEjson(operation.projection), sort: sortEjson(operation.sort),
-          skip: offset, limit: limit + 1, batchSize: Math.min(limit + 1, 50), promoteValues: false,
+          skip: offset, limit: limit + 1, batchSize: Math.min(limit + 1, 50), raw: true,
         })
         const result = await this.readCursor(cursor, limit, signal)
         if (result.truncated && result.documents?.length === limit) result.nextOffset = offset + limit
@@ -143,7 +146,7 @@ export class MongoOperations {
         const { limit } = page(operation)
         const pipeline = parsePipeline(operation.pipeline)
         const cursor = collection.aggregate([...pipeline, { $limit: limit + 1 }], {
-          ...options, batchSize: Math.min(limit + 1, 50), allowDiskUse: false, promoteValues: false,
+          ...options, batchSize: Math.min(limit + 1, 50), allowDiskUse: false, raw: true,
         })
         return this.readCursor(cursor, limit, signal)
       }
@@ -181,7 +184,7 @@ export class MongoOperations {
         return emptyResult('已删除 1 份文档', 1)
       }
       case 'mongo.indexes': {
-        const cursor = collection.listIndexes({ ...options, batchSize: 50, promoteValues: false })
+        const cursor = collection.listIndexes({ ...options, batchSize: 50, raw: true })
         return this.readCursor(cursor, MAX_ROWS, signal)
       }
       case 'mongo.createIndex': {
@@ -232,9 +235,13 @@ export class MongoOperations {
     let bytes = 0
     let truncated = false
     try {
-      for await (const document of cursor) {
+      for await (const rawDocument of cursor) {
         checkAborted(signal)
         if (documents.length >= limit) { truncated = true; break }
+        if (rawDocument instanceof Uint8Array && rawDocument.byteLength > MAX_VALUE_BYTES) { truncated = true; break }
+        const document: Document = rawDocument instanceof Uint8Array
+          ? BSON.deserialize(rawDocument, { promoteValues: false, promoteLongs: false })
+          : rawDocument
         const canonical = BSON.EJSON.stringify(document, { relaxed: false })
         const size = Buffer.byteLength(canonical, 'utf8')
         if (size > MAX_VALUE_BYTES || bytes + size > MAX_BYTES) { truncated = true; break }

@@ -94,7 +94,9 @@ export class SessionManager {
             socketTimeoutMS: 30000, maxPoolSize: 5, minPoolSize: 0, waitQueueTimeoutMS: 10000,
             // Only retry driver-classified reads after topology changes; never replay writes.
             retryWrites: false, retryReads: true,
-            promoteLongs: false, promoteValues: false,
+            // Command error codes must stay native numbers for SDAM/read retry classification.
+            // MongoOperations decodes only raw result documents with exact BSON types.
+            promoteValues: true,
             ...(config.mongoReplicaSet ? { replicaSet: config.mongoReplicaSet } : {}),
             ...(config.mongoDirect ? { directConnection: true } : {}),
             ...(config.tls.enabled ? { tls: true, ca, cert, key, minVersion: 'TLSv1.2' } : {}),
