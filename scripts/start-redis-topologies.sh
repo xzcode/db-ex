@@ -23,12 +23,37 @@ if [ -e "$fixture_root" ]; then
   exit 1
 fi
 for fixture_port in 7000 7001 7002 6380 6381 26379; do
-  if redis-cli -h 127.0.0.1 -p "$fixture_port" ping >/dev/null 2>&1; then
+  if timeout 2s redis-cli -h 127.0.0.1 -p "$fixture_port" ping >/dev/null 2>&1; then
     echo "Refusing to replace an existing Redis service on port $fixture_port." >&2
     exit 1
   fi
 done
 mkdir -p "$fixture_root"
+
+print_fixture_logs() {
+  for ready_log in "$@"; do
+    if [ -f "$ready_log" ]; then
+      printf 'Redis fixture log: %s\n' "$ready_log" >&2
+      tail -n 60 "$ready_log" >&2
+    fi
+  done
+}
+wait_fixture_ready() {
+  ready_port="$1"
+  ready_log_path="$2"
+  ready_deadline=$(( $(date +%s) + 10 ))
+  while :; do
+    if [ "$(timeout 2s redis-cli --raw -h 127.0.0.1 -p "$ready_port" ping 2>/dev/null || true)" = PONG ]; then
+      return 0
+    fi
+    if [ "$(date +%s)" -ge "$ready_deadline" ]; then
+      printf 'Redis fixture on port %s did not answer PING within 10 seconds.\n' "$ready_port" >&2
+      print_fixture_logs "$ready_log_path"
+      return 1
+    fi
+    sleep 0.25
+  done
+}
 
 for fixture_port in 7000 7001 7002; do
   fixture_dir="$fixture_root/$fixture_port"
@@ -51,8 +76,12 @@ cluster-announce-port $fixture_port
 cluster-announce-bus-port $((fixture_port + 10000))
 CONFIG
   redis-server "$fixture_dir/redis.conf"
+  wait_fixture_ready "$fixture_port" "$fixture_dir/redis.log"
 done
-redis-cli --cluster create 127.0.0.1:7000 127.0.0.1:7001 127.0.0.1:7002 --cluster-replicas 0 --cluster-yes
+if ! timeout 20s redis-cli --cluster create 127.0.0.1:7000 127.0.0.1:7001 127.0.0.1:7002 --cluster-replicas 0 --cluster-yes; then
+  print_fixture_logs "$fixture_root/7000/redis.log" "$fixture_root/7001/redis.log" "$fixture_root/7002/redis.log"
+  exit 1
+fi
 
 for fixture_port in 6380 6381; do
   fixture_dir="$fixture_root/$fixture_port"
@@ -74,6 +103,7 @@ CONFIG
     printf '%s\n' 'replicaof 127.0.0.1 6380' >> "$fixture_dir/redis.conf"
   fi
   redis-server "$fixture_dir/redis.conf"
+  wait_fixture_ready "$fixture_port" "$fixture_dir/redis.log"
 done
 
 cat > "$fixture_root/sentinel.conf" <<CONFIG
@@ -92,17 +122,19 @@ sentinel failover-timeout dbex-primary 15000
 sentinel parallel-syncs dbex-primary 1
 CONFIG
 redis-server "$fixture_root/sentinel.conf" --sentinel
+wait_fixture_ready 26379 "$fixture_root/sentinel.log"
 
 # A bounded wait; replication must be ready before the failover test starts.
 fixture_deadline=$(( $(date +%s) + 45 ))
 while :; do
-  if redis-cli -p 7000 cluster info | tr -d '\r' | grep -q '^cluster_state:ok$' &&
-     redis-cli -p 6381 info replication | tr -d '\r' | grep -q '^master_link_status:up$' &&
-     redis-cli -p 26379 sentinel replicas dbex-primary | grep -q '6381'; then
+  if timeout 2s redis-cli -p 7000 cluster info | tr -d '\r' | grep -q '^cluster_state:ok$' &&
+     timeout 2s redis-cli -p 6381 info replication | tr -d '\r' | grep -q '^master_link_status:up$' &&
+     timeout 2s redis-cli -p 26379 sentinel replicas dbex-primary | grep -q '6381'; then
     break
   fi
   if [ "$(date +%s)" -ge "$fixture_deadline" ]; then
     echo 'Redis topology fixtures did not become ready within 45 seconds.' >&2
+    print_fixture_logs "$fixture_root/7000/redis.log" "$fixture_root/7001/redis.log" "$fixture_root/7002/redis.log" "$fixture_root/6380/redis.log" "$fixture_root/6381/redis.log" "$fixture_root/sentinel.log"
     exit 1
   fi
   sleep 1
