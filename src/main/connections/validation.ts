@@ -91,9 +91,10 @@ export function validateConnection(value: unknown, allowMissingSecrets = false):
       if (v.tls && (v.tls as TlsOptions).enabled && ['ssl', 'tls'].includes(k) && val.toLowerCase() === 'false') throw new Error('INVALID_CONNECTION: URI 与 TLS 配置冲突')
     }
   }
-  const mongoTopology = v.mongoTopology === undefined ? undefined : text(v.mongoTopology, 'MongoDB 拓扑模式', 16)
+  // ConnectionDialog keeps inactive per-engine form state when users switch DB types.
+  // Ignore Mongo topology inputs for MySQL/Redis instead of rejecting those profiles.
+  const mongoTopology = kind !== 'mongodb' || v.mongoTopology === undefined ? undefined : text(v.mongoTopology, 'MongoDB 拓扑模式', 16)
   if (mongoTopology && !['auto', 'direct', 'discover'].includes(mongoTopology)) throw new Error('INVALID_CONNECTION: MongoDB 拓扑模式只能是自动、直连或副本集发现')
-  if (mongoTopology && kind !== 'mongodb') throw new Error('INVALID_CONNECTION: 非 MongoDB 连接不能配置 MongoDB 拓扑')
   if (uri && mongoTopology && mongoTopology !== 'auto') {
     const options = new URLSearchParams(uri.includes('?') ? uri.slice(uri.indexOf('?') + 1) : '')
     const queryDirect = options.get('directConnection')
