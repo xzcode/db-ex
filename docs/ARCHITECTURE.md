@@ -25,7 +25,7 @@ flowchart TD
 | `src/main/connections/redis-client.ts` | ioredis 传输适配、每个节点的 TLS、Sentinel 发现、Cluster 路由与重连 |
 | `src/main/connections/ssh-config.ts` | 不执行 shell 的 SSH config 子集解析 |
 | `src/main/connections/store.ts` / `credentials.ts` | 连接元数据、凭据脱敏/合并、显式清除、导入导出 |
-| `src/main/storage/` | safeStorage 加密、串行原子写入、查询历史/收藏 |
+| `src/main/storage/` | AES-256-GCM 内置密钥、旧版迁移、串行原子写入、查询历史/收藏 |
 | `src/main/operations/` | 各数据库的独立操作契约、权限校验、限量与冲突检测 |
 | `src/shared/types.ts` | 明确的连接、会话、数据库操作和结果类型，无驱动依赖 |
 | `src/renderer/` | 连接表单、资源树、编辑器、数据网格、导入预览、主题与布局 |
@@ -56,9 +56,9 @@ Redis String 使用 GETRANGE 限量读取；其他集合类型使用 SCAN 或范
 
 ## 本地存储与文件边界
 
-连接配置和查询历史分别保存在 Electron userData 下的加密 JSON 容器，使用系统 safeStorage，拒绝 Linux `basic_text` 后端。写入队列保证同类并发修改不覆盖，临时文件以受限权限创建后原子重命名；配置读取有大小限制。
+连接配置和查询历史分别保存在 Electron userData 下的加密 JSON 容器，使用内置 AES-256-GCM 密钥与随机 nonce。无需系统密钥，旧版 safeStorage 仅用于迁移已存在的数据。写入队列保证同类并发修改不覆盖，临时文件以受限权限创建后原子重命名；配置读取有大小限制。
 
-连接编辑返回脱敏配置及“已保存”字段标记。Renderer 留空时，只有同一端点、认证身份和用途才能继续使用已有密钥；跨主机或身份变更不自动继承。凭据清除须传入受支持字段。导出连接时删除密码、口令和完整 URI；导出仍可能包含主机名、用户名及本机路径。
+连接编辑返回脱敏配置及“已保存”字段标记。Renderer 留空时，只有同一端点、认证身份和用途才能继续使用已有密钥；跨主机或身份变更不自动继承。凭据清除须传入受支持字段。导出完整连接备份时加密密码、口令、URI 和配置；导入不继承 SSH 主机信任，不复制证书及私钥文件。内置密钥公开，不应将备份视为可公开分享的保密容器。
 
 ## 当前工程边界
 

@@ -57,10 +57,14 @@ export function secretValues(config: ConnectionConfig): string[] {
   return values
 }
 
-/** Portable files are templates, never an independent SSH trust source. */
+/** A backup is not an independent SSH trust source, even when encrypted. */
+export function portableConnectionWithSecrets(config: ConnectionConfig): ConnectionConfig {
+  const copy = structuredClone(config)
+  delete copy.id
+  for (const host of [...(copy.ssh?.jumps || []), copy.ssh]) if (host) delete host.hostFingerprint
+  return copy
+}
+/** Legacy redacted templates remain supported on import. */
 export function portableConnection(config: ConnectionConfig): ConnectionDraft {
-  const draft = redactConnection(config)
-  delete draft.config.id
-  for (const host of [...(draft.config.ssh?.jumps || []), draft.config.ssh]) if (host) delete host.hostFingerprint
-  return draft
+  return redactConnection(portableConnectionWithSecrets(config))
 }

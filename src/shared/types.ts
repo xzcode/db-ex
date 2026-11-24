@@ -66,7 +66,8 @@ export interface SavedConnection {
   id: string
   name: string
   kind: DatabaseKind
-  environment: EnvironmentKind
+  environment: EnvironmentKind | 'unknown'
+  locked?: boolean
   host: string
   port: number
   sshEnabled: boolean
@@ -177,7 +178,7 @@ export interface DbExAPI {
   importFile(): Promise<FileImport | null>
   exportFile(name: string, content: string, format: 'csv' | 'json' | 'text'): Promise<boolean>
   importConnections(): Promise<number>
-  exportConnections(): Promise<boolean>
+  exportConnections(id?: string): Promise<boolean>
   importSshConfig(): Promise<SshImportResult | null>
 }
 

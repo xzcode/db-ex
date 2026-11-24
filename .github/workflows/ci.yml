@@ -115,7 +115,7 @@ jobs:
         uses: actions/upload-artifact@v4
         continue-on-error: true
         with:
-          name: db-ex-0.5.0-${{ runner.os }}-${{ runner.arch }}-unsigned
+          name: db-ex-native-${{ runner.os }}-${{ runner.arch }}
           path: |
             release/*.dmg
             release/*.zip

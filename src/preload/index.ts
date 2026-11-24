@@ -25,7 +25,7 @@ const api: DbExAPI = {
   importFile: () => ipcRenderer.invoke('files:import'),
   exportFile: (name, content, format) => ipcRenderer.invoke('files:export', name, content, format),
   importConnections: () => ipcRenderer.invoke('connections:import'),
-  exportConnections: () => ipcRenderer.invoke('connections:export'),
+  exportConnections: id => ipcRenderer.invoke('connections:export', id),
   importSshConfig: () => ipcRenderer.invoke('connections:ssh-config'),
 }
 contextBridge.exposeInMainWorld('dbex', api)

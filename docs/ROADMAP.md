@@ -11,7 +11,7 @@
 | M2 | 核心功能已实现，基本集成通过 | Monaco SQL 编辑与选区执行、参数绑定、结果分页、结构/索引查看、单行 CRUD、事务、CSV/JSON 小批量导入与当前页导出、查询历史/收藏 |
 | M3 | 核心功能已实现，基本集成通过 | Canonical Extended JSON 文档读写、Filter/Projection/Sort、只读聚合、索引查看/创建/删除、EJSON 导入与当前页导出 |
 | M4 | 核心功能已实现，基本集成通过 | Redis String/Hash/List/Set/ZSet/Stream 浏览与类型操作、TTL、白名单命令台、显式选择 Key 后批量删除 |
-| M5 | 高级连接与加固已实现，三平台构建/启动通过 | SOCKS5、HTTP CONNECT、最多三个前置 SSH 跳板、SSH config 导入、MongoDB 拓扑路由、Redis Sentinel/Cluster、连接脱敏导入导出、安全与跨平台构建流程 |
+| M5 | 高级连接与加固已实现，三平台构建/启动通过 | SOCKS5、HTTP CONNECT、最多三个前置 SSH 跳板、SSH config 导入、MongoDB 拓扑路由、Redis Sentinel/Cluster、完整加密连接导入导出、安全与跨平台构建流程 |
 
 ## M2：MySQL 的具体行为
 
@@ -50,7 +50,7 @@ String 文本编辑使用原值比较的单键原子更新，默认可保留 TTL
 - SSH config 导入支持明确 Host 别名、HostName/User/Port、IdentityFile、IdentityAgent、ProxyJump 和部分路径变量；不执行 ProxyCommand、Match exec、LocalCommand 或 RemoteCommand，不自动读取 Include。
 - MongoDB 通过驱动的 SOCKS5 能力保留原始节点名称和副本集发现。SRV/TXT 查询仍由本机 DNS 完成；仅远端可解析的 SRV 域名不能据此保证可用。
 - Redis Standalone、Sentinel、Cluster 的种子、发现节点和重定向节点经过同一传输路径；TLS 校验使用节点真实名称。Sentinel 支持独立认证和 TLS 开关。
-- 连接配置导出移除密码、私钥口令和完整 MongoDB URI；导入后重新填写凭据。查询历史与收藏也通过 safeStorage 加密。
+- 连接配置支持单条/全部加密备份，保留密码、口令和 URI；导入直接恢复连接信息，SSH 主机指纹重新核验。查询历史与收藏同样使用内置 AES-256-GCM 密钥，不依赖系统钥匙串。
 - macOS、Windows、Linux 使用 Electron Builder 打包；无签名证书时产物是 unsigned preview。签名、公证凭据、平台实际安装与升级验收仍需发行环境提供。
 
 详细连接配置和限制见 [CONNECTIONS.md](CONNECTIONS.md)，安全机制见 [SECURITY.md](../SECURITY.md)。
@@ -88,7 +88,7 @@ MySQL/MongoDB 集成测试用 `DB_EX_INTEGRATION=1` 显式开启，连接 `MYSQL
 
 ## 后续发行验收清单
 
-1. 在三平台实际运行、安装、卸载并验证系统密钥环、路径和窗口行为。
+1. 在三平台实际运行、安装、卸载并验证内置加密、跨设备导入、路径和窗口行为。
 2. 使用有效/错误 CA、证书名称、客户端证书验证 TLS；逐跳验证 SSH 未知与变更主机密钥拒绝逻辑。
 3. 在可控测试环境验证 MongoDB 副本切换、Redis Sentinel 切换、Cluster MOVED/ASK、节点不可达和连接清理。
 4. 接入发行签名/公证凭据并验证签名产物；签名成功前保持预览版标识。
