@@ -10,7 +10,7 @@ import { createTransport, type ConnectionTransport } from './transport'
 import { createRedisClient, setRedisReadBudget, type RedisClient } from './redis-client'
 import { validateConnection, validateId } from './validation'
 import { describeMongoConnectionError } from './mongo-diagnostics'
-import { mongoDirectConnection } from './mongo-topology'
+import { mongoDirectConnection, mongoUriTlsEnabled } from './mongo-topology'
 import { secretValues } from './credentials'
 import { MysqlOperations } from '../operations/mysql'
 import { MongoOperations } from '../operations/mongodb'
@@ -65,7 +65,8 @@ export class SessionManager {
     let mongoPending: MongoClient | undefined
     try {
       transport = await createTransport({ ssh: config.ssh, proxy: config.proxy, timeoutMs: config.connectTimeoutMs })
-      const loadTls = config.tls.enabled || config.sentinelTls
+      const mongoTlsActive = config.kind === 'mongodb' && (config.tls.enabled || mongoUriTlsEnabled(config.uri))
+      const loadTls = config.tls.enabled || config.sentinelTls || mongoTlsActive
       const [ca, cert, key] = loadTls ? await Promise.all([certificate(config.tls.caPath), certificate(config.tls.certPath), certificate(config.tls.keyPath)]) : []
       const tls: TlsConnectionOptions = { ca, cert, key, servername: config.tls.servername || undefined, rejectUnauthorized: true, minVersion: 'TLSv1.2' }
       switch (config.kind) {
@@ -101,8 +102,8 @@ export class SessionManager {
             promoteValues: true,
             ...(config.mongoReplicaSet ? { replicaSet: config.mongoReplicaSet } : {}),
             ...(mongoDirectConnection(config) === undefined ? {} : { directConnection: mongoDirectConnection(config) }),
-            ...(config.tls.enabled ? { tls: true, ca, cert, key, minVersion: 'TLSv1.2' } : {}),
-            ...(config.tls.servername ? { servername: config.tls.servername, checkServerIdentity: (_host, certificate) => checkServerIdentity(config.tls.servername!, certificate) } : {}),
+            ...(mongoTlsActive ? { tls: true, ca, cert, key, minVersion: 'TLSv1.2' } : {}),
+            ...(mongoTlsActive && config.tls.servername ? { servername: config.tls.servername, checkServerIdentity: (_host, certificate) => checkServerIdentity(config.tls.servername!, certificate) } : {}),
           }
           if (config.ssh.enabled || config.proxy?.enabled) {
             const proxy = await transport.socks()
