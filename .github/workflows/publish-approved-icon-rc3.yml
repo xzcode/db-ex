@@ -1,0 +1,97 @@
+name: DB EX approved icon macOS RC3 installer
+on:
+  push:
+    branches: [release/dbex-approved-icon-rc3]
+permissions:
+  contents: write
+jobs:
+  publish-mac:
+    if: "github.repository == 'xzcode/db-ex' && github.event.head_commit.message == 'release: publish approved icon macOS RC3'"
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - name: Verify approved icon source, three status dots and native formats
+        run: node --import tsx --test tests/icon-generator.test.ts
+      - name: Build Apple Silicon DMG/ZIP with ad-hoc signature
+        run: npm exec electron-builder -- --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Verify real macOS code signature and custom icon
+        run: bash scripts/verify-mac-package.sh
+      - name: Launch packaged macOS app and exercise database workbench IPC
+        run: npm run smoke:electron
+        env:
+          DB_EX_PACKAGED: '1'
+      - name: Check installer files and calculate source checksums
+        run: node scripts/check-packages.mjs
+      - name: Copy uniquely-named icon RC3 assets and recalculate hashes
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp 'release/DB EX-0.5.0-mac-arm64.dmg' 'release/DB-EX-icon-rc3-macos-arm64.dmg'
+          cp 'release/DB EX-0.5.0-mac-arm64.zip' 'release/DB-EX-icon-rc3-macos-arm64.zip'
+          (cd release && shasum -a 256 DB-EX-icon-rc3-macos-arm64.dmg DB-EX-icon-rc3-macos-arm64.zip > SHA256SUMS-Icon-RC3.txt)
+      - name: Create and publish isolated approved-icon test release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          tag='v0.5.0-icon-rc3'
+          if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
+            echo "::error::RC3 release already exists; refusing to overwrite it"
+            exit 1
+          fi
+          cat > /tmp/db-ex-mongo-rc2.md <<'NOTES'
+          # DB EX app icon correction test build (macOS Apple Silicon only)
+          This is an ad-hoc-signed test build, **not** an Apple Developer ID notarized release.
+          The original v0.5.0, macOS RC1 and MongoDB RC2 are unchanged.
+
+          Icon correction and connection fixes compared with v0.5.0:
+          - Uses the exact previously user-approved dark navy / thin cyan database glyph with three colored dots, with source SHA-256 pinned; the old generator's thick, crooked geometric redraw is removed.
+          - Field-based single MongoDB host defaults to directConnection=true in Auto mode.
+          - Explicit Replica Discovery still works when selected, or when replica set/multiple seeds are given.
+          - Test connection performs a read-only authenticated ping.
+          - Supports CA and client certificate paths when MongoDB URI/SRV enables TLS.
+          - Fixes saved-URI / seed-node precedence and database-type switching in the connection UI.
+          - Improves diagnostics for authentication, DNS, TLS, topology, timeout and older server wire versions.
+
+          Icon fix PR: https://github.com/xzcode/db-ex/pull/5
+          MongoDB PR: https://github.com/xzcode/db-ex/pull/4
+          Last validated core CI before icon change: https://github.com/xzcode/db-ex/actions/runs/45321180708
+          This installer workflow independently validates the user-approved icon source and macOS ad-hoc signing.
+          Install by replacing the existing DB EX.app in Applications. Back up your connection settings first if needed.
+          Validate the DMG SHA-256 against SHA256SUMS-Icon-RC3.txt before installing.
+          This release does not claim live connectivity to your particular MongoDB server; please click Test Connection and report its exact category if it still fails.
+          NOTES
+          gh release create "$tag" --repo "$repo" --target "$GITHUB_SHA" --draft --prerelease \
+            --title 'DB EX Approved App Icon · macOS RC3' \
+            --notes-file /tmp/db-ex-mongo-rc2.md
+          gh release upload "$tag" --repo "$repo" \
+            'release/DB-EX-icon-rc3-macos-arm64.dmg' \
+            'release/DB-EX-icon-rc3-macos-arm64.zip' \
+            'release/SHA256SUMS-Icon-RC3.txt'
+          draft="$(gh api "repos/$repo/releases?per_page=100" | jq -c --arg tag "$tag" '[.[] | select(.tag_name == $tag and .draft == true)] | .[0]')"
+          id="$(jq -r '.id // empty' <<< "$draft")"
+          [[ "$id" =~ ^[0-9]+$ ]] || { echo "::error::Could not locate fresh draft release"; exit 1; }
+          [[ "$(jq -r '.target_commitish' <<< "$draft")" == "$GITHUB_SHA" ]] || { echo "::error::Release target mismatch"; exit 1; }
+          names="$(jq -r '.assets[].name' <<< "$draft")"
+          for name in DB-EX-icon-rc3-macos-arm64.dmg DB-EX-icon-rc3-macos-arm64.zip SHA256SUMS-Icon-RC3.txt; do
+            grep -Fqx "$name" <<< "$names" || { echo "::error::Missing Release asset $name"; exit 1; }
+          done
+          [[ "$(jq -r '.assets | length' <<< "$draft")" == 3 ]] || { echo "::error::Unexpected asset count"; exit 1; }
+          [[ "$(jq -r '[.assets[] | select(.state != "uploaded")] | length' <<< "$draft")" == 0 ]] || { echo "::error::Incomplete uploads"; exit 1; }
+          [[ "$(jq -r '[.assets[] | select(.name | endswith(".dmg") or endswith(".zip")) | select(.size < 1048576)] | length' <<< "$draft")" == 0 ]] || { echo "::error::Unexpectedly small installer"; exit 1; }
+          gh api -X PATCH "repos/$repo/releases/$id" -F draft=false -F prerelease=true >/dev/null
+          [[ "$(gh api "repos/$repo/releases/$id" --jq '.draft')" == "false" ]] || { echo "::error::Release is still draft"; exit 1; }
+          [[ "$(gh api "repos/$repo/git/ref/tags/$tag" --jq '.object.sha')" == "$GITHUB_SHA" ]] || { echo "::error::Published tag does not match source commit"; exit 1; }
+          echo "Published verified macOS approved-icon RC3: https://github.com/$repo/releases/tag/$tag"
