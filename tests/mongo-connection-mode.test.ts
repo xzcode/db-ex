@@ -60,3 +60,8 @@ test('MongoDB URI and SRV TLS settings activate certificate loading without chan
   assert.equal(mongoUriTlsEnabled('mongodb+srv://cluster.example.test/admin?tls=false'), false)
   assert.equal(mongoUriTlsEnabled(undefined), false)
 })
+
+test('Mongo-only form state never blocks MySQL or Redis validation after changing database type', () => {
+  assert.equal(validateConnection({ ...basic(), kind: 'mysql', port: 3306, mongoTopology: 'auto' }).kind, 'mysql')
+  assert.equal(validateConnection({ ...basic(), kind: 'redis', port: 6379, mongoTopology: 'direct' }).kind, 'redis')
+})
