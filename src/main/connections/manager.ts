@@ -9,6 +9,7 @@ import type { ConnectionConfig, DatabaseOperation, DataPreview, ExplorerNode, Mo
 import { createTransport, type ConnectionTransport } from './transport'
 import { createRedisClient, setRedisReadBudget, type RedisClient } from './redis-client'
 import { validateConnection, validateId } from './validation'
+import { describeMongoConnectionError } from './mongo-diagnostics'
 import { secretValues } from './credentials'
 import { MysqlOperations } from '../operations/mysql'
 import { MongoOperations } from '../operations/mongodb'
@@ -130,6 +131,10 @@ export class SessionManager {
       const original = error as { code?: string; name?: string; message?: string }
       const message = original.message || '连接失败'
       if (/^[A-Z_]+:/.test(message)) throw new Error(this.redact(message, config))
+      if (config.kind === 'mongodb') {
+        const diagnosis = describeMongoConnectionError(error)
+        if (diagnosis) throw new Error(diagnosis)
+      }
       const code = String(original.code || original.name || 'NETWORK').replace(/[^A-Za-z0-9_-]/g, '')
       throw new Error(`CONNECTION_FAILED: 连接失败（${code}），请检查认证、网络、TLS证书及拓扑配置`)
     } finally { this.pendingConnections-- }

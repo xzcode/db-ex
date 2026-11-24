@@ -59,6 +59,19 @@ URI 禁止 `tlsInsecure`、无效证书/主机名放行、代理覆盖以及绕�
 
 副本集选主或瞬时网络故障时，驱动可在操作时间预算内重新选择节点并安全重试明确可重试的读取；总操作仍受 30 秒上限与取消信号约束。写入自动重试保持关闭，不确定的写入结果需要用户核对后重新发起。此机制不保证所有游标阶段都能恢复，也不保证跨次读取构成一致快照。
 
+### MongoDB 连接失败时怎么判断
+
+先在连接弹窗点击「测试连接」，按返回的错误类别检查：
+
+- `MONGO_AUTH_FAILED`：用户名、密码或 `authSource` 错误；应用选择 URI 时，上方独立认证字段不参与认证。
+- `MONGO_CONNECTION_REFUSED` / `MONGO_DNS_FAILED`：检查主机、端口、监听范围和 DNS；远程服务器不应误填本机的 `127.0.0.1`，除非通过 SSH 隧道访问远端 loopback。
+- `MONGO_TLS_FAILED`：核对 TLS 开关、CA 和证书主机名，不应为绕过报错而关闭校验。
+- `MONGO_TOPOLOGY_FAILED`：核对副本集名称及各成员地址；仅用于单节点管理时可启用直连。
+- `MONGO_TIMEOUT` / `MONGO_SERVER_SELECTION_FAILED`：排查网络、SSH/代理、防火墙及节点可达性。
+- `MONGO_URI_INVALID`：核对 URI 语法，账号密码含特殊字符时必须百分号编码。
+
+这些提示不会显示原始驱动异常、凭据或完整 URI。尚未能识别的错误仍显示保守的 `CONNECTION_FAILED`。
+
 ## Redis
 
 | 模式 | 配置与行为 |
