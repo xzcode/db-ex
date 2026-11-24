@@ -1,89 +1,99 @@
 // Deterministic native app icons: Node standard library, no external converter.
-import { mkdir, writeFile } from 'node:fs/promises'
-import { deflateSync } from 'node:zlib'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { deflateSync, inflateSync } from 'node:zlib'
 
-const SIZE = 1024
-const segments = []
-const line = (ax, ay, bx, by) => segments.push([ax, ay, bx, by, bx - ax, by - ay, (bx - ax) ** 2 + (by - ay) ** 2])
-const ellipse = (cx, cy, rx, ry, n = 96) => {
-  for (let i = 0; i < n; i++) {
-    const a = i * Math.PI * 2 / n, b = (i + 1) * Math.PI * 2 / n
-    line(cx + Math.cos(a) * rx, cy + Math.sin(a) * ry, cx + Math.cos(b) * rx, cy + Math.sin(b) * ry)
-  }
-}
-const curve = (x0, y0, x1, y1, x2, y2, x3, y3, n = 36) => {
-  let px = x0, py = y0
-  for (let i = 1; i <= n; i++) {
-    const t = i / n, u = 1 - t
-    const x = u ** 3 * x0 + 3 * u ** 2 * t * x1 + 3 * u * t ** 2 * x2 + t ** 3 * x3
-    const y = u ** 3 * y0 + 3 * u ** 2 * t * y1 + 3 * u * t ** 2 * x2 + t ** 3 * y3
-    line(px, py, x, y)
-    px = x
-    py = y
-  }
-}
-ellipse(512, 388, 226, 77)
-line(286, 388, 286, 697)
-line(738, 388, 738, 697)
-curve(286, 496, 286, 559, 738, 559, 738, 496)
-curve(286, 595, 286, 660, 738, 660, 738, 595)
-curve(286, 697, 286, 762, 738, 762, 738, 697)
 
-const clamp = x => Math.max(0, Math.min(1, x))
-const blend = (a, b, mix) => Math.round(a + (b - a) * mix)
-function raster(size) {
-  const data = Buffer.alloc(size * size * 4)
-  const scale = SIZE / size
-  for (let py = 0; py < size; py++) {
-    const y = (py + 0.5) * scale
-    for (let px = 0; px < size; px++) {
-      const x = (px + 0.5) * scale
-      const dx = Math.abs(x - 512) - 235, dy = Math.abs(y - 512) - 235
-      const dist = Math.hypot(Math.max(dx, 0), Math.max(dy, 0)) + Math.min(Math.max(dx, dy), 0) - 229
-      const tileAlpha = clamp(0.5 - dist / scale)
-      if (tileAlpha === 0) continue
-      const off = (py * size + px) * 4
-      let r = blend(19, 11, y / 1024)
-      let g = blend(30, 17, y / 1024)
-      let b = blend(70, 47, y / 1024)
-      if (x >= 258 && x <= 765 && y >= 285 && y <= 806) {
-        let min = Infinity
-        for (const [ax, ay, , , vx, vy, vv] of segments) {
-          const ux = x - ax, uy = y - ay
-          const t = clamp((ux * vx + uy * vy) / vv)
-          const qx = ux - t * vx, qy = uy - t * vy
-          const ds = qx * qx + qy * qy
-          if (ds < min) min = ds
-        }
-        const ink = clamp(0.5 + (19 - Math.sqrt(min)) / scale)
-        if (ink > 0) {
-          const mix = clamp((y - 310) / 510)
-          r = blend(r, blend(62, 48, mix), ink)
-          g = blend(g, blend(230, 127, mix), ink)
-          b = blend(b, blend(244, 248, mix), ink)
-        }
+const expectedSha256 = '068ee4c0ae1c9f59da28b337c3e58508b9e437bcb59fe6413aee913e5a5d750f'
+const chunkFiles = Array.from({ length: 4 }, (_, i) => 'assets/approved-icon-source.00' + i + '.txt')
+const base64 = (await Promise.all(chunkFiles.map(file => readFile(file, 'utf8')))).join('')
+const source = Buffer.from(base64, 'base64')
+if (createHash('sha256').update(source).digest('hex') !== expectedSha256) {
+  throw new Error('APPROVED_ICON_MISMATCH: user-approved icon source has changed')
+}
+function decodeIndexedPng(data) {
+  if (data.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') throw new Error('APPROVED_ICON_PNG: invalid PNG header')
+  let width = 0, height = 0, palette, transparency, idat = []
+  for (let at = 8; at + 12 <= data.length;) {
+    const length = data.readUInt32BE(at), end = at + 12 + length
+    if (end > data.length) throw new Error('APPROVED_ICON_PNG: bad chunk length')
+    const type = data.toString('ascii', at + 4, at + 8)
+    const bytes = data.subarray(at + 8, at + 8 + length)
+    if (type === 'IHDR') {
+      width = bytes.readUInt32BE(0); height = bytes.readUInt32BE(4)
+      if (width !== 384 || height !== 384 || bytes[8] !== 8 || bytes[9] !== 3 || bytes[12] !== 0) {
+        throw new Error('APPROVED_ICON_PNG: unexpected size, bit depth or color type')
       }
-      // Three minimal signal points mirror the user-approved DB EX design.
-      for (const [cx, cy, cr, cg, cb] of [
-        [678, 510, 48, 225, 241],
-        [678, 614, 176, 143, 245],
-        [678, 718, 48, 213, 243],
-      ]) {
-        const point = Math.hypot(x - cx, y - cy)
-        const strength = clamp(0.5 + (13 - point) / scale)
-        if (strength > 0) {
-          r = blend(r, cr, strength)
-          g = blend(g, cg, strength)
-          b = blend(b, cb, strength)
-        }
-      }
-      data[off] = r
-      data[off + 1] = g
-      data[off + 2] = b
-      data[off + 3] = Math.round(tileAlpha * 255)
+    } else if (type === 'PLTE') palette = bytes
+    else if (type === 'tRNS') transparency = bytes
+    else if (type === 'IDAT') idat.push(bytes)
+    else if (type === 'IEND') break
+    at = end
+  }
+  if (!palette || !transparency || !idat.length) throw new Error('APPROVED_ICON_PNG: missing palette, alpha or compressed data')
+  const raw = inflateSync(Buffer.concat(idat))
+  if (raw.length !== height * (width + 1)) throw new Error('APPROVED_ICON_PNG: invalid decompressed length')
+  const rgba = Buffer.alloc(width * height * 4)
+  let prev = Buffer.alloc(width), index = 0
+  for (let y = 0; y < height; y++) {
+    const filter = raw[index++], row = Buffer.alloc(width)
+    for (let x = 0; x < width; x++) {
+      const value = raw[index++], left = x ? row[x - 1] : 0, up = prev[x], ul = x ? prev[x - 1] : 0
+      let predictor = 0
+      if (filter === 1) predictor = left
+      else if (filter === 2) predictor = up
+      else if (filter === 3) predictor = Math.floor((left + up) / 2)
+      else if (filter === 4) {
+        const p = left + up - ul
+        const a = Math.abs(p - left), b = Math.abs(p - up), c = Math.abs(p - ul)
+        predictor = a <= b && a <= c ? left : b <= c ? up : ul
+      } else if (filter !== 0) throw new Error('APPROVED_ICON_PNG: invalid row filter')
+      const n = (value + predictor) & 255
+      if (n * 3 + 2 >= palette.length) throw new Error('APPROVED_ICON_PNG: missing color')
+      row[x] = n
+      const off = (y * width + x) * 4
+      rgba[off] = palette[n * 3]; rgba[off + 1] = palette[n * 3 + 1]; rgba[off + 2] = palette[n * 3 + 2]
+      // Clip the checkerboard around the approved reference screenshot. Do not
+      // redraw or distort the original database symbol and its 3 status dots.
+      const chroma = rgba[off + 2] - rgba[off]
+      const edgeAlpha = Math.max(0, Math.min(1, (chroma - 10) / 20))
+      const radius = 69, dx = Math.abs(x - 192) - (181 - radius), dy = Math.abs(y - 192) - (180 - radius)
+      const d = Math.hypot(Math.max(dx, 0), Math.max(dy, 0)) + Math.min(Math.max(dx, dy), 0) - radius
+      const clip = Math.max(0, Math.min(1, .5 - d))
+      rgba[off + 3] = Math.round((transparency[n] ?? 255) * edgeAlpha * clip)
     }
+    prev = row
   }
-  return data
+  return { pixels: rgba, width, height }
+}
+const approved = decodeIndexedPng(source)
+function sample(x, y) {
+  const { pixels, width, height } = approved
+  const ax = Math.max(0, Math.min(width - 1, x)), ay = Math.max(0, Math.min(height - 1, y))
+  const x0 = Math.floor(ax), y0 = Math.floor(ay), x1 = Math.min(width - 1, x0 + 1), y1 = Math.min(height - 1, y0 + 1)
+  const tx = ax - x0, ty = ay - y0
+  const points = [[x0,y0,(1-tx)*(1-ty)],[x1,y0,tx*(1-ty)],[x0,y1,(1-tx)*ty],[x1,y1,tx*ty]]
+  let alpha = 0, r = 0, g = 0, b = 0
+  for (const [px,py,weight] of points) {
+    const at = (py * width + px) * 4, a = pixels[at+3] / 255, factor = weight*a
+    alpha += factor; r += pixels[at]*factor; g += pixels[at+1]*factor; b += pixels[at+2]*factor
+  }
+  return [alpha ? r/alpha : 0, alpha ? g/alpha : 0, alpha ? b/alpha : 0, alpha*255]
+}
+function raster(size) {
+  const pixels = Buffer.alloc(size*size*4), oversample = size <= 64 ? 4 : size <= 128 ? 2 : 1
+  for (let y=0;y<size;y++) for(let x=0;x<size;x++){
+    const total = [0,0,0,0]
+    for(let fy=0;fy<oversample;fy++) for(let fx=0;fx<oversample;fx++){
+      const u=(x+(fx+.5)/oversample)*approved.width/size-.5
+      const v=(y+(fy+.5)/oversample)*approved.height/size-.5
+      const p=sample(u,v)
+      for(let k=0;k<4;k++)total[k]+=p[k]
+    }
+    const at=(y*size+x)*4
+    for(let k=0;k<4;k++)pixels[at+k]=Math.round(total[k]/(oversample*oversample))
+  }
+  return pixels
 }
 
 const crcTable = Uint32Array.from({ length: 256 }, (_, i) => {
@@ -158,4 +168,4 @@ await Promise.all([
   writeFile('build/icon.ico', ico(images)),
   writeFile('build/icon.icns', icns(images))
 ])
-console.log('Generated DB EX icons: build/icon.png, build/icon.ico, build/icon.icns')
+console.log('Generated user-approved DB EX icons (source SHA-256 verified): build/icon.png, build/icon.ico, build/icon.icns')
