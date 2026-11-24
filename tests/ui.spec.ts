@@ -198,3 +198,25 @@ test('large result grids render a bounded row window and retain the original row
     key: { id: '451' }, original: { id: '451', name: 'User 451' }, changes: { name: 'Edited 451' },
   })
 })
+
+
+test('MongoDB connection UI shows auto-direct mode, explicit discovery, and URI/seed precedence', async ({ page }) => {
+  await page.getByRole('button', { name: '＋ 新建连接', exact: true }).click()
+  await page.getByRole('button', { name: 'MongoDB', exact: true }).click()
+  await page.getByRole('button', { name: '拓扑', exact: true }).click()
+  await expect(page.getByLabel('连接拓扑')).toHaveValue('auto')
+  await page.getByLabel('连接拓扑').selectOption('discover')
+  await expect(page.getByLabel('连接拓扑')).toHaveValue('discover')
+  await page.getByRole('button', { name: '＋ 添加节点', exact: true }).click()
+  await page.getByLabel('节点 1 主机').fill('seed.example.test')
+  await page.getByRole('button', { name: '基本设置', exact: true }).click()
+  await expect(page.getByText(/拓扑页配置了 1 个种子节点/)).toBeVisible()
+  await page.getByLabel('MongoDB URI（优先于主机设置）').fill('mongodb://db.example.test:27017/admin?directConnection=true')
+  await expect(page.getByLabel('主机', { exact: true })).toBeDisabled()
+  await expect(page.getByLabel('用户名', { exact: true })).toBeDisabled()
+  await expect(page.getByLabel('认证库 (authSource)')).toBeDisabled()
+  await expect(page.getByText(/填写或保留加密保存的 URI 时/)).toBeVisible()
+  await page.getByLabel('MongoDB URI（优先于主机设置）').fill('')
+  await expect(page.getByLabel('主机', { exact: true })).toBeEnabled()
+  await expect(page.getByText(/拓扑页配置了 1 个种子节点/)).toBeVisible()
+})
