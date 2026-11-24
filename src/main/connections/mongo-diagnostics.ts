@@ -44,7 +44,7 @@ export function describeMongoConnectionError(error: unknown): string | undefined
     return 'MONGO_DNS_FAILED: MongoDB 地址无法解析。请检查主机名、本机 DNS；mongodb+srv 需要本机能够查询 SRV/TXT 记录。'
   }
   if (/(ECONNREFUSED|connection refused|connection closed on connect)/i.test(signals)) {
-    return 'MONGO_CONNECTION_REFUSED: MongoDB 端口拒绝连接。请确认地址、端口、mongod 监听地址和防火墙；连接远程服务器时，127.0.0.1 指的是当前电脑。'
+    return 'MONGO_CONNECTION_REFUSED: MongoDB 端口拒绝连接。请确认地址、端口、mongod 监听地址和防火墙；未开启 SSH 时 127.0.0.1 指向本机；启用 SSH 时则指向最终 SSH 出口主机。'
   }
   if (/(UNABLE_TO_VERIFY_LEAF_SIGNATURE|SELF_SIGNED_CERT|CERT_HAS_EXPIRED|ERR_TLS|SSL routines|SSLHandshake|certificate verify|certificate has expired|Hostname\/IP does not match|tlsv1 alert)/i.test(signals)) {
     return 'MONGO_TLS_FAILED: MongoDB TLS 握手或证书校验失败。请检查服务器是否要求 TLS，以及 CA、证书主机名与证书有效期。'
