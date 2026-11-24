@@ -111,6 +111,9 @@ export class SessionManager {
           }
           mongoPending = new MongoClient(uri, options)
           await mongoPending.connect()
+          // A successful topology handshake is not enough: require a real authenticated
+          // command before the UI reports success, especially for lazy authentication.
+          await mongoPending.db(config.database || 'admin').command({ ping: 1 }, { maxTimeMS: config.connectTimeoutMs })
           driver = { kind: 'mongodb', client: mongoPending, operations: new MongoOperations(mongoPending) }
           mongoPending = undefined
           break
