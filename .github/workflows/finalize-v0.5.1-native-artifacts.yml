@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   finalize:
-    if: "github.repository == 'xzcode/db-ex' && github.event.head_commit.message == 'release: finalize DB EX v0.5.1 from successful CI'"
+    if: "github.repository == 'xzcode/db-ex' && startsWith(github.event.head_commit.message, 'release: finalize DB EX v0.5.1')"
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
