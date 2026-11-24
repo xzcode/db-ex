@@ -27,7 +27,23 @@ config.mongoTopology ||= config.mongoDirect ? 'direct' : 'auto'
 const mongoUriActive = computed(() => config.kind === 'mongodb' && (Boolean(config.uri?.trim()) || (Boolean(props.draft?.secretFields.includes('uri')) && !clearSecrets.value.includes('uri'))))
 const kinds: DatabaseKind[] = ['mysql', 'mongodb', 'redis']
 const defaults: Record<DatabaseKind, number> = { mysql: 3306, mongodb: 27017, redis: 6379 }
-function changeKind(kind: DatabaseKind) { config.kind = kind; config.port = defaults[kind]; config.nodes = [] }
+function changeKind(kind: DatabaseKind) {
+  if (config.kind === kind) return
+  config.kind = kind
+  config.port = defaults[kind]
+  config.nodes = []
+  // Credentials and URI from a different engine must not silently carry over.
+  config.username = ''
+  config.password = ''
+  config.uri = ''
+  if (kind === 'mongodb') {
+    config.authSource ||= 'admin'
+    config.mongoTopology ||= 'auto'
+  } else {
+    config.mongoReplicaSet = ''
+    config.mongoDirect = false
+  }
+}
 function snapshot(): ConnectionConfig { return JSON.parse(JSON.stringify(config)) as ConnectionConfig }
 function failure(reason: unknown) { error.value = reason instanceof Error ? reason.message : String(reason) }
 async function test() {
