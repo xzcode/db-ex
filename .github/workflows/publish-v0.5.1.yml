@@ -1,0 +1,147 @@
+name: Publish DB EX v0.5.1 preview
+on:
+  push:
+    branches: [master]
+permissions:
+  contents: write
+concurrency:
+  group: db-ex-release-v0.5.1
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: "github.repository == 'xzcode/db-ex' && startsWith(github.event.head_commit.message, 'release: DB EX v0.5.1 preview')"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      release_id: ${{ steps.draft.outputs.release_id }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare or validate a draft at the exact release commit
+        id: draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=v0.5.1
+          repo="$GITHUB_REPOSITORY"
+          # Drafts may have no tag ref and cannot reliably be fetched by tag.
+          # Use the authenticated releases list and the stable numeric release ID.
+          existing="$(gh api --paginate "repos/$repo/releases?per_page=100" --jq '.[] | select(.tag_name == "v0.5.1")' | jq -sc '.')"
+          count="$(jq 'length' <<< "$existing")"
+          [[ "$count" -le 1 ]] || { echo "::error::Duplicate release records"; exit 1; }
+          tag_sha=""
+          if tag_sha="$(gh api "repos/$repo/git/ref/tags/$tag" --jq '.object.sha' 2>/dev/null)"; then
+            [[ "$tag_sha" == "$GITHUB_SHA" && "$count" == 1 ]] || { echo "::error::Existing tag is not part of this release draft"; exit 1; }
+          fi
+          if [[ "$count" == 1 ]]; then
+            jq -e --arg sha "$GITHUB_SHA" '.[0] | .draft == true and .target_commitish == $sha' <<< "$existing" >/dev/null
+          else
+            gh release create "$tag" --repo "$repo" --target "$GITHUB_SHA" \
+              --title 'DB EX v0.5.1 (Multi-platform Preview)' \
+              --notes-file docs/RELEASE_v0.5.1.md --draft --prerelease
+          fi
+          release_id="$(gh api --paginate "repos/$repo/releases?per_page=100" --jq '.[] | select(.tag_name == "v0.5.1") | .id')"
+          [[ "$release_id" =~ ^[0-9]+$ ]] || { echo "::error::Expected a single draft release ID"; exit 1; }
+          payload="$(gh api "repos/$repo/releases/$release_id")"
+          jq -e --arg sha "$GITHUB_SHA" --arg tag "$tag" '.draft == true and .target_commitish == $sha and .tag_name == $tag' <<< "$payload" >/dev/null
+          echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
+
+  packages:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            kind: Linux
+            arch: X64
+          - os: macos-15
+            kind: macOS
+            arch: ARM64
+          - os: windows-latest
+            kind: Windows
+            arch: X64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - name: Verify approved artwork source and icons
+        run: node --import tsx --test tests/icon-generator.test.ts
+      - name: Install Linux runtime libraries
+        if: runner.os == 'Linux'
+        run: npx playwright install-deps chromium
+      - name: Build installers on their native platform
+        run: npm exec electron-builder -- --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Strict macOS Ad-hoc signature and icon validation
+        if: runner.os == 'macOS'
+        shell: bash
+        run: bash scripts/verify-mac-package.sh
+      - name: Test packaged Electron app on Linux
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm run smoke:electron
+        env:
+          DB_EX_PACKAGED: '1'
+      - name: Test packaged Electron app on macOS or Windows
+        if: runner.os != 'Linux'
+        run: npm run smoke:electron
+        env:
+          DB_EX_PACKAGED: '1'
+      - name: Compute checksums and upload directly to draft Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          node scripts/check-packages.mjs
+          cp release/SHA256SUMS.txt "release/SHA256SUMS-${{ matrix.kind }}-${{ matrix.arch }}.txt"
+          files=(release/*.dmg release/*.zip release/*.exe release/*.AppImage release/*.deb)
+          (( ${#files[@]} > 0 )) || { echo "::error::No installer built"; exit 1; }
+          files+=("release/SHA256SUMS-${{ matrix.kind }}-${{ matrix.arch }}.txt")
+          gh release upload v0.5.1 "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+
+  publish:
+    needs: [prepare, packages]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Validate all eight uploads and tag, then publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          tag=v0.5.1
+          release_id="${{ needs.prepare.outputs.release_id }}"
+          [[ "$release_id" =~ ^[0-9]+$ ]] || { echo "::error::Invalid draft ID"; exit 1; }
+          payload="$(gh api "repos/$repo/releases/$release_id")"
+          jq -e --arg sha "$GITHUB_SHA" --arg tag "$tag" '.draft == true and .target_commitish == $sha and .tag_name == $tag' <<< "$payload" >/dev/null
+          names="$(jq -r '.assets[].name' <<< "$payload")"
+          for file in \
+            DB-EX-0.5.1-mac-arm64.dmg DB-EX-0.5.1-mac-arm64.zip \
+            DB-EX-0.5.1-win-x64.exe \
+            DB-EX-0.5.1-linux-x86_64.AppImage DB-EX-0.5.1-linux-amd64.deb \
+            SHA256SUMS-macOS-ARM64.txt SHA256SUMS-Windows-X64.txt SHA256SUMS-Linux-X64.txt; do
+            grep -Fqx -- "$file" <<< "$names" || { echo "::error::Missing asset $file"; exit 1; }
+          done
+          [[ "$(jq -r '.assets | length' <<< "$payload")" == '8' ]] || { echo "::error::Wrong number of assets"; exit 1; }
+          jq -e '.assets | all(.[]; .state == "uploaded" and (if (.name | endswith(".txt")) then .size > 0 else .size > 1048576 end))' <<< "$payload"
+          if tag_sha="$(gh api "repos/$repo/git/ref/tags/$tag" --jq '.object.sha' 2>/dev/null)"; then
+            [[ "$tag_sha" == "$GITHUB_SHA" ]] || { echo "::error::Existing tag not at release commit"; exit 1; }
+          fi
+          published="$(gh api -X PATCH "repos/$repo/releases/$release_id" -F draft=false -F prerelease=true)"
+          jq -e --arg tag "$tag" '.draft == false and .prerelease == true and .tag_name == $tag' <<< "$published" >/dev/null
+          [[ "$(gh api "repos/$repo/git/ref/tags/$tag" --jq '.object.sha')" == "$GITHUB_SHA" ]] || { echo "::error::Published tag not at release commit"; exit 1; }
+          echo 'Published DB EX v0.5.1 native macOS, Windows and Linux installers.'
