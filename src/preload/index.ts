@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { DbExAPI } from '../shared/types'
 // Every bridge method is explicit. Renderer receives no filesystem, raw IPC or driver handles.
 const api: DbExAPI = {
+  getSystemLanguage: () => ipcRenderer.invoke('preferences:system-language'),
   setLocale: locale => ipcRenderer.invoke('preferences:locale', locale),
   listConnections: () => ipcRenderer.invoke('connections:list'),
   saveConnection: (config, clearSecrets) => ipcRenderer.invoke('connections:save', config, clearSecrets),

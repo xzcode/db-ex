@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, session as electronSession } from 'electron'
-import { resolveLocale, translate, localizeMessage, type Locale } from '../shared/i18n'
+import { isLocale, resolveLocale, translate, localizeMessage, type Locale } from '../shared/i18n'
 import { join, basename, extname } from 'node:path'
 import { readFile, stat, writeFile } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
@@ -12,6 +12,7 @@ import { parseSshConfig } from './connections/ssh-config'
 import { inspectSql } from './operations/sql-policy'
 import { redisCommandWrites, validateRedisCommand } from './operations/redis'
 
+function getSystemLanguage(): string { return app.getPreferredSystemLanguages()[0] || app.getLocale() || 'en' }
 let currentLocale: Locale = 'en'
 const tr = (key: string, values: readonly unknown[] = []) => translate(currentLocale, key, values)
 const store = new ConnectionStore()
@@ -74,8 +75,9 @@ async function saveText(win: BrowserWindow, name: string, content: string, forma
   return true
 }
 function registerIpc(): void {
+  ipcMain.handle('preferences:system-language', handler(() => getSystemLanguage()))
   ipcMain.handle('preferences:locale', handler((_win, value: unknown) => {
-    if (value !== 'zh-CN' && value !== 'en') throw new Error('INVALID_LOCALE')
+    if (!isLocale(value)) throw new Error('INVALID_LOCALE')
     currentLocale = value
   }))
   ipcMain.handle('connections:list', handler(() => store.list()))
@@ -143,7 +145,7 @@ function createWindow(): void {
   void win.loadURL(rendererUrl)
 }
 app.whenReady().then(async () => {
-  currentLocale = resolveLocale('system', app.getLocale())
+  currentLocale = resolveLocale('system', getSystemLanguage())
   electronSession.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
   electronSession.defaultSession.setPermissionCheckHandler(() => false)
   electronSession.defaultSession.on('will-download', event => event.preventDefault())

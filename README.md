@@ -114,9 +114,9 @@ Built-in encrypted storage replaces OS keyring requirements for new records. Exp
 
 ## 多语言 / Languages
 
-- 默认跟随系统语言：中文系统使用简体中文，其他系统使用英文。
-- 顶部语言下拉框支持 `跟随系统 / 简体中文 / English`，实时生效并记住本地选择。
-- 连接设置、数据库工作区、应用生成的常用错误与操作确认提示均通过共享语言资源翻译。不会翻译数据库对象名、用户输入、查询结果或 SQL；未收录的驱动诊断保留原文。
+- 默认跟随操作系统首选语言；支持 14 种语言及地区变体，未知语言回退英文。
+- 顶部语言下拉框支持跟随系统或选择简体中文、繁體中文、English、日本語、한국어、Deutsch、Français、Español、Português、Русский、Italiano、العربية、हिन्दी、Bahasa Indonesia，实时生效并记住本地选择。
+- 连接设置、数据库工作区、应用生成的常用错误与操作确认提示均通过共享语言资源翻译。不会翻译数据库对象名、用户输入、查询结果或 SQL；较少使用的诊断在语言资源缺失时回退英文；未收录的驱动诊断保留原文。
 - 新语言扩展规范见 [docs/I18N.md](docs/I18N.md)。
 
-Switch between System default, Simplified Chinese and English from the top toolbar. Your selection is remembered locally and applies without restarting. Database data, SQL and connection names are never translated.
+Choose System default or one of 14 supported languages from the top toolbar. Your selection is remembered locally and applies without restarting. Database data, SQL and connection names are never translated.
