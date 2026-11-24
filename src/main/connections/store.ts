@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import type { ConnectionConfig, ConnectionDraft, SavedConnection } from '../../shared/types'
 import { validateConnection, validateId } from './validation'
-import { mergeConnectionSecrets, portableConnection, redactConnection } from './credentials'
+import { mergeConnectionSecrets, redactConnection } from './credentials'
+import { createConnectionBackup, readConnectionBackup } from './backup'
+import { isAppEncrypted } from '../storage/app-cipher'
 import { decrypt, encrypt, readJson, SerialWrites, writeJson } from '../storage/secure-json'
 
 interface EncryptedEntry { id: string; name: string; kind: ConnectionConfig['kind']; encrypted: string }
@@ -9,6 +11,7 @@ interface StoreFile { version: 1; entries: EncryptedEntry[] }
 export class ConnectionStore {
   private readonly entries = new Map<string, EncryptedEntry>()
   private readonly writes = new SerialWrites()
+  private readonly legacyLocked = new Set<string>()
   async init(): Promise<void> {
     const content = await readJson<StoreFile>('connections.secure.json')
     if (!content) return
@@ -18,8 +21,24 @@ export class ConnectionStore {
       if (typeof entry.encrypted !== 'string') throw new Error('连接配置损坏')
       this.entries.set(entry.id, entry)
     }
+    // Migrate only old-format entries. Inaccessible old data remains intact
+    // and does not prevent new connections or application startup.
+    let migrated = false
+    for (const entry of this.entries.values()) {
+      if (isAppEncrypted(entry.encrypted)) continue
+      try {
+        const config = validateConnection(decrypt<ConnectionConfig>(entry.encrypted), true)
+        this.entries.set(entry.id, { ...entry, encrypted: encrypt({ ...config, id: entry.id }) })
+        migrated = true
+      } catch { this.legacyLocked.add(entry.id) }
+    }
+    if (migrated) await this.persist()
   }
-  list(): SavedConnection[] { return [...this.entries.values()].map(entry => this.summarize(entry.id, this.get(entry.id))) }
+  list(): SavedConnection[] {
+    return [...this.entries.values()].map(entry => this.legacyLocked.has(entry.id)
+      ? { id: entry.id, name: entry.name, kind: entry.kind, environment: 'unknown', host: '旧版配置待迁移', port: 0, sshEnabled: false, tlsEnabled: false, locked: true }
+      : this.summarize(entry.id, this.get(entry.id)))
+  }
   get(id: string): ConnectionConfig {
     validateId(id)
     const entry = this.entries.get(id)
@@ -47,6 +66,7 @@ export class ConnectionStore {
       const previous = this.entries.get(id)
       this.entries.set(id, { id, name: config.name, kind: config.kind, encrypted })
       try { await this.persist() } catch (error) { if (previous) this.entries.set(id, previous); else this.entries.delete(id); throw error }
+      this.legacyLocked.delete(id)
       return this.summarize(id, stored)
     })
   }
@@ -57,6 +77,7 @@ export class ConnectionStore {
       if (!old) return
       this.entries.delete(id)
       try { await this.persist() } catch (error) { this.entries.set(id, old); throw error }
+      this.legacyLocked.delete(id)
     })
   }
   async trustHostKey(id: string, fingerprint: string): Promise<void> {
@@ -66,24 +87,15 @@ export class ConnectionStore {
     config.ssh.hostFingerprint = fingerprint.toLowerCase()
     await this.save(config)
   }
-  exportPublic(): unknown {
-    return { format: 'db-ex-connections', version: 1, exportedAt: new Date().toISOString(),
-      connections: [...this.entries.keys()].map(id => portableConnection(this.get(id))) }
+  exportConnections(id?: string): unknown {
+    const ids = id === undefined ? [...this.entries.keys()] : [id]
+    return createConnectionBackup(ids.map(key => this.get(key)))
   }
-  importPublic(input: unknown): Promise<number> {
+  importConnections(input: unknown): Promise<number> {
     return this.writes.run(async () => {
-      const value = input as { format?: unknown; version?: unknown; connections?: unknown[] }
-      if (!value || value.format !== 'db-ex-connections' || value.version !== 1 || !Array.isArray(value.connections) || value.connections.length > 200) throw new Error('连接导入文件格式不正确')
-      if (this.entries.size + value.connections.length > 200) throw new Error('导入后连接数量不能超过200')
-      // Redacted templates preserve authentication mode; connection validation requires missing secrets again.
-      const configs = value.connections.map(item => {
-        const draft = item as ConnectionDraft
-        if (!draft || !draft.config || !Array.isArray(draft.secretFields)) throw new Error('连接条目格式不正确')
-        const copy = portableConnection(draft.config).config
-        delete copy.id
-        if (!copy.host && !copy.uri) { copy.host = 'localhost'; copy.name += ' (需配置 URI)' }
-        return validateConnection(copy, true)
-      })
+      const configs = readConnectionBackup(input)
+      if (this.entries.size + configs.length > 200) throw new Error('导入后连接数量不能超过200')
+      // Validate/decrypt the complete file before changing any saved entries.
       const prepared = configs.map(config => {
         const id = randomUUID()
         return { id, name: config.name, kind: config.kind, encrypted: encrypt({ ...config, id }) }

@@ -48,7 +48,7 @@ async function installBridge(page: Page) {
       async setWriteAccess(id: string, writable: boolean) { sessions[id] = { ...sessions[id], writable }; calls.push({ action: 'writeAccess', id, writable }); return sessions[id] },
       async listSnippets() { return [] }, async saveSnippet(value: any) { return { ...value, id: 'snippet', updatedAt: new Date().toISOString() } }, async deleteSnippet() {},
       async importFile() { return { name: 'data.csv', format: 'csv', text: 'name,email\nEve,eve@example.test' } }, async exportFile(name: string, content: string, format: string) { calls.push({ action: 'export', name, content, format }); return true },
-      async importConnections() { return 0 }, async exportConnections() { return true },
+      async importConnections() { calls.push({ action: 'importConnections' }); return 2 }, async exportConnections(id?: string) { calls.push({ action: 'exportConnections', id }); return true },
       async importSshConfig() { return { hosts: [{ name: 'bastion', ssh: { enabled: true, host: 'jump.example.test', port: 22, username: 'dev', authMode: 'agent' } }], warnings: ['未执行 ProxyCommand'] } },
     }
   })
@@ -219,4 +219,13 @@ test('MongoDB connection UI shows auto-direct mode, explicit discovery, and URI/
   await page.getByLabel('MongoDB URI（优先于主机设置）').fill('')
   await expect(page.getByLabel('主机', { exact: true })).toBeEnabled()
   await expect(page.getByText(/拓扑页配置了 1 个种子节点/)).toBeVisible()
+})
+
+test('connection backups export one or all profiles and import without a key prompt', async ({ page }) => {
+  await page.getByRole('button', { name: '导出连接', exact: true }).click()
+  await expect(page.getByText(/连接备份已导出（包含加密凭据）/)).toBeVisible()
+  await page.getByTitle('导出此连接').first().click()
+  await expect.poll(() => page.evaluate(() => (window as any).__dbexCalls.filter((call: any) => call.action === 'exportConnections').map((call: any) => Boolean(call.id)))).toEqual([false, true])
+  await page.getByRole('button', { name: '导入连接', exact: true }).click()
+  await expect(page.getByText('已导入 2 个连接配置')).toBeVisible()
 })

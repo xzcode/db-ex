@@ -62,10 +62,10 @@ async function openText(win: BrowserWindow, title: string, limit = 4 * 1024 * 10
   const extension = extname(path).toLowerCase()
   return { name: basename(path), text, format: extension === '.csv' ? 'csv' : extension === '.json' ? 'json' : 'text' }
 }
-async function saveText(win: BrowserWindow, name: string, content: string, format: 'csv' | 'json' | 'text'): Promise<boolean> {
-  if (typeof name !== 'string' || name.length > 200 || typeof content !== 'string' || Buffer.byteLength(content) > 8 * 1024 * 1024 || !['csv', 'json', 'text'].includes(format)) throw new Error('导出参数无效或超过8 MiB')
+async function saveText(win: BrowserWindow, name: string, content: string, format: 'csv' | 'json' | 'text', title = '导出当前数据', limit = 8 * 1024 * 1024): Promise<boolean> {
+  if (typeof name !== 'string' || name.length > 200 || typeof content !== 'string' || Buffer.byteLength(content) > limit || !['csv', 'json', 'text'].includes(format)) throw new Error(`导出参数无效或超过${limit / 1024 / 1024} MiB`)
   const extension = format === 'text' ? 'txt' : format
-  const answer = await dialog.showSaveDialog(win, { title: '导出当前数据', defaultPath: basename(name), filters: [{ name: extension.toUpperCase(), extensions: [extension] }] })
+  const answer = await dialog.showSaveDialog(win, { title, defaultPath: basename(name), filters: [{ name: extension.toUpperCase(), extensions: [extension] }] })
   if (answer.canceled || !answer.filePath) return false
   await writeFile(answer.filePath, content, { encoding: 'utf8', mode: 0o600 })
   return true
@@ -89,8 +89,11 @@ function registerIpc(): void {
     try { return `连接成功：${info.kind} · ${info.displayHost}` } finally { await sessions.disconnect(info.id) }
   }))
   ipcMain.handle('connections:disconnect', handler((_win, id: string) => sessions.disconnect(id)))
-  ipcMain.handle('connections:import', handler(async win => { const file = await openText(win, '导入 DB EX 连接配置'); if (!file) return 0; return store.importPublic(JSON.parse(file.text)) }))
-  ipcMain.handle('connections:export', handler(win => saveText(win, 'db-ex-connections.json', JSON.stringify(store.exportPublic(), null, 2), 'json')))
+  ipcMain.handle('connections:import', handler(async win => { const file = await openText(win, '导入 DB EX 连接备份', 16 * 1024 * 1024); if (!file) return 0; return store.importConnections(JSON.parse(file.text)) }))
+  ipcMain.handle('connections:export', handler((win, id?: string) => {
+    if (id !== undefined) validateId(id)
+    return saveText(win, id ? 'db-ex-connection.json' : 'db-ex-connections.json', JSON.stringify(store.exportConnections(id), null, 2), 'json', '导出 DB EX 连接备份（含加密凭据）', 16 * 1024 * 1024)
+  }))
   ipcMain.handle('connections:ssh-config', handler(async win => { const file = await openText(win, '选择 SSH config 文件', 1024 * 1024); return file ? parseSshConfig(file.text) : null }))
   ipcMain.handle('explorer:roots', handler((_win, id: string) => sessions.roots(id)))
   ipcMain.handle('explorer:children', handler((_win, id: string, database: string) => sessions.children(id, database)))

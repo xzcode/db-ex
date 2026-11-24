@@ -2,7 +2,7 @@
 
 本地优先的桌面数据库工具，统一管理 **MySQL、MongoDB、Redis**。基于 Electron、Vue 3、TypeScript 与 Monaco，不依赖账号、云端服务或遥测。
 
-当前版本：**0.5.1 预览版**。M2–M5 的功能实现已接入；完整范围、验收证据和限制见 [路线图](docs/ROADMAP.md)。预览安装包与最终发行签名是不同的交付项。
+当前版本：**0.5.2 预览版**。M2–M5 的功能实现已接入；完整范围、验收证据和限制见 [路线图](docs/ROADMAP.md)。预览安装包与最终发行签名是不同的交付项。
 
 ## 功能
 
@@ -14,7 +14,7 @@
 | Redis | SCAN、String/Hash/List/Set/ZSet/Stream 浏览与编辑、TTL、String CAS 更新、明确选择 Key 的批量删除、受限命令台 |
 | 高级连接 | 直连、SOCKS5、HTTP CONNECT、SSH 密码/私钥/Agent、最多三个前置跳板、逐级指纹、SSH config 安全导入、TLS/mTLS |
 | 拓扑 | MongoDB URI/副本集/原生节点发现；Redis Standalone、Sentinel、Cluster；发现的新节点沿用代理/SSH 路由 |
-| 本地持久化 | 系统安全存储加密连接、查询历史和收藏；不回显已保存密码；脱敏连接配置导入导出 |
+| 本地持久化 | 内置 AES-256-GCM 加密连接、查询历史和收藏；不回显已保存密码；完整连接备份导入导出 |
 
 ### 写入保护
 
@@ -63,7 +63,7 @@ SSH 每一级都要提供独立核验过的 SHA-256 主机指纹，不自动信�
 
 代理与 SSH 都保留数据库目标主机名进行 TLS 校验。MySQL TLS 需要证书 DNS 身份：目标可以是 IP，但应另填证书覆盖的 DNS 名称；仅 IP SAN 的 MySQL 证书会被明确拒绝，避免驱动回退验证错误主机。MongoDB 的 `mongodb+srv` 仍需本机能够解析 DNS SRV/TXT；TCP 数据路径经过所选代理/隧道。Redis Sentinel/Cluster 发布的地址必须能被最后一级网络出口访问，且 TLS 证书需覆盖对应名称。
 
-Linux 系统密钥环不可用或回退为 `basic_text` 时，保存连接与查询历史会被拒绝，临时连接仍可使用。连接导出不包含密码、URI 凭据或私钥口令；导入后需重新补齐认证信息。详见 [安全说明](SECURITY.md)。
+连接与查询记录使用程序内置密钥自动加密，无需系统钥匙串、主密码或用户输入密钥。连接列表底部可导出全部连接，单条连接也可导出；备份包含加密密码和 URI，可在另一台 DB EX 直接导入。私钥和证书文件仍需自行复制，SSH 主机指纹需重新核验。由于内置密钥随公开程序发布，备份并非对持有程序者保密的安全容器，请妥善保管。旧版系统加密数据仅在迁移时可能需要原系统授权。详见 [安全说明](SECURITY.md)。
 
 ## 验证与发行
 
@@ -107,3 +107,7 @@ v0.5.1 macOS preview uses Ad-hoc signing (like Shell EX), but is **not notarized
 This preview consolidates MongoDB single-host auto-direct connections, authSource/TLS diagnostics and the approved app icon across native macOS, Windows and Linux packages. Published Release assets must pass native packaging and packaged-app smoke checks. See [release notes](docs/RELEASE_v0.5.1.md).
 
 This public repository currently has no `LICENSE` file; visibility alone does not grant unrestricted redistribution rights.
+
+## v0.5.2 Preview
+
+Built-in encrypted storage replaces OS keyring requirements for new records. Export a single connection or all connections, including encrypted credentials, and import directly on another device. Legacy templates and readable old local configurations remain supported. See [release notes](docs/RELEASE_v0.5.2.md).

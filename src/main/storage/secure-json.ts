@@ -2,18 +2,20 @@ import { app, safeStorage } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, unlink, writeFile, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { openStored, seal } from './app-cipher'
 
-export function secureStorageAvailable(): boolean {
-  return safeStorage.isEncryptionAvailable() && safeStorage.getSelectedStorageBackend?.() !== 'basic_text'
-}
-export function encrypt(value: unknown): string {
-  if (!secureStorageAvailable()) throw new Error('SECURE_STORAGE_UNAVAILABLE: 系统密钥环不可用，无法保存敏感内容；仍可使用临时连接')
-  return safeStorage.encryptString(JSON.stringify(value)).toString('base64')
-}
+// New writes and reads never call Electron safeStorage. It remains solely
+// for a one-time upgrade of entries written by DB EX <= 0.5.1.
+export function encrypt(value: unknown): string { return seal(value) }
 export function decrypt<T>(value: string): T {
-  if (!secureStorageAvailable()) throw new Error('SECURE_STORAGE_UNAVAILABLE: 系统密钥环不可用，无法读取敏感内容')
-  try { return JSON.parse(safeStorage.decryptString(Buffer.from(value, 'base64'))) as T }
-  catch { throw new Error('SECURE_STORAGE_ERROR: 无法解密或读取本地配置，请检查系统密钥环') }
+  return openStored<T>(value, legacy => {
+    try {
+      if (!safeStorage.isEncryptionAvailable() || safeStorage.getSelectedStorageBackend?.() === 'basic_text') throw new Error('legacy unavailable')
+      return JSON.parse(safeStorage.decryptString(Buffer.from(legacy, 'base64'))) as T
+    } catch {
+      throw new Error('LEGACY_STORAGE_UNAVAILABLE: 旧版连接或查询记录需要原系统授权才能迁移。原文件已保留；新建连接不需要系统密钥。')
+    }
+  })
 }
 export async function readJson<T>(name: string): Promise<T | undefined> {
   const filename = join(app.getPath('userData'), name)
