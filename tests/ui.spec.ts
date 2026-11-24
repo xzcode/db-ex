@@ -1,8 +1,10 @@
 import { expect, test, type Page } from '@playwright/test'
+test.use({ locale: 'zh-CN' })
 
 // The bridge is replaced only in tests; the application never supplies fake database data.
 async function installBridge(page: Page) {
   await page.addInitScript(() => {
+
     const calls: Record<string, unknown>[] = []
     const sessions: Record<string, any> = {}
     const rows = [{ id: '1', name: 'Ada', email: 'ada@example.test' }]
@@ -16,6 +18,8 @@ async function installBridge(page: Page) {
     const grid = (values: Record<string, string>[]) => ({ columns: Object.keys(values[0] || {}), rows: values })
     ;(window as any).__dbexCalls = calls
     ;(window as any).dbex = {
+      async getSystemLanguage() { return navigator.language },
+      async setLocale(locale: string) { calls.push({ action: 'setLocale', locale }) },
       async listConnections() { return configs },
       async saveConnection(config: any, clearSecrets: string[]) { calls.push({ action: 'saveConnection', config, clearSecrets }); return { ...config, id: config.id || 'new' } },
       async editConnection(id: string) { return { config: { ...configs.find(value => value.id === id), password: '', ssh: { enabled: false, host: '', port: 22, username: '', authMode: 'agent' }, tls: { enabled: false } }, secretFields: ['password'] } },
@@ -228,4 +232,53 @@ test('connection backups export one or all profiles and import without a key pro
   await expect.poll(() => page.evaluate(() => (window as any).__dbexCalls.filter((call: any) => call.action === 'exportConnections').map((call: any) => Boolean(call.id)))).toEqual([false, true])
   await page.getByRole('button', { name: '导入连接', exact: true }).click()
   await expect(page.getByText('已导入 2 个连接配置')).toBeVisible()
+})
+
+
+test('English interface can switch live, persists and preserves connection identity', async ({ page }) => {
+  await page.getByRole('combobox', { name: '语言', exact: true }).selectOption('en')
+  await expect(page.getByRole('button', { name: '+ New connection', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Import connections', exact: true })).toBeVisible()
+  await expect(page.locator('.connection-item').filter({ hasText: 'MySQL Local' })).toBeVisible()
+  await expect.poll(() => page.evaluate(() => (window as any).__dbexCalls.some((call: any) => call.action === 'setLocale' && call.locale === 'en'))).toBe(true)
+  await page.getByRole('button', { name: '+ New connection', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Create database connection' })).toBeVisible()
+  await expect(page.getByLabel('Connection name', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'SSH / jump hosts', exact: true }).click()
+  await expect(page.getByLabel('Enable SSH tunnel')).toBeVisible()
+  await page.getByRole('button', { name: 'Close dialog' }).click()
+  await page.reload()
+  await expect(page.getByRole('combobox', { name: 'Language', exact: true })).toHaveValue('en')
+  await page.locator('.connection-item').filter({ hasText: 'MySQL Local' }).getByTitle('Connect', { exact: true }).click()
+  await expect(page.getByRole('button', { name: 'SQL editor', exact: true })).toBeVisible()
+  await page.getByRole('combobox', { name: 'Language', exact: true }).selectOption('zh-CN')
+  await expect(page.getByRole('button', { name: 'SQL 编辑器', exact: true })).toBeVisible()
+})
+
+
+test.describe('system language default', () => {
+  test.use({ locale: 'de-DE' })
+  test('first launch follows system; selecting a language overrides it, system resets it', async ({ page }) => {
+    await expect(page.getByRole('combobox', { name: 'Sprache', exact: true })).toHaveValue('system')
+    await expect(page.getByRole('button', { name: '+ Neue Verbindung', exact: true })).toBeVisible()
+    await expect(page.locator('html')).toHaveAttribute('lang', 'de')
+    await page.getByRole('combobox', { name: 'Sprache', exact: true }).selectOption('ja')
+    await expect(page.getByRole('button', { name: '＋ 新規接続', exact: true })).toBeVisible()
+    await page.reload()
+    await expect(page.getByRole('combobox', { name: '言語', exact: true })).toHaveValue('ja')
+    await page.getByRole('combobox', { name: '言語', exact: true }).selectOption('system')
+    await expect(page.getByRole('button', { name: '+ Neue Verbindung', exact: true })).toBeVisible()
+  })
+})
+test('Arabic direction and all 14 language options are available', async ({ page }) => {
+  const select = page.getByRole('combobox', { name: '语言', exact: true })
+  await expect(select.locator('option')).toHaveCount(15)
+  await select.selectOption('ar')
+  await expect(page.locator('html')).toHaveAttribute('lang', 'ar')
+  await expect(page.locator('html')).toHaveAttribute('dir', 'rtl')
+  await expect(page.getByRole('button', { name: '+ اتصال جديد', exact: true })).toBeVisible()
+  await expect(page.locator('.connection-item').filter({ hasText: 'MySQL Local' })).toBeVisible()
+  await page.getByRole('combobox', { name: 'اللغة', exact: true }).selectOption('zh-TW')
+  await expect(page.locator('html')).toHaveAttribute('dir', 'ltr')
+  await expect(page.getByRole('button', { name: '＋ 新建連線', exact: true })).toBeVisible()
 })

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '../i18n'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as monaco from 'monaco-editor/editor/editor.api'
 import 'monaco-editor/editor/browser/coreCommands'
@@ -69,4 +70,4 @@ defineExpose({
 })
 </script>
 
-<template><div ref="host" class="code-editor" aria-label="代码编辑器"></div></template>
+<template><div ref="host" class="code-editor" :aria-label="t('代码编辑器')"></div></template>

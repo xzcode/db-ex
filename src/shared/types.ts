@@ -155,6 +155,8 @@ export interface QuerySnippet {
 export interface FileImport { name: string; text: string; format: 'csv' | 'json' | 'text' }
 export interface SshImportResult { hosts: { name: string; ssh: SshOptions }[]; warnings: string[] }
 export interface DbExAPI {
+  getSystemLanguage(): Promise<string>
+  setLocale(locale: import('./i18n').Locale): Promise<void>
   listConnections(): Promise<SavedConnection[]>
   saveConnection(config: ConnectionConfig, clearSecrets?: string[]): Promise<SavedConnection>
   editConnection(id: string): Promise<ConnectionDraft>

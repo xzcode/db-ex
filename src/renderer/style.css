@@ -260,3 +260,31 @@ kbd { color: #ffffffb0; font-size: 9px; }
   .redis-key-list { flex-basis: 38%; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; } }
+
+/* Keep language controls aligned with the existing toolbar inputs. */
+.language-select { height: 32px; max-width: 168px; padding: 4px 8px; font-size: 12px; }
+.connection-actions { flex-shrink: 0; }
+.workbench-tabs { overflow-x: auto; }
+.workbench-tabs > button { white-space: nowrap; }
+
+/* Localized toolbars and narrow sidebar buttons must not clip long labels. */
+.sidebar-bottom { flex-wrap: wrap; }
+.sidebar-bottom .btn { flex: 1 1 90px; white-space: normal; }
+.subtabs { overflow-x: auto; }
+.subtabs > button, .workbench-tabs > button { flex-shrink: 0; }
+.dialog-footer { flex-wrap: wrap; }
+.top-actions .top-hint { max-width: 195px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Arabic mirrors the workspace. Code, numeric values and result columns stay LTR. */
+.connection-item { border-left: none; border-inline-start: 3px solid transparent; }
+.connection-item.production { border-inline-start-color: #c87558; }
+.connection-actions { right: auto; inset-inline-end: 4px; }
+.active-item, .resource-node { text-align: start; }
+.child-node { padding-left: 10px; padding-inline-start: 38px; }
+.status-right, .operation-progress .btn { margin-left: 0; margin-inline-start: auto; }
+.session-tab, .redis-key-list { border-right: none; border-inline-end: 1px solid var(--border); }
+.tab-close { margin-right: 0; margin-inline-end: 4px; }
+.transaction-text { margin-left: 0; margin-inline-start: 8px; }
+.welcome-features span { border-left: none; padding-left: 0; border-inline-start: 2px solid var(--accent); padding-inline-start: 8px; }
+html[dir=rtl] .inline-message .ghost-icon { float: left; }
+html[dir=rtl] .resource-node .arrow { transform: scaleX(-1); }
+html[dir=rtl] .grid-scroll, html[dir=rtl] .code-editor, html[dir=rtl] .history-list pre, html[dir=rtl] textarea, html[dir=rtl] input[type=number], html[dir=rtl] input[type=password], html[dir=rtl] input[spellcheck=false], html[dir=rtl] .node-row input { direction: ltr; text-align: left; }

@@ -1,6 +1,7 @@
 import { _electron as electron } from 'playwright'
 import assert from 'node:assert/strict'
-import { access, readdir } from 'node:fs/promises'
+import { access, readdir, mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { resolve, join } from 'node:path'
 async function packagedExecutable() {
   const root = resolve('release')
@@ -10,13 +11,15 @@ async function packagedExecutable() {
   throw new Error('Packaged DB EX executable was not found')
 }
 const packaged = process.env.DB_EX_PACKAGED === '1'
-const application = await electron.launch({
+const userData = await mkdtemp(join(tmpdir(), 'dbex-smoke-'))
+let application
+try {
+application = await electron.launch({
   ...(packaged ? { executablePath: await packagedExecutable() } : {}),
-  args: [...(packaged ? [] : ['.']), '--disable-gpu'],
+  args: [...(packaged ? [] : ['.']), '--disable-gpu', '--user-data-dir=' + userData],
   env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' },
   timeout: 30000,
 })
-try {
   const page = await application.firstWindow({ timeout: 30000 })
   await page.waitForSelector('#app', { state: 'visible' })
   await page.waitForFunction(() => typeof window.dbex?.listConnections === 'function')
@@ -43,6 +46,26 @@ try {
     for (const [name, handler] of Object.entries(handlers)) { ipcMain.removeHandler(name); ipcMain.handle(name, handler) }
   })
   await page.reload()
+  // Fresh profiles follow the actual OS language. Use the native language
+  // selector to choose the test locale instead of relying on the runner's
+  // language, and verify both locale switching and persistence in the package.
+  const select = page.locator('.language-select')
+  await select.waitFor({ state: 'visible' })
+  assert.equal(await select.inputValue(), 'system')
+  assert.equal(await select.locator('option').count(), 15)
+  const systemLocale = await page.evaluate(() => window.dbex.getSystemLanguage())
+  assert.equal(typeof systemLocale, 'string')
+  assert(systemLocale.length > 0)
+  const systemLang = await page.locator('html').getAttribute('lang')
+  assert(systemLang)
+  await select.selectOption('en')
+  await page.waitForFunction(() => document.documentElement.lang === 'en')
+  await page.getByRole('button', { name: '+ New connection', exact: true }).waitFor({ state: 'visible' })
+  await select.selectOption('zh-CN')
+  await page.waitForFunction(() => document.documentElement.lang === 'zh-CN')
+  await page.reload()
+  await page.waitForFunction(() => document.documentElement.lang === 'zh-CN')
+  assert.equal(await select.inputValue(), 'zh-CN')
   await page.locator('.connection-item').filter({ hasText: 'Smoke MySQL' }).getByTitle('连接', { exact: true }).click()
   await page.getByRole('button', { name: 'SQL 编辑器', exact: true }).click()
   await page.locator('.query-editor .monaco-editor').waitFor({ state: 'visible' })
@@ -51,4 +74,7 @@ try {
   assert.deepEqual(pageErrors, [])
   await page.screenshot({ path: 'electron-smoke.png', fullPage: true })
   console.log(`${packaged ? 'Packaged' : 'Built'} Electron smoke passed: desktop launch, sandbox, real preload IPC, Monaco and query UI`)
-} finally { await application.close() }
+} finally {
+  if (application) await application.close()
+  await rm(userData, { recursive: true, force: true })
+}

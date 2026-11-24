@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '../i18n'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 const props = withDefaults(defineProps<{
@@ -58,21 +59,21 @@ function display(value: unknown): string {
 </script>
 
 <template>
-  <div ref="scrollHost" class="grid-scroll" tabindex="0" aria-label="结果表格" @scroll.passive="onScroll">
+  <div ref="scrollHost" class="grid-scroll" tabindex="0" :aria-label="t('结果表格')" @scroll.passive="onScroll">
     <table :class="['data-table', { 'virtual-grid': virtual }]" :aria-rowcount="rows.length + 1">
       <thead><tr>
-        <th v-if="selectable" class="number-cell"><input type="checkbox" aria-label="选择当前页" :checked="rows.length > 0 && checked.length === rows.length" @change="emit('checkAll')" /></th>
+        <th v-if="selectable" class="number-cell"><input type="checkbox" :aria-label="t('选择当前页')" :checked="rows.length > 0 && checked.length === rows.length" @change="emit('checkAll')" /></th>
         <th class="number-cell">#</th><th v-for="column in columns" :key="column">{{ column }}</th>
       </tr></thead>
       <tbody>
         <tr v-if="topSpace" class="virtual-spacer" aria-hidden="true"><td :colspan="columnCount" :style="{ height: topSpace + 'px' }"></td></tr>
         <tr v-for="item in visibleRows" :key="item.index" :data-row-index="item.index" :aria-rowindex="item.index + 2" :class="{ selected: selected === item.index }" @click="emit('select', item.index)" @dblclick="emit('open', item.index)">
-          <td v-if="selectable" class="number-cell"><input type="checkbox" :aria-label="`选择第 ${item.index + 1} 行`" :checked="checked.includes(item.index)" @click.stop @change="emit('check', item.index)" /></td>
+          <td v-if="selectable" class="number-cell"><input type="checkbox" :aria-label="t('选择第 {0} 行', [item.index + 1])" :checked="checked.includes(item.index)" @click.stop @change="emit('check', item.index)" /></td>
           <td class="number-cell">{{ offset + item.index + 1 }}</td>
           <td v-for="column in columns" :key="column" :class="{ 'null-cell': item.row[column] === null || item.row[column] === undefined }" :title="display(item.row[column])">{{ display(item.row[column]) }}</td>
         </tr>
         <tr v-if="bottomSpace" class="virtual-spacer" aria-hidden="true"><td :colspan="columnCount" :style="{ height: bottomSpace + 'px' }"></td></tr>
-        <tr v-if="!rows.length"><td :colspan="columnCount" class="empty-grid">暂无记录</td></tr>
+        <tr v-if="!rows.length"><td :colspan="columnCount" class="empty-grid">{{ t('暂无记录') }}</td></tr>
       </tbody>
     </table>
   </div>
