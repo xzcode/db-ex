@@ -2,7 +2,7 @@
 
 本地优先的桌面数据库工具，统一管理 **MySQL、MongoDB、Redis**。基于 Electron、Vue 3、TypeScript 与 Monaco，不依赖账号、云端服务或遥测。
 
-当前版本：**0.5.0 开发预览版**。M2–M5 的功能实现已接入；完整范围、验收证据和限制见 [路线图](docs/ROADMAP.md)。预览安装包与最终发行签名是不同的交付项。
+当前版本：**0.5.1 预览版**。M2–M5 的功能实现已接入；完整范围、验收证据和限制见 [路线图](docs/ROADMAP.md)。预览安装包与最终发行签名是不同的交付项。
 
 ## 功能
 
@@ -27,13 +27,13 @@
 要求 Node.js **22.12+**、npm，以及相应平台的 Electron 桌面运行依赖。
 
 ```bash
-git clone -b feature/m0-m1-core https://github.com/xzcode/db-ex.git
+git clone https://github.com/xzcode/db-ex.git
 cd db-ex
 npm ci
 npm run dev
 ```
 
-当前增量开发沿用 PR #1 的功能分支。合并后可使用默认分支。
+默认分支 `master` 包含当前预览版；新功能在独立分支推进。
 
 ```bash
 npm run typecheck       # 前后端类型检查
@@ -100,4 +100,10 @@ npm run test:integration
 
 ## macOS installation notes
 
-v0.5.0 was an unsigned preview; the next macOS build uses ad-hoc signing (like Shell EX), still without notarization. See [macOS install and Gatekeeper troubleshooting](docs/MAC_INSTALL.md) before bypassing the "app is damaged" warning. Native application icons for the next build are generated reproducibly with `npm run icons` (macOS ICNS, Windows ICO and Linux PNG).
+v0.5.1 macOS preview uses Ad-hoc signing (like Shell EX), but is **not notarized**. Browser downloads may still require Gatekeeper approval. See [macOS install and Gatekeeper troubleshooting](docs/MAC_INSTALL.md) before bypassing the "app is damaged" warning. Native application icons for the next build are generated reproducibly with `npm run icons` (macOS ICNS, Windows ICO and Linux PNG).
+
+## v0.5.1 Preview
+
+This preview consolidates MongoDB single-host auto-direct connections, authSource/TLS diagnostics and the approved app icon across native macOS, Windows and Linux packages. Published Release assets must pass native packaging and packaged-app smoke checks. See [release notes](docs/RELEASE_v0.5.1.md).
+
+This public repository currently has no `LICENSE` file; visibility alone does not grant unrestricted redistribution rights.

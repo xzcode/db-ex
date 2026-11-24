@@ -47,4 +47,4 @@ Ad-hoc 签名不提供 Apple Developer 身份和公证，也不能保证每个�
 
 必须使用有效的 Apple Developer ID Application 证书签名 macOS App，并完成 notarization、公证凭据配置及 stapling，在干净 macOS 设备上从浏览器重新下载后实测。**仅更换图标、改名或再次生成 DMG 不能实现这个目标。**
 
-接下来的开发分支已经提供使用你选定的青蓝色数据库标识的自定义应用图标（macOS ICNS、Windows ICO、Linux PNG），但它只会出现在使用该分支重新打包的后续版本，不能回溯修改 v0.5.0 已发布文件。
+自 v0.5.1 预览版起，安装包统一使用你确认的青蓝色数据库图标；源文件受 SHA-256 校验，支持 macOS ICNS、Windows ICO 与 Linux PNG（macOS ICNS、Windows ICO、Linux PNG），但它只会出现在使用该分支重新打包的后续版本，不能回溯修改 v0.5.0 已发布文件。
