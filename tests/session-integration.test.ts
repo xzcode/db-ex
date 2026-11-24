@@ -54,3 +54,38 @@ test('SessionManager routes real MySQL, MongoDB and Redis through authenticated 
     await redisAdmin.del(redisKey); redisAdmin.disconnect()
   }
 })
+
+test('MongoDB saved-field credentials authenticate against the intended authSource and reject invalid passwords', { skip: !enabled, timeout: 40_000 }, async () => {
+  const admin = new MongoClient(process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017', { serverSelectionTimeoutMS: 8000 })
+  const name = 'dbex_auth_' + randomBytes(6).toString('hex')
+  const password = randomBytes(24).toString('hex')
+  const manager = new SessionManager()
+  let created = false
+  try {
+    await admin.connect()
+    await admin.db('admin').command({ createUser: name, pwd: password, roles: [{ role: 'read', db: 'admin' }] })
+    created = true
+    const original: ConnectionConfig = {
+      ...base('mongodb', 27017), name: 'authSource test',
+      username: name, password, database: 'admin', authSource: 'admin',
+    }
+    // A locally redacted edit must restore encrypted-secret-shaped values
+    // without exposing the password in the renderer.
+    const { redactConnection, mergeConnectionSecrets } = await import('../src/main/connections/credentials')
+    const redacted = redactConnection(original)
+    assert(!JSON.stringify(redacted.config).includes(password))
+    const restored = mergeConnectionSecrets(redacted.config, original)
+    assert.equal(restored.password, password)
+    const connected = await manager.connect(restored)
+    try {
+      assert.equal(connected.kind, 'mongodb')
+      assert((await manager.roots(connected.id)).some(item => item.database === 'admin'))
+    } finally { await manager.disconnect(connected.id) }
+    await assert.rejects(manager.connect({ ...original, password: password + 'wrong' }), /MONGO_AUTH_FAILED/)
+    await assert.rejects(manager.connect({ ...original, authSource: 'wrong_auth_source' }), /MONGO_AUTH_FAILED/)
+  } finally {
+    await manager.closeAll()
+    if (created) await admin.db('admin').command({ dropUser: name }).catch(() => {})
+    await admin.close()
+  }
+})

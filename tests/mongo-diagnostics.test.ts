@@ -11,6 +11,7 @@ test('MongoDB connection failures expose safe, actionable categories', () => {
     [{ name: 'MongoServerSelectionError', cause: { name: 'MongoNetworkTimeoutError', message: 'connection timed out' } }, 'MONGO_TIMEOUT'],
     [{ name: 'MongoServerSelectionError', message: 'ReplicaSetNoPrimary' }, 'MONGO_TOPOLOGY_FAILED'],
     [{ name: 'MongoNetworkError', cause: { code: 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' } }, 'MONGO_TLS_FAILED'],
+    [{ name: 'MongoCompatibilityError', message: 'Server at 198.51.100.17 reports maximum wire version 7, but this version of the Node.js Driver requires at least 8' }, 'MONGO_VERSION_UNSUPPORTED'],
     [{ name: 'MongoParseError', message: 'Invalid scheme' }, 'MONGO_URI_INVALID'],
     [{ name: 'MongoServerError', code: 13, codeName: 'Unauthorized', message: 'not authorized' }, 'MONGO_PERMISSION_DENIED'],
   ]

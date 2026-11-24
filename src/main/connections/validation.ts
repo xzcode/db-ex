@@ -83,12 +83,24 @@ export function validateConnection(value: unknown, allowMissingSecrets = false):
   const uri = text(v.uri, 'MongoDB URI', 8192)
   if (uri) {
     if (kind !== 'mongodb' || !/^mongodb(?:\+srv)?:\/\//i.test(uri)) throw new Error('INVALID_CONNECTION: URI 仅支持 mongodb:// 或 mongodb+srv://')
-    const query = new URLSearchParams(uri.slice(uri.indexOf('?') + 1))
+    const query = new URLSearchParams(uri.includes('?') ? uri.slice(uri.indexOf('?') + 1) : '')
     for (const [key, val] of query) {
       const k = key.toLowerCase()
       if ((['tlsinsecure', 'tlsallowinvalidcertificates', 'tlsallowinvalidhostnames'].includes(k) && val.toLowerCase() !== 'false') || k.startsWith('proxy')) throw new Error('INVALID_CONNECTION: URI 不允许跳过 TLS 校验或覆盖代理配置')
       if (['tlscafile', 'tlscertificatekeyfile', 'tlscrlfile'].includes(k)) throw new Error('INVALID_CONNECTION: 请在 TLS 页配置证书路径')
       if (v.tls && (v.tls as TlsOptions).enabled && ['ssl', 'tls'].includes(k) && val.toLowerCase() === 'false') throw new Error('INVALID_CONNECTION: URI 与 TLS 配置冲突')
+    }
+  }
+  // ConnectionDialog keeps inactive per-engine form state when users switch DB types.
+  // Ignore Mongo topology inputs for MySQL/Redis instead of rejecting those profiles.
+  const mongoTopology = kind !== 'mongodb' || v.mongoTopology === undefined ? undefined : text(v.mongoTopology, 'MongoDB 拓扑模式', 16)
+  if (mongoTopology && !['auto', 'direct', 'discover'].includes(mongoTopology)) throw new Error('INVALID_CONNECTION: MongoDB 拓扑模式只能是自动、直连或副本集发现')
+  if (uri && mongoTopology && mongoTopology !== 'auto') {
+    const options = new URLSearchParams(uri.includes('?') ? uri.slice(uri.indexOf('?') + 1) : '')
+    const queryDirect = options.get('directConnection')
+    if ((mongoTopology === 'direct' && queryDirect?.toLowerCase() === 'false') ||
+        (mongoTopology === 'discover' && queryDirect?.toLowerCase() === 'true')) {
+      throw new Error('INVALID_CONNECTION: MongoDB URI 的 directConnection 与所选拓扑模式冲突')
     }
   }
   const target = uri && !v.host ? { host: '', port: integer(v.port, '端口', 1, 65535, 27017) } : endpoint(v)
@@ -98,6 +110,15 @@ export function validateConnection(value: unknown, allowMissingSecrets = false):
   if (v.nodes !== undefined) {
     if (!Array.isArray(v.nodes) || v.nodes.length > 20) throw new Error('INVALID_CONNECTION: 种子节点最多20个')
     nodes = v.nodes.map(endpoint)
+  }
+  const directRequested = mongoTopology === 'direct' || (!mongoTopology && v.mongoDirect === true)
+  if (kind === 'mongodb' && directRequested && (nodes?.length || 0) > 1) {
+    throw new Error('INVALID_CONNECTION: MongoDB 直连只能指定一个种子节点；请改用副本集发现模式')
+  }
+  if (kind === 'mongodb' && directRequested && uri) {
+    if (/^mongodb\+srv:\/\//i.test(uri)) throw new Error('INVALID_CONNECTION: SRV URI 不支持 MongoDB 直连模式')
+    const authority = uri.replace(/^mongodb:\/\//i, '').split('/')[0]!.split('@').pop()!
+    if (authority.includes(',')) throw new Error('INVALID_CONNECTION: 多节点 MongoDB URI 不支持直连；请改用副本集发现模式')
   }
   if (kind === 'redis' && redisMode !== 'standalone' && !nodes?.length) throw new Error('INVALID_CONNECTION: 集群或 Sentinel 至少需要一个种子节点')
   const redisDb = integer(v.redisDb, 'Redis DB', 0, 1023, 0)
@@ -114,7 +135,7 @@ export function validateConnection(value: unknown, allowMissingSecrets = false):
     database: text(v.database, '数据库名称', 200), authSource: text(v.authSource, '认证数据库', 200), redisDb, uri,
     ssh: ssh(v.ssh, false, allowMissingSecrets), tls: tlsOptions, proxy: proxy(v.proxy), redisMode: redisMode as ConnectionConfig['redisMode'], nodes,
     sentinelMaster, sentinelUsername: text(v.sentinelUsername, 'Sentinel 用户名', 512), sentinelPassword: text(v.sentinelPassword, 'Sentinel 密码', 8192),
-    sentinelTls: bool(v.sentinelTls, 'Sentinel TLS'), mongoReplicaSet: text(v.mongoReplicaSet, '副本集名称', 200), mongoDirect: bool(v.mongoDirect, 'MongoDB 直连'),
+    sentinelTls: bool(v.sentinelTls, 'Sentinel TLS'), mongoReplicaSet: text(v.mongoReplicaSet, '副本集名称', 200), mongoDirect: bool(v.mongoDirect, 'MongoDB 直连'), mongoTopology: mongoTopology as ConnectionConfig['mongoTopology'],
     connectTimeoutMs: integer(v.connectTimeoutMs, '连接超时毫秒', 1000, 60000, 12000) }
 }
 export function validateId(value: unknown): asserts value is string { text(value, 'ID', 128, true) }

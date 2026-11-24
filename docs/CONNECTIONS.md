@@ -51,11 +51,11 @@
 
 可使用字段配置或 `mongodb://` / `mongodb+srv://` URI。完整 URI 加密保存，连接列表及编辑回读均不返回其内容。URI 和字段配置不要混用不同认证信息；使用 URI 时驱动采用 URI 内认证配置。
 
-副本集可填写 `mongoReplicaSet` 或在 URI 中提供 `replicaSet`；单节点/专门的单节点管理可启用 `mongoDirect`。启用 SSH/代理时，应用建立一个带随机会话认证的 loopback SOCKS5 入口，驱动发现的成员继续经过相同传输路径。发现成员的 DNS 名称与端口必须对最终出口可达；本轮没有任意 NAT 地址映射表。
+拓扑模式有 `auto`、`direct`、`discover`：**自动模式下仅填写一个主机（未配置 Replica Set 或 URI）时，默认直连该端点**，不尝试连接服务器向外宣告的其他副本集成员，适合公网端口映射或只暴露单个入口的 SSH；明确填写 Replica Set 名称或多个种子节点时保留驱动自动发现。完整 URI 仍优先采用 URI 内的拓扑选项。需要高可用故障转移时请选“副本集发现”，确保所有成员都可达。旧连接配置中的 `mongoDirect=true` 继续表示强制直连。启用 SSH/代理时，应用建立一个带随机会话认证的 loopback SOCKS5 入口，驱动发现的成员继续经过相同传输路径。发现成员的 DNS 名称与端口必须对最终出口可达；本轮没有任意 NAT 地址映射表。
 
 SRV/TXT 发现由本机 DNS 执行。仅在跳板机内部可解析的 SRV 名称，需要改用显式种子列表或配置本机可用的 DNS；代理不会自动代理 SRV 查询。
 
-URI 禁止 `tlsInsecure`、无效证书/主机名放行、代理覆盖以及绕过表单的证书文件路径。TLS 表单启用时拒绝 URI 的 `tls=false` / `ssl=false` 冲突。
+URI 禁止 `tlsInsecure`、无效证书/主机名放行、代理覆盖以及绕过表单的证书文件路径。 MongoDB URI 通过 `tls=true` / `ssl=true` 启用 TLS、或 SRV URI 默认启用 TLS 时，DB EX 也会读取 TLS 页面填写的 CA、客户端证书和私钥路径，即使未额外勾选 TLS 开关；仍会强制验证证书链与主机名。TLS 表单启用时拒绝 URI 的 `tls=false` / `ssl=false` 冲突。
 
 副本集选主或瞬时网络故障时，驱动可在操作时间预算内重新选择节点并安全重试明确可重试的读取；总操作仍受 30 秒上限与取消信号约束。写入自动重试保持关闭，不确定的写入结果需要用户核对后重新发起。此机制不保证所有游标阶段都能恢复，也不保证跨次读取构成一致快照。
 
@@ -69,8 +69,11 @@ URI 禁止 `tlsInsecure`、无效证书/主机名放行、代理覆盖以及绕�
 - `MONGO_TOPOLOGY_FAILED`：核对副本集名称及各成员地址；仅用于单节点管理时可启用直连。
 - `MONGO_TIMEOUT` / `MONGO_SERVER_SELECTION_FAILED`：排查网络、SSH/代理、防火墙及节点可达性。
 - `MONGO_URI_INVALID`：核对 URI 语法，账号密码含特殊字符时必须百分号编码。
+- `MONGO_VERSION_UNSUPPORTED`：核对服务端版本；当前 MongoDB Node 驱动 6.x 要求 MongoDB 4.2 或更新版本，Navicat 可能使用不同驱动。
 
 这些提示不会显示原始驱动异常、凭据或完整 URI。尚未能识别的错误仍显示保守的 `CONNECTION_FAILED`。
+
+连接测试现在会在驱动建立连接后执行一次只读 `ping`，确认实际服务端命令和认证可以成功，而不只是客户端创建成功。编辑已保存 URI 时，基本设置字段会被禁用，须明确清除 URI 才能重新使用主机/用户名/密码。拓扑页若填写种子节点，则它们优先于基本设置的主机地址。
 
 ## Redis
 

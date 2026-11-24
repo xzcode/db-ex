@@ -3,6 +3,8 @@ import net, { type Socket } from 'node:net'
 import test from 'node:test'
 import { BSON, MongoClient, type Document } from 'mongodb'
 import { MongoOperations } from '../src/main/operations/mongodb'
+import { SessionManager } from '../src/main/connections/manager'
+import type { ConnectionConfig } from '../src/shared/types'
 
 const read = { writable: false, confirmed: false }
 const write = { writable: true, confirmed: true }
@@ -10,7 +12,7 @@ const canonical = (value: unknown) => BSON.EJSON.stringify(value, { relaxed: fal
 const notPrimary = { ok: 0, code: 13435, codeName: 'NotPrimaryNoSecondaryOk', errmsg: 'not primary and secondaryOk=false' }
 
 /** A bounded local wire fixture exercises the actual driver, not mocked cursors. */
-async function mongoWire(handler: (command: Document) => Document) {
+async function mongoWire(handler: (command: Document) => Document, helloOverride: Document = {}) {
   const sockets = new Set<Socket>()
   const errors: Error[] = []
   let address = ''
@@ -48,6 +50,7 @@ async function mongoWire(handler: (command: Document) => Document) {
                 minWireVersion: 0, maxWireVersion: 21, logicalSessionTimeoutMinutes: 30,
                 maxBsonObjectSize: 16 * 1024 * 1024, maxMessageSizeBytes: 48 * 1024 * 1024,
                 maxWriteBatchSize: 100_000,
+                ...helloOverride,
               }
             : handler(command)
           const bson = BSON.serialize(reply)
@@ -152,6 +155,40 @@ test('Mongo getMore failure does not replay an already-started cursor', { timeou
   } finally {
     await operations.close()
     await client.close()
+    await fixture.close()
+  }
+})
+
+
+test('a single advertised MongoDB seed is reachable in auto/direct mode even if discovered members are private', { timeout: 15_000 }, async () => {
+  // Simulates a mapped public endpoint that advertises internal-only replica
+  // members. The fixture runs entirely on loopback; no production DB is used.
+  const fixture = await mongoWire(() => ({ ok: 1 }), {
+    setName: 'mapped-rs',
+    hosts: ['hidden-member.invalid:27017'],
+    me: 'hidden-member.invalid:27017',
+    primary: 'hidden-member.invalid:27017',
+  })
+  const manager = new SessionManager()
+  const endpoint = new URL(fixture.uri)
+  const options: ConnectionConfig = {
+    name: 'mapped MongoDB endpoint', kind: 'mongodb', environment: 'testing',
+    host: endpoint.hostname, port: Number(endpoint.port), authSource: 'admin',
+    ssh: { enabled: false, host: '', port: 22, username: '', authMode: 'agent' },
+    tls: { enabled: false }, connectTimeoutMs: 1800,
+  }
+  try {
+    const direct = await manager.connect(options)
+    assert.equal(direct.kind, 'mongodb')
+    await manager.disconnect(direct.id)
+    await assert.rejects(
+      manager.connect({ ...options, mongoTopology: 'discover' }),
+      /MONGO_(?:DNS_FAILED|TOPOLOGY_FAILED|TIMEOUT|SERVER_SELECTION_FAILED)|CONNECTION_FAILED/,
+      'Explicit discovery must not secretly fall back to a single endpoint',
+    )
+    assert.deepEqual(fixture.errors, [])
+  } finally {
+    await manager.closeAll()
     await fixture.close()
   }
 })
