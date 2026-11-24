@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import type { ConnectionConfig } from '../src/shared/types'
 import { validateConnection } from '../src/main/connections/validation'
-import { mongoDirectConnection, mongoTopologyMode } from '../src/main/connections/mongo-topology'
+import { mongoDirectConnection, mongoTopologyMode, mongoUriTlsEnabled } from '../src/main/connections/mongo-topology'
 import { mergeConnectionSecrets, redactConnection } from '../src/main/connections/credentials'
 
 const basic = (): ConnectionConfig => ({
@@ -50,4 +50,13 @@ test('switching topology does not drop saved password, but changing auth endpoin
   assert.equal(preserved.password, previous.password)
   redacted.host = '198.51.100.18'
   assert.equal(mergeConnectionSecrets(redacted, previous).password, undefined)
+})
+
+test('MongoDB URI and SRV TLS settings activate certificate loading without changing validation rules', () => {
+  assert.equal(mongoUriTlsEnabled('mongodb://db.example.test:27017/admin'), false)
+  assert.equal(mongoUriTlsEnabled('mongodb://db.example.test:27017/admin?tls=true'), true)
+  assert.equal(mongoUriTlsEnabled('mongodb://db.example.test:27017/admin?ssl=true'), true)
+  assert.equal(mongoUriTlsEnabled('mongodb+srv://cluster.example.test/admin'), true)
+  assert.equal(mongoUriTlsEnabled('mongodb+srv://cluster.example.test/admin?tls=false'), false)
+  assert.equal(mongoUriTlsEnabled(undefined), false)
 })
