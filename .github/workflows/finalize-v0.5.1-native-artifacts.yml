@@ -1,0 +1,106 @@
+name: Finalize DB EX v0.5.1 from verified native CI artifacts
+on:
+  push:
+    branches: [master]
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: db-ex-native-artifact-v0.5.1
+  cancel-in-progress: false
+
+jobs:
+  finalize:
+    if: "github.repository == 'xzcode/db-ex' && github.event.head_commit.message == 'release: finalize DB EX v0.5.1 from successful CI'"
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Verify v0.5.1 release source, CI provenance, and empty draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          ci_run=45365994264
+          ci_sha=eb915cc868e7596d032055a1fb803b6b91e61b0a
+          release_sha=32878f9624d93d77e1e9183d1e6bc460b4a674e2
+          tree_sha=812f9e2d54f6e1396f7c03dd77b02fc97cc77653
+          draft_id=456544478
+          payload="$(gh api "repos/$repo/releases/$draft_id")"
+          jq -e --arg sha "$release_sha" '.tag_name == "v0.5.1" and .draft == true and .target_commitish == $sha and (.assets | length) == 0' <<< "$payload" >/dev/null
+          ci="$(gh api "repos/$repo/actions/runs/$ci_run")"
+          jq -e --arg sha "$ci_sha" '.conclusion == "success" and .head_sha == $sha' <<< "$ci" >/dev/null
+          [[ "$(gh api "repos/$repo/git/commits/$ci_sha" --jq '.tree.sha')" == "$tree_sha" ]] || { echo "::error::CI tree changed"; exit 1; }
+          [[ "$(gh api "repos/$repo/git/commits/$release_sha" --jq '.tree.sha')" == "$tree_sha" ]] || { echo "::error::Release tree changed"; exit 1; }
+          echo "Native CI and v0.5.1 original release source have the exact same Git tree."
+
+      - name: Download all three successful native installer artifact sets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/mac artifacts/windows artifacts/linux
+          gh run download 45365994264 --repo "$GITHUB_REPOSITORY" --name db-ex-0.5.0-macOS-ARM64-unsigned --dir artifacts/mac
+          gh run download 45365994264 --repo "$GITHUB_REPOSITORY" --name db-ex-0.5.0-Windows-X64-unsigned --dir artifacts/windows
+          gh run download 45365994264 --repo "$GITHUB_REPOSITORY" --name db-ex-0.5.0-Linux-X64-unsigned --dir artifacts/linux
+          echo "Native macOS, Windows and Linux artifacts downloaded."
+
+      - name: Validate native installers and their original SHA-256 files
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd artifacts/mac && sha256sum -c SHA256SUMS.txt)
+          (cd artifacts/windows && sha256sum -c SHA256SUMS.txt)
+          (cd artifacts/linux && sha256sum -c SHA256SUMS.txt)
+          mkdir -p upload
+          cp artifacts/mac/DB-EX-0.5.1-mac-arm64.dmg upload/
+          cp artifacts/mac/DB-EX-0.5.1-mac-arm64.zip upload/
+          cp artifacts/windows/DB-EX-0.5.1-win-x64.exe upload/
+          cp artifacts/linux/DB-EX-0.5.1-linux-x86_64.AppImage upload/
+          cp artifacts/linux/DB-EX-0.5.1-linux-amd64.deb upload/
+          cp artifacts/mac/SHA256SUMS.txt upload/SHA256SUMS-macOS-ARM64.txt
+          cp artifacts/windows/SHA256SUMS.txt upload/SHA256SUMS-Windows-X64.txt
+          cp artifacts/linux/SHA256SUMS.txt upload/SHA256SUMS-Linux-X64.txt
+          [[ "$(find upload -maxdepth 1 -type f | wc -l)" == 8 ]] || { echo "::error::Wrong artifact count"; exit 1; }
+          for f in upload/*.dmg upload/*.zip upload/*.exe upload/*.AppImage upload/*.deb; do
+            [[ -s "$f" ]] && [[ "$(stat -c '%s' "$f")" -gt 1048576 ]] || { echo "::error::Invalid installer: $f"; exit 1; }
+          done
+          echo "Five native installers and three SHA-256 manifests verified."
+
+      - name: Upload verified assets to the existing unpublished v0.5.1 draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release upload v0.5.1 upload/* --repo "$GITHUB_REPOSITORY"
+          echo "Uploaded eight release assets."
+
+      - name: Verify upload names, byte sizes and SHA digests then publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          draft_id=456544478
+          payload="$(gh api "repos/$repo/releases/$draft_id")"
+          jq -e --arg sha 32878f9624d93d77e1e9183d1e6bc460b4a674e2 '.draft == true and .tag_name == "v0.5.1" and .target_commitish == $sha and (.assets | length) == 8' <<< "$payload" >/dev/null
+          for f in upload/*; do
+            name="$(basename "$f")"
+            size="$(stat -c '%s' "$f")"
+            count="$(jq -r --arg name "$name" '[.assets[] | select(.name == $name and .state == "uploaded")] | length' <<< "$payload")"
+            remote_size="$(jq -r --arg name "$name" '[.assets[] | select(.name == $name)] | .[0].size // 0' <<< "$payload")"
+            [[ "$count" == 1 && "$size" == "$remote_size" ]] || { echo "::error::Missing or incomplete GitHub asset $name"; exit 1; }
+            remote_digest="$(jq -r --arg name "$name" '[.assets[] | select(.name == $name)] | .[0].digest // ""' <<< "$payload")"
+            if [[ "$remote_digest" == sha256:* ]]; then
+              local_digest="$(sha256sum "$f" | cut -d ' ' -f 1)"
+              [[ "$remote_digest" == "sha256:$local_digest" ]] || { echo "::error::Wrong digest for $name"; exit 1; }
+            fi
+          done
+          published="$(gh api -X PATCH "repos/$repo/releases/$draft_id" -F draft=false -F prerelease=true)"
+          jq -e '.draft == false and .prerelease == true and .tag_name == "v0.5.1"' <<< "$published" >/dev/null
+          [[ "$(gh api "repos/$repo/git/ref/tags/v0.5.1" --jq '.object.sha')" == 32878f9624d93d77e1e9183d1e6bc460b4a674e2 ]] || { echo "::error::Published tag mismatched source"; exit 1; }
+          echo "Published DB EX v0.5.1: five native installers and three checksums."
