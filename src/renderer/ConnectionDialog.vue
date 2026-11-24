@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { reactive, ref, computed } from 'vue'
 import type { ConnectionConfig, ConnectionDraft, DatabaseKind, SavedConnection, SessionInfo, SshImportResult, SshOptions } from '../shared/types'
 import SshHostFields from './components/SshHostFields.vue'
 const props = defineProps<{ draft?: ConnectionDraft }>()
@@ -24,6 +24,7 @@ config.proxy ||= { enabled: false, type: 'socks5', host: '', port: 1080 }
 config.ssh.jumps ||= []
 config.nodes ||= []
 config.mongoTopology ||= config.mongoDirect ? 'direct' : 'auto'
+const mongoUriActive = computed(() => config.kind === 'mongodb' && (Boolean(config.uri?.trim()) || (Boolean(props.draft?.secretFields.includes('uri')) && !clearSecrets.value.includes('uri'))))
 const kinds: DatabaseKind[] = ['mysql', 'mongodb', 'redis']
 const defaults: Record<DatabaseKind, number> = { mysql: 3306, mongodb: 27017, redis: 6379 }
 function changeKind(kind: DatabaseKind) { config.kind = kind; config.port = defaults[kind]; config.nodes = [] }
@@ -75,11 +76,12 @@ function secretLabel(path: string) {
           <template v-if="page === 'basic'">
             <label class="field field-wide">连接名称<input v-model.trim="config.name" required maxlength="100" placeholder="例如：MySQL Development" autofocus /></label>
             <div class="field field-wide"><span>数据库类型</span><div class="type-picker"><button v-for="kind in kinds" :key="kind" type="button" :class="['type-option', { chosen: config.kind === kind }]" @click="changeKind(kind)">{{ kind === 'mongodb' ? 'MongoDB' : kind === 'mysql' ? 'MySQL' : 'Redis' }}</button></div></div>
-            <label class="field">环境<select v-model="config.environment"><option value="development">开发环境</option><option value="testing">测试环境</option><option value="production">生产环境</option></select></label><label class="field">主机<input v-model.trim="config.host" placeholder="127.0.0.1" /></label><label class="field">端口<input v-model.number="config.port" type="number" min="1" max="65535" /></label>
-            <label v-if="config.kind !== 'redis'" class="field">默认数据库<input v-model.trim="config.database" placeholder="可留空" /></label><label v-else class="field">Redis DB<input v-model.number="config.redisDb" type="number" min="0" max="1023" :disabled="config.redisMode === 'cluster'" /></label>
-            <label class="field">用户名<input v-model.trim="config.username" autocomplete="off" placeholder="可留空" /></label><label class="field">密码<input v-model="config.password" type="password" autocomplete="new-password" :placeholder="props.draft?.secretFields.includes('password') ? '已保存 · 留空保留' : '可留空'" /></label>
-            <label v-if="config.kind === 'mongodb'" class="field">认证库 (authSource)<input v-model.trim="config.authSource" placeholder="admin" /></label><label class="field">连接超时（毫秒）<input v-model.number="config.connectTimeoutMs" type="number" min="1000" max="60000" /></label><label v-if="config.kind === 'mongodb'" class="field field-wide">MongoDB URI（优先于主机设置）<input v-model.trim="config.uri" type="password" autocomplete="new-password" :placeholder="props.draft?.secretFields.includes('uri') ? '已保存 URI · 留空保留' : 'mongodb:// 或 mongodb+srv://'" /></label>
-            <p v-if="config.kind === 'mongodb'" class="compact-help field-wide">填写 URI 后将使用 URI 中的服务器地址和认证信息，不再使用上方的主机、用户名、密码或认证库。普通账号请确认 authSource；副本集经 SSH 连接时，发现的成员也必须能从 SSH 出口访问。</p>
+            <label class="field">环境<select v-model="config.environment"><option value="development">开发环境</option><option value="testing">测试环境</option><option value="production">生产环境</option></select></label><label class="field">主机<input  :disabled="mongoUriActive"v-model.trim="config.host" placeholder="127.0.0.1" /></label><label class="field">端口<input  :disabled="mongoUriActive"v-model.number="config.port" type="number" min="1" max="65535" /></label>
+            <label v-if="config.kind !== 'redis'" class="field">默认数据库<input  :disabled="mongoUriActive"v-model.trim="config.database" placeholder="可留空" /></label><label v-else class="field">Redis DB<input v-model.number="config.redisDb" type="number" min="0" max="1023" :disabled="config.redisMode === 'cluster'" /></label>
+            <label class="field">用户名<input  :disabled="mongoUriActive"v-model.trim="config.username" autocomplete="off" placeholder="可留空" /></label><label class="field">密码<input  :disabled="mongoUriActive"v-model="config.password" type="password" autocomplete="new-password" :placeholder="props.draft?.secretFields.includes('password') ? '已保存 · 留空保留' : '可留空'" /></label>
+            <label v-if="config.kind === 'mongodb'" class="field">认证库 (authSource)<input  :disabled="mongoUriActive"v-model.trim="config.authSource" placeholder="admin" /></label><label class="field">连接超时（毫秒）<input v-model.number="config.connectTimeoutMs" type="number" min="1000" max="60000" /></label><label v-if="config.kind === 'mongodb'" class="field field-wide">MongoDB URI（优先于主机设置）<input v-model.trim="config.uri" type="password" autocomplete="new-password" :placeholder="props.draft?.secretFields.includes('uri') ? '已保存 URI · 留空保留' : 'mongodb:// 或 mongodb+srv://'" /></label>
+            <p v-if="config.kind === 'mongodb'" class="compact-help field-wide">填写或保留加密保存的 URI 时，URI 的地址与认证参数优先于基本设置，其他字段会锁定。要改用基本设置，请清空 URI 或勾选下方“清除 MongoDB URI”。副本集经 SSH 连接时，发现的成员也必须可从 SSH 出口访问。</p>
+            <p v-if="config.kind === 'mongodb' && config.nodes?.length && !mongoUriActive" class="compact-help field-wide">注意：拓扑页配置了 {{ config.nodes.length }} 个种子节点，连接时将优先使用这些节点，而非上方的主机地址。</p>
             <section v-if="props.draft?.secretFields.length" class="secret-settings field-wide"><strong>已保存的凭据</strong><p class="compact-help">凭据不会回传到界面。输入新值可替换，留空保留；勾选下方项目会在测试与保存时使用清除后的配置。</p><label v-for="path in props.draft.secretFields" :key="path" class="checkbox-row"><input type="checkbox" :checked="clearSecrets.includes(path)" @change="toggleClear(path)" /> 清除 {{ secretLabel(path) }}</label></section>
           </template>
           <template v-else-if="page === 'ssh'">
