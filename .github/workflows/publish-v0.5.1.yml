@@ -1,0 +1,127 @@
+name: Publish DB EX v0.5.1 preview
+on:
+  push:
+    branches: [master]
+permissions:
+  contents: write
+concurrency:
+  group: db-ex-release-v0.5.1
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: "github.repository == 'xzcode/db-ex' && startsWith(github.event.head_commit.message, 'release: DB EX v0.5.1 preview')"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare a draft with immutable version tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=v0.5.1
+          repo="$GITHUB_REPOSITORY"
+          if gh api "repos/$repo/git/ref/tags/$tag" >/dev/null 2>&1; then
+            old="$(gh api "repos/$repo/releases?per_page=100" | jq -c --arg tag "$tag" '[.[] | select(.tag_name == $tag)] | .[0]')"
+            [[ "$(jq -r '.draft // false' <<< "$old")" == "true" ]] || { echo "::error::Tag exists without matching draft"; exit 1; }
+            [[ "$(gh api "repos/$repo/git/ref/tags/$tag" --jq '.object.sha')" == "$GITHUB_SHA" ]] || { echo "::error::Existing tag target differs"; exit 1; }
+          else
+            gh release create "$tag" --repo "$repo" --target "$GITHUB_SHA" \
+              --title 'DB EX v0.5.1 (Multi-platform Preview)' \
+              --notes-file docs/RELEASE_v0.5.1.md --draft --prerelease
+          fi
+
+  packages:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            kind: Linux
+            arch: X64
+          - os: macos-15
+            kind: macOS
+            arch: ARM64
+          - os: windows-latest
+            kind: Windows
+            arch: X64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - name: Verify approved artwork source and icons
+        run: node --import tsx --test tests/icon-generator.test.ts
+      - name: Install Linux runtime libraries
+        if: runner.os == 'Linux'
+        run: npx playwright install-deps chromium
+      - name: Build installers on their native platform
+        run: npm exec electron-builder -- --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Strict macOS Ad-hoc signature and icon validation
+        if: runner.os == 'macOS'
+        shell: bash
+        run: bash scripts/verify-mac-package.sh
+      - name: Test packaged Electron app on Linux
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm run smoke:electron
+        env:
+          DB_EX_PACKAGED: '1'
+      - name: Test packaged Electron app on macOS or Windows
+        if: runner.os != 'Linux'
+        run: npm run smoke:electron
+        env:
+          DB_EX_PACKAGED: '1'
+      - name: Compute checksums and upload directly to draft Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          node scripts/check-packages.mjs
+          cp release/SHA256SUMS.txt "release/SHA256SUMS-${{ matrix.kind }}-${{ matrix.arch }}.txt"
+          files=(release/*.dmg release/*.zip release/*.exe release/*.AppImage release/*.deb)
+          (( ${#files[@]} > 0 )) || { echo "::error::No installer built"; exit 1; }
+          files+=("release/SHA256SUMS-${{ matrix.kind }}-${{ matrix.arch }}.txt")
+          gh release upload v0.5.1 "${files[@]}" --repo "$GITHUB_REPOSITORY"
+
+  publish:
+    needs: packages
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Validate all eight uploads and tag, then publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          tag=v0.5.1
+          payload="$(gh api "repos/$repo/releases/tags/$tag")"
+          [[ "$(jq -r '.draft' <<< "$payload")" == 'true' ]] || { echo "::error::Not a draft"; exit 1; }
+          names="$(jq -r '.assets[].name' <<< "$payload")"
+          for file in \
+            DB-EX-0.5.1-mac-arm64.dmg DB-EX-0.5.1-mac-arm64.zip \
+            DB-EX-0.5.1-win-x64.exe \
+            DB-EX-0.5.1-linux-x86_64.AppImage DB-EX-0.5.1-linux-amd64.deb \
+            SHA256SUMS-macOS-ARM64.txt SHA256SUMS-Windows-X64.txt SHA256SUMS-Linux-X64.txt; do
+            grep -Fqx -- "$file" <<< "$names" || { echo "::error::Missing asset $file"; exit 1; }
+          done
+          [[ "$(jq -r '.assets | length' <<< "$payload")" == '8' ]] || { echo "::error::Wrong number of assets"; exit 1; }
+          jq -e '.assets | all(.[]; .state == "uploaded" and (if (.name | endswith(".txt")) then .size > 0 else .size > 1048576 end))' <<< "$payload"
+          [[ "$(gh api "repos/$repo/git/ref/tags/$tag" --jq '.object.sha')" == "$GITHUB_SHA" ]] || { echo "::error::Tag not at release commit"; exit 1; }
+          release_id="$(jq -r '.id' <<< "$payload")"
+          gh api -X PATCH "repos/$repo/releases/$release_id" -F draft=false -F prerelease=true >/dev/null
+          echo 'Published DB EX v0.5.1 native macOS, Windows and Linux installers.'
