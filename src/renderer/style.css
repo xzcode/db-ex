@@ -260,3 +260,9 @@ kbd { color: #ffffffb0; font-size: 9px; }
   .redis-key-list { flex-basis: 38%; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; } }
+
+/* Keep language controls aligned with the existing toolbar inputs. */
+.language-select { height: 32px; max-width: 126px; padding: 4px 8px; font-size: 12px; }
+html[lang=en] .connection-actions { flex-shrink: 0; }
+html[lang=en] .workbench-tabs { overflow-x: auto; }
+html[lang=en] .workbench-tabs > button { white-space: nowrap; }
