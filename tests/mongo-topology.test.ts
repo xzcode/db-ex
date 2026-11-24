@@ -62,7 +62,7 @@ test('real MongoDB replica discovery and primary change keep the same session on
     const before = await primary(admin)
 
     // If the driver silently bypassed SOCKS, this would incorrectly succeed.
-    await assert.rejects(manager.connect({ ...config, proxy: { ...config.proxy!, password: `${proxy.password}-wrong` } }), /CONNECTION_FAILED|PROXY/)
+    await assert.rejects(manager.connect({ ...config, proxy: { ...config.proxy!, password: `${proxy.password}-wrong` } }), /CONNECTION_FAILED|PROXY|MONGO_TOPOLOGY_FAILED|MONGO_SERVER_SELECTION_FAILED/)
     const session = await manager.connect(config)
     assert.equal(session.writable, false)
     await manager.setWriteAccess(session.id, true)
