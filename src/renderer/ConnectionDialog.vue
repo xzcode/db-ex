@@ -5,6 +5,7 @@ import type { ConnectionConfig, ConnectionDraft, DatabaseKind, SavedConnection, 
 import { databaseNames, defaultPorts, initialAuth, initialEntry, mongoUriAddress, newConnectionConfig, newSshHost, prepareConnection, type DatabaseAuthMode, type EntryMode } from '../shared/connection-form'
 import SshHostFields from './components/SshHostFields.vue'
 import FilePathField from './components/FilePathField.vue'
+import ConnectionColorPicker from './components/ConnectionColorPicker.vue'
 const props = defineProps<{ draft?: ConnectionDraft }>()
 const emit = defineEmits<{ close: []; saved: [connection: SavedConnection]; connected: [session: SessionInfo] }>()
 const pages = [{ key: 'basic', label: '基本设置' }, { key: 'tls', label: 'TLS / SSL' }, { key: 'ssh', label: 'SSH / 多跳' }, { key: 'proxy', label: '代理' }, { key: 'advanced', label: '高级设置' }]
@@ -109,7 +110,7 @@ function secretLabel(path: string) {
           <span :class="['db-icon', kind]">{{ symbols[kind] }}</span><span class="choice-name">{{ databaseNames[kind] }}</span><span class="choice-port">{{ defaultPorts[kind] }}</span><span class="choice-arrow">›</span>
         </button>
         <div class="connection-picker-divider"></div>
-        <button class="connection-choice uri-choice" type="button" @click="chooseKind('mongodb', 'uri')"><span class="choice-uri-icon">URI</span><span class="choice-name">{{ t('使用 MongoDB URI') }}</span><span class="choice-arrow">›</span></button>
+        <button class="connection-choice uri-choice" type="button" :aria-label="t('使用 MongoDB URI')" @click="chooseKind('mongodb', 'uri')"><span class="choice-uri-icon">URI</span><span class="choice-name">{{ t('使用 MongoDB URI') }}</span><span class="choice-arrow">›</span></button>
       </div>
       <footer class="dialog-footer"><button class="btn secondary" type="button" @click="emit('close')">{{ t('取消') }}</button></footer>
     </section>
@@ -179,6 +180,8 @@ function secretLabel(path: string) {
             <label v-if="config.kind !== 'redis' && !mongoUriActive" class="field field-wide">{{ t('默认数据库') }}<input v-model.trim="config.database" :placeholder="t('可留空')" /></label>
             <label v-if="config.kind === 'redis'" class="field">Redis DB<input v-model.number="config.redisDb" type="number" min="0" max="1023" :disabled="config.redisMode === 'cluster'" /></label>
             <p v-if="config.kind === 'redis' && config.redisMode === 'cluster'" class="helper field-wide">{{ t('Cluster 使用 DB 0；Key 扫描按主节点进行，可在浏览器中切换节点。') }}</p>
+            <label class="field field-wide">{{ t('分组名称') }}<input v-model.trim="config.group" maxlength="80" :placeholder="t('可留空')" /></label>
+            <div class="field field-wide"><span>{{ t('连接颜色') }}</span><ConnectionColorPicker v-model="config.color" :disabled="busy" /></div>
             <section v-if="savedFields.length" class="secret-settings field-wide"><strong>{{ t('已保存的凭据') }}</strong><p class="compact-help">{{ t('凭据不会回传到界面。输入新值可替换，留空保留；勾选下方项目会在测试与保存时使用清除后的配置。') }}</p><label v-for="path in savedFields" :key="path" class="checkbox-row"><input type="checkbox" :checked="clearSecrets.includes(path)" @change="toggleClear(path)" /> {{ t('清除') }} {{ secretLabel(path) }}</label></section>
           </template>
         </div>

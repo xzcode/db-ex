@@ -89,6 +89,7 @@ function registerIpc(): void {
     currentLocale = value
   }))
   ipcMain.handle('connections:list', handler(() => store.list()))
+  ipcMain.handle('connections:appearance', handler((_win, id: string, patch: unknown) => store.updateAppearance(id, patch)))
   ipcMain.handle('connections:edit', handler((_win, id: string) => store.edit(id)))
   ipcMain.handle('connections:save', handler((_win, config: ConnectionConfig, clearSecrets?: string[]) => store.save(config, clearSecrets)))
   ipcMain.handle('connections:delete', handler(async (_win, id: string) => { validateId(id); await sessions.disconnectForConnection(id); await store.delete(id) }))

@@ -21,6 +21,7 @@ async function installBridge(page: Page) {
       async getSystemLanguage() { return navigator.language },
       async setLocale(locale: string) { calls.push({ action: 'setLocale', locale }) },
       async listConnections() { return configs },
+      async updateConnectionAppearance(id: string, patch: { color?: string | null; group?: string | null }) { calls.push({ action: 'appearance', id, patch }); const item = configs.find(value => value.id === id)!; if ('color' in patch) (item as any).color = patch.color || undefined; if ('group' in patch) (item as any).group = patch.group || undefined; return { ...item } },
       async saveConnection(config: any, clearSecrets: string[]) { calls.push({ action: 'saveConnection', config, clearSecrets }); return { ...config, id: config.id || 'new' } },
       async editConnection(id: string) { return { config: { ...configs.find(value => value.id === id), password: '', ssh: { enabled: false, host: '', port: 22, username: '', authMode: 'agent' }, tls: { enabled: false } }, secretFields: ['password'] } },
       async deleteConnection(id: string) { calls.push({ action: 'deleteConnection', id }) },
@@ -86,7 +87,8 @@ async function replaceEditor(page: Page, selector: string, text: string) {
 test.beforeEach(async ({ page }) => { await installBridge(page); await page.goto('/') })
 
 test('connection editing protects stored credentials and exposes advanced transport settings', async ({ page }) => {
-  await page.locator('.connection-item').filter({ hasText: 'MySQL Local' }).getByTitle('编辑连接').click()
+  await page.locator('.connection-item').filter({ hasText: 'MySQL Local' }).click({ button: 'right' })
+  await page.locator('.connection-context-menu').getByRole('button', { name: '编辑连接', exact: true }).click()
   await expect(page.getByRole('heading', { name: '编辑数据库连接' })).toBeVisible()
   await expect(page.getByPlaceholder('已保存 · 留空保留')).toHaveValue('')
   await page.getByRole('button', { name: 'SSH / 多跳', exact: true }).click()
@@ -265,7 +267,8 @@ test('MongoDB topology, authentication and independent URI entry preserve active
 test('connection backups export one or all profiles and import without a key prompt', async ({ page }) => {
   await page.getByRole('button', { name: '导出连接', exact: true }).click()
   await expect(page.getByText(/连接备份已导出（包含加密凭据）/)).toBeVisible()
-  await page.getByTitle('导出此连接').first().click()
+  await page.locator('.connection-item').first().click({ button: 'right' })
+  await page.locator('.connection-context-menu').getByRole('button', { name: '导出此连接', exact: true }).click()
   await expect.poll(() => page.evaluate(() => (window as any).__dbexCalls.filter((call: any) => call.action === 'exportConnections').map((call: any) => Boolean(call.id)))).toEqual([false, true])
   await page.getByRole('button', { name: '导入连接', exact: true }).click()
   await expect(page.getByText('已导入 2 个连接配置')).toBeVisible()
@@ -320,4 +323,39 @@ test('Arabic direction and all 14 language options are available', async ({ page
   await page.getByRole('combobox', { name: 'اللغة', exact: true }).selectOption('zh-TW')
   await expect(page.locator('html')).toHaveAttribute('dir', 'ltr')
   await expect(page.getByRole('button', { name: '＋ 新建連線', exact: true })).toBeVisible()
+})
+
+
+test('connection context colors, custom colors, grouping and live tab highlighting', async ({ page }) => {
+  const row = () => page.locator('.connection-item').filter({ hasText: 'MySQL Local' })
+  await row().click({ button: 'right' })
+  await page.locator('.connection-context-menu').getByRole('button', { name: '红色', exact: true }).click()
+  await expect(row()).toHaveAttribute('data-color', '#e05252')
+  await connect(page, 'MySQL Local')
+  await expect(page.locator('.session-tab').filter({ hasText: 'MySQL Local' })).toHaveAttribute('data-color', '#e05252')
+  await row().getByTitle('连接菜单').click()
+  await page.locator('.connection-context-menu').getByLabel('自定义颜色').fill('#123abc')
+  await page.locator('.connection-context-menu').getByRole('button', { name: '应用', exact: true }).click()
+  await expect(row()).toHaveAttribute('data-color', '#123abc')
+  await expect(page.locator('.session-tab').filter({ hasText: 'MySQL Local' })).toHaveAttribute('data-color', '#123abc')
+  await row().click({ button: 'right' })
+  await page.locator('.connection-context-menu').getByRole('button', { name: '移动到分组' }).click()
+  await page.getByLabel('分组名称', { exact: true }).fill('Project Alpha')
+  await page.getByRole('dialog', { name: '移动到分组' }).getByRole('button', { name: '确认', exact: true }).click()
+  await expect(page.locator('.connection-group[data-group="Project Alpha"]')).toBeVisible()
+  await expect(row()).toHaveClass(/in-group/)
+  await page.locator('.connection-group[data-group="Project Alpha"] button').click()
+  await expect(row()).toHaveCount(0)
+  await page.locator('.connection-group[data-group="Project Alpha"] button').click()
+  await expect(row()).toBeVisible()
+  await row().click({ button: 'right' })
+  await page.locator('.connection-context-menu').getByRole('button', { name: '无颜色', exact: true }).click()
+  await expect(row()).toHaveAttribute('data-color', '')
+  await expect(page.locator('.session-tab').filter({ hasText: 'MySQL Local' })).toHaveAttribute('data-color', '')
+  await row().click({ button: 'right' })
+  await page.locator('.connection-context-menu').getByRole('button', { name: '移动到分组' }).click()
+  await page.getByRole('dialog', { name: '移动到分组' }).getByRole('button', { name: '移出分组', exact: true }).click()
+  await expect(page.locator('.connection-group[data-group="Project Alpha"]')).toHaveCount(0)
+  await expect(row()).not.toHaveClass(/in-group/)
+  await expect.poll(() => page.evaluate(() => (window as any).__dbexCalls.filter((c: any) => c.action === 'appearance').map((c: any) => c.patch))).toEqual([{ color: '#e05252' }, { color: '#123abc' }, { group: 'Project Alpha' }, { color: null }, { group: null }])
 })

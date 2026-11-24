@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { connectionDisplayEndpoint } from '../../shared/connection-form'
+import { applyAppearance } from '../../shared/connection-appearance'
 import type { ConnectionConfig, ConnectionDraft, SavedConnection } from '../../shared/types'
 import { validateConnection, validateId } from './validation'
 import { mergeConnectionSecrets, redactConnection } from './credentials'
@@ -53,7 +54,7 @@ export class ConnectionStore {
   }
   summarize(id: string, config: ConnectionConfig): SavedConnection {
     return { id, name: config.name, kind: config.kind, environment: config.environment,
-      ...connectionDisplayEndpoint(config), sshEnabled: config.ssh.enabled,
+      ...connectionDisplayEndpoint(config), color: config.color, group: config.group, sshEnabled: config.ssh.enabled,
       tlsEnabled: config.tls.enabled, proxyEnabled: Boolean(config.proxy?.enabled) }
   }
   private async persist(): Promise<void> { await writeJson('connections.secure.json', { version: 1, entries: [...this.entries.values()] }) }
@@ -69,6 +70,18 @@ export class ConnectionStore {
       try { await this.persist() } catch (error) { if (previous) this.entries.set(id, previous); else this.entries.delete(id); throw error }
       this.legacyLocked.delete(id)
       return this.summarize(id, stored)
+    })
+  }
+  updateAppearance(id: string, patch: unknown): Promise<SavedConnection> {
+    return this.writes.run(async () => {
+      const config = applyAppearance(this.get(id), patch)
+      const old = this.entries.get(id)!
+      // Write only the validated presentation metadata. All previously
+      // stored credentials, endpoints, and host trust remain unchanged.
+      const next = { ...old, encrypted: encrypt(config) }
+      this.entries.set(id, next)
+      try { await this.persist() } catch (error) { this.entries.set(id, old); throw error }
+      return this.summarize(id, config)
     })
   }
   delete(id: string): Promise<void> {

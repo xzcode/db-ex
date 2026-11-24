@@ -124,3 +124,5 @@ Choose System default or one of 14 supported languages from the top toolbar. You
 ## v0.5.4 Preview
 
 Database-first connection creation inspired by familiar desktop database tools. Separate MySQL, MongoDB and Redis forms, direct MongoDB URI entry, visible topology and authentication, advanced settings, and native certificate/key file selection. All 14 interface languages are retained.
+
+The navigation pane supports right-click connection colors, nine presets, a native custom color selector, clearing colors, named groups with collapse/expand and drag-to-group. Connection colors follow active tabs and explorer headers, and color/group metadata travels with encrypted connection backups.

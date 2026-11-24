@@ -6,6 +6,7 @@ const api: DbExAPI = {
   getSystemLanguage: () => ipcRenderer.invoke('preferences:system-language'),
   setLocale: locale => ipcRenderer.invoke('preferences:locale', locale),
   listConnections: () => ipcRenderer.invoke('connections:list'),
+  updateConnectionAppearance: (id, patch) => ipcRenderer.invoke('connections:appearance', id, patch),
   saveConnection: (config, clearSecrets) => ipcRenderer.invoke('connections:save', config, clearSecrets),
   editConnection: id => ipcRenderer.invoke('connections:edit', id),
   deleteConnection: id => ipcRenderer.invoke('connections:delete', id),
