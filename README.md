@@ -2,7 +2,7 @@
 
 本地优先的桌面数据库工具，统一管理 **MySQL、MongoDB、Redis**。基于 Electron、Vue 3、TypeScript 与 Monaco，不依赖账号、云端服务或遥测。
 
-当前版本：**0.5.3 预览版**。M2–M5 的功能实现已接入；完整范围、验收证据和限制见 [路线图](docs/ROADMAP.md)。预览安装包与最终发行签名是不同的交付项。
+当前版本：**0.5.4 预览版**。M2–M5 的功能实现已接入；完整范围、验收证据和限制见 [路线图](docs/ROADMAP.md)。预览安装包与最终发行签名是不同的交付项。
 
 ## 功能
 
@@ -120,3 +120,7 @@ Built-in encrypted storage replaces OS keyring requirements for new records. Exp
 - 新语言扩展规范见 [docs/I18N.md](docs/I18N.md)。
 
 Choose System default or one of 14 supported languages from the top toolbar. Your selection is remembered locally and applies without restarting. Database data, SQL and connection names are never translated.
+
+## v0.5.4 Preview
+
+Database-first connection creation inspired by familiar desktop database tools. Separate MySQL, MongoDB and Redis forms, direct MongoDB URI entry, visible topology and authentication, advanced settings, and native certificate/key file selection. All 14 interface languages are retained.

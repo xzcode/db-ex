@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { connectionDisplayEndpoint } from '../../shared/connection-form'
 import type { ConnectionConfig, ConnectionDraft, SavedConnection } from '../../shared/types'
 import { validateConnection, validateId } from './validation'
 import { mergeConnectionSecrets, redactConnection } from './credentials'
@@ -52,7 +53,7 @@ export class ConnectionStore {
   }
   summarize(id: string, config: ConnectionConfig): SavedConnection {
     return { id, name: config.name, kind: config.kind, environment: config.environment,
-      host: config.host || 'MongoDB URI', port: config.port, sshEnabled: config.ssh.enabled,
+      ...connectionDisplayEndpoint(config), sshEnabled: config.ssh.enabled,
       tlsEnabled: config.tls.enabled, proxyEnabled: Boolean(config.proxy?.enabled) }
   }
   private async persist(): Promise<void> { await writeJson('connections.secure.json', { version: 1, entries: [...this.entries.values()] }) }

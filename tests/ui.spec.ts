@@ -27,7 +27,8 @@ async function installBridge(page: Page) {
       async trustHostKey() {},
       async connectSaved(id: string) { const config = configs.find(value => value.id === id)!; sessions[id] = { ...config, id, connectionId: id, displayHost: config.host, writable: false, transaction: false }; return sessions[id] },
       async connectTemporary(config: any) { return { ...config, id: 'temporary', writable: false, transaction: false, displayHost: config.host } },
-      async testConnection() { return '连接成功' },
+      async testConnection(config: any, clearSecrets: string[]) { calls.push({ action: 'testConnection', config, clearSecrets }); return '连接成功' },
+      async pickConnectionFile(kind: string) { calls.push({ action: 'pickConnectionFile', kind }); return '/test/client.pem' },
       async disconnect(id: string) { calls.push({ action: 'disconnect', id }) },
       async roots(id: string) { return [{ id: id + '-db', label: id === 'redis' ? 'DB 0' : id === 'sql2' ? 'other' : 'app', kind: id === 'redis' ? 'keyspace' : 'database', database: id === 'sql2' ? 'other' : 'app' }] },
       async children(_id: string, database: string) { return [{ id: database + '-users', label: 'users', database, entity: 'users', kind: 'table' }] },
@@ -204,25 +205,61 @@ test('large result grids render a bounded row window and retain the original row
 })
 
 
-test('MongoDB connection UI shows auto-direct mode, explicit discovery, and URI/seed precedence', async ({ page }) => {
+test('new connection chooses the database before opening its own general form', async ({ page }) => {
+  await page.getByRole('button', { name: '＋ 新建连接', exact: true }).click()
+  await expect(page.getByRole('heading', { name: '选择数据库类型' })).toBeVisible()
+  await page.getByRole('button', { name: 'MySQL', exact: true }).click()
+  await expect(page.getByLabel('端口', { exact: true })).toHaveValue('3306')
+  await expect(page.getByLabel('用户名', { exact: true })).toHaveValue('root')
+  await expect(page.getByLabel('连接超时（毫秒）')).toHaveCount(0)
+  await page.getByRole('button', { name: '高级设置', exact: true }).click()
+  await expect(page.getByLabel('连接超时（毫秒）')).toHaveValue('12000')
+  await page.getByRole('button', { name: '基本设置', exact: true }).click()
+  await page.getByRole('button', { name: '测试连接', exact: true }).click()
+  await expect(page.getByRole('status').filter({ hasText: '连接成功' })).toBeVisible()
+  await page.getByRole('button', { name: '返回', exact: true }).click()
+  await page.getByRole('button', { name: 'Redis', exact: true }).click()
+  await expect(page.getByLabel('端口', { exact: true })).toHaveValue('6379')
+  await expect(page.getByLabel('认证方式')).toHaveValue('none')
+  await page.getByLabel('Redis 拓扑').selectOption('sentinel')
+  await expect(page.getByLabel('节点 1 端口')).toHaveValue('26379')
+  await expect(page.getByLabel('Master 名称')).toBeVisible()
+  await page.getByLabel('认证方式').selectOption('password')
+  await expect(page.getByLabel('密码', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'TLS / SSL', exact: true }).click()
+  await page.getByLabel('启用 TLS / SSL').check()
+  await page.getByRole('button', { name: '浏览… CA 证书路径', exact: true }).click()
+  await expect(page.getByLabel('CA 证书路径', { exact: true })).toHaveValue('/test/client.pem')
+})
+
+test('MongoDB topology, authentication and independent URI entry preserve active inputs', async ({ page }) => {
   await page.getByRole('button', { name: '＋ 新建连接', exact: true }).click()
   await page.getByRole('button', { name: 'MongoDB', exact: true }).click()
-  await page.getByRole('button', { name: '拓扑', exact: true }).click()
+  await expect(page.getByLabel('端口', { exact: true })).toHaveValue('27017')
   await expect(page.getByLabel('连接拓扑')).toHaveValue('auto')
   await page.getByLabel('连接拓扑').selectOption('discover')
-  await expect(page.getByLabel('连接拓扑')).toHaveValue('discover')
   await page.getByRole('button', { name: '＋ 添加节点', exact: true }).click()
   await page.getByLabel('节点 1 主机').fill('seed.example.test')
-  await page.getByRole('button', { name: '基本设置', exact: true }).click()
-  await expect(page.getByText(/拓扑页配置了 1 个种子节点/)).toBeVisible()
-  await page.getByLabel('MongoDB URI（优先于主机设置）').fill('mongodb://db.example.test:27017/admin?directConnection=true')
-  await expect(page.getByLabel('主机', { exact: true })).toBeDisabled()
-  await expect(page.getByLabel('用户名', { exact: true })).toBeDisabled()
-  await expect(page.getByLabel('认证库 (authSource)')).toBeDisabled()
-  await expect(page.getByText(/填写或保留加密保存的 URI 时/)).toBeVisible()
-  await page.getByLabel('MongoDB URI（优先于主机设置）').fill('')
-  await expect(page.getByLabel('主机', { exact: true })).toBeEnabled()
-  await expect(page.getByText(/拓扑页配置了 1 个种子节点/)).toBeVisible()
+  await expect(page.getByText('使用种子节点连接，不再使用单独的主机和端口。')).toBeVisible()
+  await page.getByLabel('认证方式').selectOption('password')
+  await expect(page.getByLabel('认证库 (authSource)')).toHaveValue('admin')
+  await page.getByLabel('用户名', { exact: true }).fill('field-user')
+  await page.getByLabel('密码', { exact: true }).fill('field-password')
+  await page.getByRole('button', { name: 'MongoDB URI', exact: true }).click()
+  await page.getByLabel('MongoDB URI（优先于主机设置）').fill('mongodb://uri-user:uri-secret@db.example.test:27017/admin?directConnection=true')
+  await expect(page.getByText('db.example.test:27017', { exact: true })).toBeVisible()
+  await expect(page.getByLabel('用户名', { exact: true })).toHaveCount(0)
+  await page.getByRole('button', { name: '测试连接', exact: true }).click()
+  await expect.poll(() => page.evaluate(() => {
+    const call = (window as any).__dbexCalls.filter((x: any) => x.action === 'testConnection').at(-1)
+    return call && { host: call.config.host, topology: call.config.mongoTopology, nodes: call.config.nodes.length, username: call.config.username, uri: call.config.uri }
+  })).toEqual({ host: '', topology: 'auto', nodes: 0, username: '', uri: 'mongodb://uri-user:uri-secret@db.example.test:27017/admin?directConnection=true' })
+  await page.getByRole('button', { name: '主机和端口', exact: true }).click()
+  await expect(page.getByLabel('节点 1 主机')).toHaveValue('seed.example.test')
+  await expect(page.getByLabel('用户名', { exact: true })).toHaveValue('field-user')
+  await page.getByRole('button', { name: '返回', exact: true }).click()
+  await page.getByRole('button', { name: '使用 MongoDB URI', exact: true }).click()
+  await expect(page.getByLabel('MongoDB URI（优先于主机设置）')).toBeVisible()
 })
 
 test('connection backups export one or all profiles and import without a key prompt', async ({ page }) => {
@@ -242,6 +279,8 @@ test('English interface can switch live, persists and preserves connection ident
   await expect(page.locator('.connection-item').filter({ hasText: 'MySQL Local' })).toBeVisible()
   await expect.poll(() => page.evaluate(() => (window as any).__dbexCalls.some((call: any) => call.action === 'setLocale' && call.locale === 'en'))).toBe(true)
   await page.getByRole('button', { name: '+ New connection', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Select database type' })).toBeVisible()
+  await page.getByRole('button', { name: 'MySQL', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Create database connection' })).toBeVisible()
   await expect(page.getByLabel('Connection name', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'SSH / jump hosts', exact: true }).click()

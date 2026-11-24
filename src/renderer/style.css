@@ -288,3 +288,45 @@ kbd { color: #ffffffb0; font-size: 9px; }
 html[dir=rtl] .inline-message .ghost-icon { float: left; }
 html[dir=rtl] .resource-node .arrow { transform: scaleX(-1); }
 html[dir=rtl] .grid-scroll, html[dir=rtl] .code-editor, html[dir=rtl] .history-list pre, html[dir=rtl] textarea, html[dir=rtl] input[type=number], html[dir=rtl] input[type=password], html[dir=rtl] input[spellcheck=false], html[dir=rtl] .node-row input { direction: ltr; text-align: left; }
+
+/* Database-first connection chooser and compact, desktop-style general form. */
+.connection-picker-dialog { width: 470px; }
+.connection-picker-body { padding: 16px 20px; display: grid; gap: 8px; overflow-y: auto; }
+.connection-choice { min-height: 60px; width: 100%; display: flex; align-items: center; text-align: start; gap: 12px; border: 1px solid var(--border); background: var(--input); padding: 11px 14px; border-radius: 4px; }
+.connection-choice:hover, .connection-choice:focus-visible { border-color: var(--accent); background: var(--selected); }
+.choice-name { font-size: 14px; font-weight: 600; flex: 1; }
+.choice-port { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.choice-arrow { color: var(--muted); font-size: 23px; }
+html[dir=rtl] .choice-arrow { transform: scaleX(-1); }
+.connection-picker-divider { border-top: 1px solid var(--border); margin: 6px 0; }
+.choice-uri-icon { font-size: 10px; font-weight: 700; color: var(--accent); padding: 9px 6px; border: 1px solid var(--border); }
+.connection-dialog { width: 720px; }
+.connection-dialog-title { display: flex; align-items: center; gap: 12px; }
+.connection-dialog-title .db-icon { flex-shrink: 0; }
+.connection-dialog .subtabs { padding: 0 14px; }
+.connection-dialog .subtabs > button { display: flex; align-items: center; gap: 5px; }
+.enabled-dot { display: inline-block; width: 7px; height: 7px; flex-shrink: 0; border-radius: 50%; background: var(--accent); }
+.general-connection-body { padding: 20px 24px; }
+.general-connection-fields { display: flex; flex-direction: column; gap: 13px; min-width: 0; }
+.connection-row { display: grid; grid-template-columns: minmax(105px, 30%) minmax(0, 1fr); align-items: center; gap: 12px; font-size: 12px; }
+.connection-row > span, .connection-row > label { color: var(--muted); line-height: 1.45; }
+.connection-row > input, .connection-row > select { width: 100%; }
+.connection-row.align-start { align-items: start; }
+.connection-row.align-start > span, .connection-row.align-start > label { padding-top: 8px; }
+.connection-row .connection-port { width: min(100%, 130px); }
+.connection-field-divider { border-top: 1px solid var(--border-soft); margin: 3px 0; }
+.connection-indent { margin-inline-start: calc(30% + 12px); }
+.connection-mode-buttons { display: flex; gap: 6px; flex-wrap: wrap; }
+.mode-button { min-height: 34px; padding: 7px 10px; border: 1px solid var(--border); background: var(--input); color: var(--muted); }
+.mode-button.selected { color: var(--accent); border-color: var(--accent); background: var(--accent-bg); }
+.password-input { display: flex; align-items: stretch; gap: 6px; min-width: 0; }
+.password-input > input { flex: 1; width: 100%; min-width: 0; direction: ltr; }
+.password-input > button { flex-shrink: 0; }
+.connection-seeds { display: flex; flex-direction: column; align-items: stretch; gap: 8px; min-width: 0; }
+.connection-seeds .node-row { grid-template-columns: minmax(0, 1fr) 80px auto; }
+.connection-seeds > button { align-self: flex-start; }
+.uri-address { overflow-wrap: anywhere; }
+.file-path-row { display: flex; align-items: flex-end; gap: 7px; }
+.file-path-row > label { flex: 1; min-width: 0; }
+.file-path-row > .btn { flex: none; min-height: 34px; }
+.connection-dialog-footer .btn { min-height: 34px; }
