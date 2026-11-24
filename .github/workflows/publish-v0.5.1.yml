@@ -26,25 +26,45 @@ jobs:
           set -euo pipefail
           tag=v0.5.1
           repo="$GITHUB_REPOSITORY"
-          # Drafts may have no tag ref and cannot reliably be fetched by tag.
-          # Use the authenticated releases list and the stable numeric release ID.
-          existing="$(gh api --paginate "repos/$repo/releases?per_page=100" --jq '.[] | select(.tag_name == "v0.5.1")' | jq -sc '.')"
+          # Draft refs may not exist before publication; drafts are also
+          # subject to API eventual-consistency delays after creation.
+          get_drafts() {
+            gh api --paginate "repos/$repo/releases?per_page=100" \
+              --jq '.[] | select(.tag_name == "v0.5.1")' | jq -sc '.'
+          }
+          existing="$(get_drafts)"
           count="$(jq 'length' <<< "$existing")"
-          [[ "$count" -le 1 ]] || { echo "::error::Duplicate release records"; exit 1; }
+          [[ "$count" -le 1 ]] || { echo "::error::Duplicate v0.5.1 releases"; exit 1; }
           tag_sha=""
           if tag_sha="$(gh api "repos/$repo/git/ref/tags/$tag" --jq '.object.sha' 2>/dev/null)"; then
-            [[ "$tag_sha" == "$GITHUB_SHA" && "$count" == 1 ]] || { echo "::error::Existing tag is not part of this release draft"; exit 1; }
+            [[ "$tag_sha" == "$GITHUB_SHA" && "$count" == 1 ]] || { echo "::error::Tag already points elsewhere"; exit 1; }
           fi
-          if [[ "$count" == 1 ]]; then
-            jq -e --arg sha "$GITHUB_SHA" '.[0] | .draft == true and .target_commitish == $sha' <<< "$existing" >/dev/null
-          else
+          if [[ "$count" == 0 ]]; then
+            [[ -z "$tag_sha" ]] || { echo "::error::Release draft missing but tag already exists"; exit 1; }
             gh release create "$tag" --repo "$repo" --target "$GITHUB_SHA" \
               --title 'DB EX v0.5.1 (Multi-platform Preview)' \
               --notes-file docs/RELEASE_v0.5.1.md --draft --prerelease
+            for i in {1..12}; do
+              existing="$(get_drafts)"
+              [[ "$(jq 'length' <<< "$existing")" == 1 ]] && break
+              sleep 2
+            done
           fi
-          release_id="$(gh api --paginate "repos/$repo/releases?per_page=100" --jq '.[] | select(.tag_name == "v0.5.1") | .id')"
-          [[ "$release_id" =~ ^[0-9]+$ ]] || { echo "::error::Expected a single draft release ID"; exit 1; }
+          [[ "$(jq 'length' <<< "$existing")" == 1 ]] || { echo "::error::Draft did not become visible"; exit 1; }
+          release_id="$(jq -r '.[0].id' <<< "$existing")"
+          [[ "$release_id" =~ ^[0-9]+$ ]] || { echo "::error::Invalid draft ID"; exit 1; }
           payload="$(gh api "repos/$repo/releases/$release_id")"
+          jq -e --arg tag "$tag" '.draft == true and .tag_name == $tag' <<< "$payload" >/dev/null
+          current_target="$(jq -r '.target_commitish' <<< "$payload")"
+          if [[ "$current_target" != "$GITHUB_SHA" ]]; then
+            # Retarget only an untouched draft that has no published tag or
+            # files. Previous build attempt created this draft but uploaded
+            # nothing. Never move a tag or replace an already uploaded asset.
+            [[ -z "$tag_sha" ]] || { echo "::error::Cannot retarget existing tag"; exit 1; }
+            [[ "$(jq -r '.assets | length' <<< "$payload")" == 0 ]] || { echo "::error::Cannot retarget draft with assets"; exit 1; }
+            gh api -X PATCH "repos/$repo/releases/$release_id" -f target_commitish="$GITHUB_SHA" >/dev/null
+            payload="$(gh api "repos/$repo/releases/$release_id")"
+          fi
           jq -e --arg sha "$GITHUB_SHA" --arg tag "$tag" '.draft == true and .target_commitish == $sha and .tag_name == $tag' <<< "$payload" >/dev/null
           echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
 
