@@ -1,0 +1,102 @@
+name: Publish DB EX v0.5.3 from native CI
+on:
+  workflow_run:
+    workflows: ["Verify DB EX"]
+    types: [completed]
+    branches: [master]
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: db-ex-release-v0.5.3
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.repository == 'xzcode/db-ex' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      startsWith(github.event.workflow_run.head_commit.message, 'release: DB EX v0.5.3')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - name: Download the exact verified native CI packages
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_RUN: ${{ github.event.workflow_run.id }}
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$RELEASE_SHA" ]]
+          [[ "$(jq -r .version package.json)" == "0.5.3" ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN" | jq -e --arg sha "$RELEASE_SHA" '.conclusion == "success" and .head_sha == $sha and .event == "push" and .head_branch == "master"'
+          mkdir -p artifacts/mac artifacts/windows artifacts/linux upload
+          gh run download "$CI_RUN" --repo "$GITHUB_REPOSITORY" --name db-ex-native-macOS-ARM64 --dir artifacts/mac
+          gh run download "$CI_RUN" --repo "$GITHUB_REPOSITORY" --name db-ex-native-Windows-X64 --dir artifacts/windows
+          gh run download "$CI_RUN" --repo "$GITHUB_REPOSITORY" --name db-ex-native-Linux-X64 --dir artifacts/linux
+          (cd artifacts/mac && sha256sum -c SHA256SUMS.txt)
+          (cd artifacts/windows && sha256sum -c SHA256SUMS.txt)
+          (cd artifacts/linux && sha256sum -c SHA256SUMS.txt)
+          cp artifacts/mac/DB-EX-0.5.3-mac-arm64.{dmg,zip} upload/
+          cp artifacts/windows/DB-EX-0.5.3-win-x64.exe upload/
+          cp artifacts/linux/DB-EX-0.5.3-linux-x86_64.AppImage artifacts/linux/DB-EX-0.5.3-linux-amd64.deb upload/
+          cp artifacts/mac/SHA256SUMS.txt upload/SHA256SUMS-macOS-ARM64.txt
+          cp artifacts/windows/SHA256SUMS.txt upload/SHA256SUMS-Windows-X64.txt
+          cp artifacts/linux/SHA256SUMS.txt upload/SHA256SUMS-Linux-X64.txt
+          [[ "$(find upload -maxdepth 1 -type f | wc -l)" == 8 ]]
+          for f in upload/*.dmg upload/*.zip upload/*.exe upload/*.AppImage upload/*.deb; do
+            [[ "$(stat -c '%s' "$f")" -gt 1048576 ]]
+          done
+
+      - name: Create or resume draft, verify uploaded files and publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          tag=v0.5.3
+          releases() {
+            gh api --paginate "repos/$repo/releases?per_page=100" --jq '.[] | select(.tag_name == "v0.5.3")' | jq -sc '.'
+          }
+          existing="$(releases)"
+          count="$(jq 'length' <<< "$existing")"
+          [[ "$count" -le 1 ]]
+          if [[ "$count" == 0 ]]; then
+            if gh api "repos/$repo/git/ref/tags/$tag" >/dev/null 2>&1; then
+              echo "::error::Existing release tag without release"; exit 1
+            fi
+            gh release create "$tag" --repo "$repo" --target "$RELEASE_SHA" --title 'DB EX v0.5.3 (Preview)' --notes-file docs/RELEASE_v0.5.3.md --draft --prerelease
+            for i in {1..12}; do
+              existing="$(releases)"
+              [[ "$(jq 'length' <<< "$existing")" == 1 ]] && break
+              sleep 2
+            done
+          fi
+          [[ "$(jq 'length' <<< "$existing")" == 1 ]]
+          release_id="$(jq -r '.[0].id' <<< "$existing")"
+          [[ "$release_id" =~ ^[0-9]+$ ]]
+          payload="$(gh api "repos/$repo/releases/$release_id")"
+          jq -e --arg sha "$RELEASE_SHA" '.draft == true and .target_commitish == $sha and .tag_name == "v0.5.3"' <<< "$payload" >/dev/null
+          if tag_sha="$(gh api "repos/$repo/git/ref/tags/$tag" --jq '.object.sha' 2>/dev/null)"; then
+            [[ "$tag_sha" == "$RELEASE_SHA" ]]
+          fi
+          gh release upload "$tag" upload/* --repo "$repo" --clobber
+          payload="$(gh api "repos/$repo/releases/$release_id")"
+          jq -e --arg sha "$RELEASE_SHA" '.draft == true and .target_commitish == $sha and (.assets | length) == 8' <<< "$payload" >/dev/null
+          for file in upload/*; do
+            name="$(basename "$file")"
+            size="$(stat -c '%s' "$file")"
+            digest="$(sha256sum "$file" | cut -d ' ' -f 1)"
+            jq -e --arg name "$name" --argjson size "$size" --arg digest "sha256:$digest" '[.assets[] | select(.name == $name and .state == "uploaded" and .size == $size and .digest == $digest)] | length == 1' <<< "$payload" >/dev/null
+          done
+          published="$(gh api -X PATCH "repos/$repo/releases/$release_id" -F draft=false -F prerelease=true)"
+          jq -e '.draft == false and .prerelease == true and .tag_name == "v0.5.3"' <<< "$published" >/dev/null
+          [[ "$(gh api "repos/$repo/git/ref/tags/$tag" --jq '.object.sha')" == "$RELEASE_SHA" ]]
+          echo 'Published five verified native installers and three checksum files.'
