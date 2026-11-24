@@ -18,11 +18,12 @@ const config = reactive<ConnectionConfig>(props.draft ? JSON.parse(JSON.stringif
   username: '', password: '', database: '', authSource: 'admin', redisDb: 0, uri: '',
   ssh: { ...newSsh(), enabled: false }, tls: { enabled: false, caPath: '', certPath: '', keyPath: '', servername: '' },
   proxy: { enabled: false, type: 'socks5', host: '', port: 1080, username: '', password: '' },
-  redisMode: 'standalone', nodes: [], mongoReplicaSet: '', mongoDirect: false, connectTimeoutMs: 12000,
+  redisMode: 'standalone', nodes: [], mongoReplicaSet: '', mongoDirect: false, mongoTopology: 'auto', connectTimeoutMs: 12000,
 })
 config.proxy ||= { enabled: false, type: 'socks5', host: '', port: 1080 }
 config.ssh.jumps ||= []
 config.nodes ||= []
+config.mongoTopology ||= config.mongoDirect ? 'direct' : 'auto'
 const kinds: DatabaseKind[] = ['mysql', 'mongodb', 'redis']
 const defaults: Record<DatabaseKind, number> = { mysql: 3306, mongodb: 27017, redis: 6379 }
 function changeKind(kind: DatabaseKind) { config.kind = kind; config.port = defaults[kind]; config.nodes = [] }
@@ -94,7 +95,7 @@ function secretLabel(path: string) {
           </template>
           <template v-else>
             <template v-if="config.kind === 'redis'"><label class="field field-wide">Redis 拓扑<select v-model="config.redisMode"><option value="standalone">Standalone</option><option value="sentinel">Sentinel</option><option value="cluster">Cluster</option></select></label><template v-if="config.redisMode === 'sentinel'"><label class="field">Master 名称<input v-model.trim="config.sentinelMaster" placeholder="mymaster" /></label><label class="field">Sentinel 用户名<input v-model.trim="config.sentinelUsername" /></label><label class="field">Sentinel 密码<input v-model="config.sentinelPassword" type="password" autocomplete="new-password" /></label><label class="checkbox-row"><input v-model="config.sentinelTls" type="checkbox" /> Sentinel 使用 TLS</label></template><p v-if="config.redisMode === 'cluster'" class="helper field-wide">Cluster 使用 DB 0；Key 扫描按主节点进行，可在浏览器中切换节点。</p></template>
-            <template v-if="config.kind === 'mongodb'"><label class="field">Replica Set 名称<input v-model.trim="config.mongoReplicaSet" placeholder="例如 rs0" /></label><label class="checkbox-row"><input v-model="config.mongoDirect" type="checkbox" /> Direct connection（仅连接指定节点）</label><p class="helper field-wide">副本集发现的节点地址必须能通过所选网络路径访问。SRV 查询使用本机 DNS。</p></template>
+            <template v-if="config.kind === 'mongodb'"><label class="field">Replica Set 名称<input v-model.trim="config.mongoReplicaSet" placeholder="例如 rs0" /></label><label class="field">连接拓扑<select v-model="config.mongoTopology"><option value="auto">自动（单地址直连，副本集自动发现）</option><option value="direct">直连指定节点</option><option value="discover">副本集发现（连接各成员）</option></select></label><p class="helper field-wide">使用单个主机、无 Replica Set 名称时，“自动”将直连指定地址，适合公网端口映射；填写 Replica Set 名称或多个种子节点则自动发现。使用 URI 时保留 URI 的拓扑设置。SRV 查询使用本机 DNS。需要自动故障转移时请选择副本集发现，成员地址需可达。</p></template>
             <template v-if="config.kind !== 'mysql'"><div class="field-wide row-between"><h3>{{ config.kind === 'redis' && config.redisMode === 'sentinel' ? 'Sentinel 节点' : '种子节点' }}</h3><button class="btn secondary small" type="button" :disabled="config.nodes!.length >= 20" @click="config.nodes!.push({ host: '', port: config.kind === 'mongodb' ? 27017 : config.redisMode === 'sentinel' ? 26379 : 6379 })">＋ 添加节点</button></div><div v-for="(node, index) in config.nodes" :key="index" class="node-row field-wide"><input v-model.trim="node.host" :aria-label="`节点 ${index + 1} 主机`" placeholder="node.example.com" /><input v-model.number="node.port" :aria-label="`节点 ${index + 1} 端口`" type="number" min="1" max="65535" /><button class="btn danger-text small" type="button" @click="config.nodes!.splice(index, 1)">移除</button></div><p class="helper field-wide">MongoDB节点列表为空时使用基本设置；Redis Sentinel / Cluster 必须填写种子节点。</p></template><p v-else class="helper field-wide">MySQL 使用基本设置中的主机。可配合 SSH 多跳、代理和 TLS 连接。</p>
           </template>
         </div>

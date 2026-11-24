@@ -49,6 +49,9 @@ export function describeMongoConnectionError(error: unknown): string | undefined
   if (/(UNABLE_TO_VERIFY_LEAF_SIGNATURE|SELF_SIGNED_CERT|CERT_HAS_EXPIRED|ERR_TLS|SSL routines|SSLHandshake|certificate verify|certificate has expired|Hostname\/IP does not match|tlsv1 alert)/i.test(signals)) {
     return 'MONGO_TLS_FAILED: MongoDB TLS 握手或证书校验失败。请检查服务器是否要求 TLS，以及 CA、证书主机名与证书有效期。'
   }
+  if (/(MongoCompatibilityError|maximum wire version|minimum wire version|this version of the Node\.js Driver requires at least|server version.*not supported)/i.test(signals)) {
+    return 'MONGO_VERSION_UNSUPPORTED: MongoDB 服务端版本可能太旧，当前 DB EX 的 MongoDB 驱动要求 MongoDB 4.2 或更新版本。请核对服务端版本（不用修改服务器即可先用 Navicat 查看）。'
+  }
   if (/(MongoParseError|MongoInvalidArgumentError|ERR_INVALID_URL|URI malformed|Invalid scheme|password must be URL encoded)/i.test(signals)) {
     return 'MONGO_URI_INVALID: MongoDB URI 格式无效。请使用 mongodb:// 或 mongodb+srv://，并对用户名、密码中的特殊字符做 URL 编码。'
   }

@@ -58,6 +58,8 @@ export interface ConnectionConfig {
   sentinelTls?: boolean
   mongoReplicaSet?: string
   mongoDirect?: boolean
+  /** auto: direct for one field-based endpoint, discovery for replica/URI */
+  mongoTopology?: 'auto' | 'direct' | 'discover'
   connectTimeoutMs?: number
 }
 export interface SavedConnection {

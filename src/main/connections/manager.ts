@@ -10,6 +10,7 @@ import { createTransport, type ConnectionTransport } from './transport'
 import { createRedisClient, setRedisReadBudget, type RedisClient } from './redis-client'
 import { validateConnection, validateId } from './validation'
 import { describeMongoConnectionError } from './mongo-diagnostics'
+import { mongoDirectConnection } from './mongo-topology'
 import { secretValues } from './credentials'
 import { MysqlOperations } from '../operations/mysql'
 import { MongoOperations } from '../operations/mongodb'
@@ -99,7 +100,7 @@ export class SessionManager {
             // MongoOperations decodes only raw result documents with exact BSON types.
             promoteValues: true,
             ...(config.mongoReplicaSet ? { replicaSet: config.mongoReplicaSet } : {}),
-            ...(config.mongoDirect ? { directConnection: true } : {}),
+            ...(mongoDirectConnection(config) === undefined ? {} : { directConnection: mongoDirectConnection(config) }),
             ...(config.tls.enabled ? { tls: true, ca, cert, key, minVersion: 'TLSv1.2' } : {}),
             ...(config.tls.servername ? { servername: config.tls.servername, checkServerIdentity: (_host, certificate) => checkServerIdentity(config.tls.servername!, certificate) } : {}),
           }
