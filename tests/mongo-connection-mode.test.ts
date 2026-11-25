@@ -6,7 +6,7 @@ import { mongoDirectConnection, mongoTopologyMode, mongoUriTlsEnabled } from '..
 import { mergeConnectionSecrets, redactConnection } from '../src/main/connections/credentials'
 
 const basic = (): ConnectionConfig => ({
-  name: 'MongoDB One Host', kind: 'mongodb', environment: 'testing',
+  name: 'MongoDB One Host', kind: 'mongodb', 
   host: '198.51.100.17', port: 27017, database: 'admin', username: 'admin',
   password: 'synthetic-credential', authSource: 'admin',
   ssh: { enabled: false, host: '', port: 22, username: '', authMode: 'agent' },

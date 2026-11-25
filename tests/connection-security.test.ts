@@ -4,7 +4,7 @@ import type { ConnectionConfig } from '../src/shared/types'
 import { validateConnection } from '../src/main/connections/validation'
 import { mergeConnectionSecrets, portableConnection, redactConnection } from '../src/main/connections/credentials'
 const connection = (): ConnectionConfig => ({
-  id: 'test-connection', name: 'Test', kind: 'redis', environment: 'testing', host: 'db.internal', port: 6379,
+  id: 'test-connection', name: 'Test', kind: 'redis', host: 'db.internal', port: 6379,
   username: 'app', password: 'synthetic-test-secret', redisMode: 'sentinel', sentinelMaster: 'primary',
   sentinelUsername: 'sentinel-user', sentinelPassword: 'synthetic-sentinel-secret', nodes: [{ host: 'sentinel.internal', port: 26379 }],
   ssh: { enabled: true, host: 'jump.internal', port: 22, username: 'ssh-user', authMode: 'password', password: 'synthetic-ssh-secret',

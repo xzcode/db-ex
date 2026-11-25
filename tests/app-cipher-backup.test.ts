@@ -5,7 +5,7 @@ import { isAppEncrypted, openStored, seal, unseal } from '../src/main/storage/ap
 import { createConnectionBackup, readConnectionBackup } from '../src/main/connections/backup'
 import { portableConnection } from '../src/main/connections/credentials'
 const sample = (): ConnectionConfig => ({
-  id: 'original-id', name: '测试连接', kind: 'mongodb', environment: 'testing',
+  id: 'original-id', name: '测试连接', kind: 'mongodb', 
   host: '', port: 27017, uri: 'mongodb://test:synthetic-uri@db.example.test/admin',
   username: 'test', password: 'synthetic-db-password',
   ssh: { enabled: true, host: 'jump.example.test', port: 22, username: 'ssh-user', authMode: 'password',
@@ -74,4 +74,28 @@ test('legacy templates still import, but never gain credentials or trust', () =>
   assert.throws(() => readConnectionBackup({ format: 'db-ex-connections', version: 3 }), /版本/)
   assert.throws(() => readConnectionBackup({ format: 'db-ex-connections', version: 2, encrypted: seal(Array(201).fill(sample()), 'connections-export') }), /200/)
   assert.throws(() => readConnectionBackup({ format: 'db-ex-connections', version: 2, encrypted: seal([sample(), { kind: 'invalid' }], 'connections-export') }), /INVALID_CONNECTION/)
+})
+
+test('legacy environment metadata is ignored without losing profile data or secrets', () => {
+  const original = { ...sample(), color: '#123abc', group: 'Project / Region 42' }
+  const { environment: _discard, ...expected } = { ...original, environment: 'production' }
+  for (const legacy of ['development', 'testing', 'production', 'custom-environment-100', undefined]) {
+    const old = { ...original, environment: legacy }
+    const [restored] = readConnectionBackup({ format: 'db-ex-connections', version: 2, encrypted: seal([old], 'connections-export') })
+    assert.equal(Object.hasOwn(restored!, 'environment'), false)
+    assert.equal(restored!.name, expected.name)
+    assert.equal(restored!.uri, expected.uri)
+    assert.equal(restored!.password, expected.password)
+    assert.equal(restored!.ssh.password, expected.ssh.password)
+    assert.equal(restored!.proxy!.password, expected.proxy!.password)
+    assert.equal(restored!.color, expected.color)
+    assert.equal(restored!.group, expected.group)
+    const exported = createConnectionBackup([restored!])
+    assert.equal(Object.hasOwn(unseal<Record<string, unknown>[]>(exported.encrypted, 'connections-export')[0]!, 'environment'), false)
+  }
+  const legacyTemplate = portableConnection({ ...original, environment: 'production' } as ConnectionConfig)
+  const [fromV1] = readConnectionBackup({ format: 'db-ex-connections', version: 1, connections: [legacyTemplate] })
+  assert.equal(Object.hasOwn(fromV1!, 'environment'), false)
+  assert.equal(fromV1!.group, original.group)
+  assert.equal(fromV1!.color, original.color)
 })

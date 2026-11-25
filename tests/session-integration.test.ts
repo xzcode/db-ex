@@ -9,7 +9,7 @@ import { createTransport } from '../src/main/connections/transport'
 import type { ConnectionConfig } from '../src/shared/types'
 const enabled = process.env.DB_EX_INTEGRATION === '1'
 const ssh = { enabled: false, host: '', port: 22, username: '', authMode: 'agent' as const }
-const base = (kind: ConnectionConfig['kind'], port: number): ConnectionConfig => ({ name: `integration-${kind}`, kind, environment: 'testing', host: '127.0.0.1', port, ssh, tls: { enabled: false }, connectTimeoutMs: 8000 })
+const base = (kind: ConnectionConfig['kind'], port: number): ConnectionConfig => ({ name: `integration-${kind}`, kind, host: '127.0.0.1', port, ssh, tls: { enabled: false }, connectTimeoutMs: 8000 })
 
 test('SessionManager routes real MySQL, MongoDB and Redis through authenticated SOCKS and cleans up', { skip: !enabled, timeout: 90000 }, async () => {
   const database = `dbex_session_${randomBytes(6).toString('hex')}`

@@ -76,7 +76,7 @@ async function observedProxy(): Promise<{ proxy: ProxyOptions; destinations: Set
   } catch (error) { for (const socket of sockets) socket.destroy(); server.close(); await transport.close(); throw error }
 }
 function base(proxy: ProxyOptions): ConnectionConfig {
-  return { name: 'Isolated Redis topology fixture', kind: 'redis', environment: 'testing', host: '127.0.0.1', port: 6379, ssh, tls: { enabled: false }, proxy, connectTimeoutMs: 5000 }
+  return { name: 'Isolated Redis topology fixture', kind: 'redis', host: '127.0.0.1', port: 6379, ssh, tls: { enabled: false }, proxy, connectTimeoutMs: 5000 }
 }
 async function openAdmin(port: number, tracked: Set<Redis>): Promise<Redis> {
   // Fixed loopback fixture ports: no env override can point these admin commands at a remote database.

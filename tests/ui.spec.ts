@@ -21,7 +21,7 @@ async function installBridge(page: Page) {
       { id: 'mongo', name: 'Mongo Local', kind: 'mongodb', host: '127.0.0.1', port: 27017 },
       { id: 'redis', name: 'Redis Local', kind: 'redis', host: '127.0.0.1', port: 6379 },
       { id: 'sql2', name: 'MySQL Other', kind: 'mysql', host: '127.0.0.2', port: 3306 },
-    ].map(value => ({ ...value, environment: 'development', sshEnabled: false, tlsEnabled: false }))
+    ].map(value => ({ ...value, sshEnabled: false, tlsEnabled: false }))
     const grid = (values: Record<string, string>[]) => ({ columns: Object.keys(values[0] || {}), rows: values })
     ;(window as any).__dbexCalls = calls
     ;(window as any).dbex = {
@@ -399,4 +399,23 @@ test('MongoDB uses per-value BSON colors, nested document types and saved custom
   await page.getByRole('dialog', { name: 'BSON 类型配色' }).getByRole('button', { name: '恢复全部默认颜色' }).click()
   await page.getByRole('dialog', { name: 'BSON 类型配色' }).getByRole('button', { name: '保存', exact: true }).click()
   await expect(page.locator('.workbench:visible [data-bson-type="Int32"]')).toHaveAttribute('data-bson-color', '#4b88d9')
+})
+
+test('connection settings use optional custom groups and colors, not fixed environments', async ({ page }) => {
+  await page.getByRole('button', { name: '＋ 新建连接', exact: true }).click()
+  await page.getByRole('button', { name: 'MySQL', exact: true }).click()
+  await page.getByLabel('连接名称', { exact: true }).fill('Region 100')
+  await page.getByRole('button', { name: '高级设置', exact: true }).click()
+  await expect(page.getByLabel('环境', { exact: true })).toHaveCount(0)
+  await page.getByLabel('分组名称', { exact: true }).fill('Project A / Region 100')
+  await page.getByRole('button', { name: '蓝色', exact: true }).click()
+  await page.getByRole('button', { name: '保存', exact: true }).click()
+  await expect.poll(() => page.evaluate(() => {
+    const call = (window as any).__dbexCalls.filter((item: any) => item.action === 'saveConnection').at(-1)
+    if (!call) return null
+    return { environment: Object.hasOwn(call.config, 'environment'), group: call.config.group, color: call.config.color }
+  })).toEqual({ environment: false, group: 'Project A / Region 100', color: '#4b88d9' })
+  await expect(page.locator('.env-tag')).toHaveCount(0)
+  await connect(page, 'MySQL Local')
+  await expect(page.locator('.workbench:visible .workbench-header .eyebrow')).toHaveText('MYSQL')
 })

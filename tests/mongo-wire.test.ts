@@ -175,7 +175,7 @@ test('a single advertised MongoDB seed is reachable in auto/direct mode even if 
   const manager = new SessionManager()
   const endpoint = new URL(fixture.uri)
   const options: ConnectionConfig = {
-    name: 'mapped MongoDB endpoint', kind: 'mongodb', environment: 'testing',
+    name: 'mapped MongoDB endpoint', kind: 'mongodb', 
     host: endpoint.hostname, port: Number(endpoint.port), authSource: 'admin',
     ssh: { enabled: false, host: '', port: 22, username: '', authMode: 'agent' },
     tls: { enabled: false }, connectTimeoutMs: 1800,
