@@ -1,8 +1,8 @@
 # DB EX
 
-本地优先的桌面数据库工具，统一管理 **MySQL、MongoDB、Redis**。基于 Electron、Vue 3、TypeScript 与 Monaco，不依赖账号、云端服务或遥测。
+本地优先的桌面数据库工具，统一管理 **MySQL、MariaDB、MongoDB、Redis、SQLite**。基于 Electron、Vue 3、TypeScript 与 Monaco，不依赖账号、云端服务或遥测。
 
-当前版本：**0.5.7 预览版**。M2–M5 的功能实现已接入；完整范围、验收证据和限制见 [路线图](docs/ROADMAP.md)。预览安装包与最终发行签名是不同的交付项。
+当前版本：**0.6.0 预览版**。M2–M5 的功能实现已接入；完整范围、验收证据和限制见 [路线图](docs/ROADMAP.md)。预览安装包与最终发行签名是不同的交付项。
 
 ## 功能
 
@@ -24,7 +24,7 @@
 
 ## 开发运行
 
-要求 Node.js **22.12+**、npm，以及相应平台的 Electron 桌面运行依赖。
+要求 Node.js **22.18+**、npm，以及相应平台的 Electron 桌面运行依赖。
 
 ```bash
 git clone https://github.com/xzcode/db-ex.git
@@ -115,11 +115,11 @@ Built-in encrypted storage replaces OS keyring requirements for new records. Exp
 ## 多语言 / Languages
 
 - 默认跟随操作系统首选语言；支持 14 种语言及地区变体，未知语言回退英文。
-- 顶部语言下拉框支持跟随系统或选择简体中文、繁體中文、English、日本語、한국어、Deutsch、Français、Español、Português、Русский、Italiano、العربية、हिन्दी、Bahasa Indonesia，实时生效并记住本地选择。
+- 偏好设置 → 常规中的语言选择支持跟随系统或选择简体中文、繁體中文、English、日本語、한국어、Deutsch、Français、Español、Português、Русский、Italiano、العربية、हिन्दी、Bahasa Indonesia，实时生效并记住本地选择。
 - 连接设置、数据库工作区、应用生成的常用错误与操作确认提示均通过共享语言资源翻译。不会翻译数据库对象名、用户输入、查询结果或 SQL；较少使用的诊断在语言资源缺失时回退英文；未收录的驱动诊断保留原文。
 - 新语言扩展规范见 [docs/I18N.md](docs/I18N.md)。
 
-Choose System default or one of 14 supported languages from the top toolbar. Your selection is remembered locally and applies without restarting. Database data, SQL and connection names are never translated.
+Choose System default or one of 14 supported languages from Preferences → General. Your selection is remembered locally and applies without restarting. Database data, SQL and connection names are never translated.
 
 ## v0.5.4 Preview
 
@@ -148,3 +148,12 @@ Visual filter and sort builder for MongoDB/MySQL, compact navigation footer, bou
 ## Development: SQLite and unified preferences
 
 See [SQLite and preferences continuation](docs/SQLITE_AND_PREFERENCES.md) for the new local SQLite engine, supported operations, recovery and native tool limitations. This development work is not an independently released installer.
+
+
+## v0.6.0 Preview
+
+- Independent MariaDB adapter and settings; tested against MariaDB 10.11 and 11.4.
+- Sortable object catalog, multiple object and query tabs, and server-side column sorting/filter actions.
+- Named SQL and MongoDB query objects with encrypted local persistence, parameter retention, Save As, rename, copy, delete and portable import/export.
+- Settings-only top toolbar and integrated macOS native window controls; Windows/Linux retain their native window chrome.
+- See [v0.6.0 release notes](docs/RELEASE_v0.6.0.md) for supported features and known limitations.

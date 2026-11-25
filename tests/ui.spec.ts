@@ -185,7 +185,7 @@ test('MySQL query, guarded row edits, transactions, and CSV import use the typed
   await expect.poll(() => page.evaluate(() => (window as any).__dbexCalls.some((call: any) => call.action === 'mysql.query' && call.parameters?.[0] === 42))).toBe(true)
   await page.getByRole('button', { name: '只读 · 启用写入', exact: true }).click()
   await page.getByRole('button', { name: '开始事务', exact: true }).click()
-  await expect(page.getByText('事务进行中', { exact: true })).toBeVisible()
+  await expect(page.locator('.workbench:visible').getByText('事务进行中', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: '回滚', exact: true }).click()
   await page.getByRole('button', { name: '数据', exact: true }).click()
   await page.locator('.workbench:visible .data-table tbody tr').first().click()
@@ -360,8 +360,22 @@ test('connection backups export one or all profiles and import without a key pro
 })
 
 
+async function openLanguageSettings(page:Page,label:string){
+  await page.locator('.preferences-button').click()
+  const dialog=page.locator('.preferences-dialog')
+  const select=dialog.getByRole('combobox',{name:label,exact:true})
+  await expect(select).toBeVisible()
+  return {dialog,select}
+}
+async function chooseLanguage(page:Page,label:string,language:string,expected:string){
+  const {dialog,select}=await openLanguageSettings(page,label)
+  await select.selectOption(language)
+  await dialog.locator('[data-action="save-preferences"]').click()
+  await expect(dialog).toHaveCount(0)
+  await expect(page.locator('html')).toHaveAttribute('lang',expected)
+}
 test('English interface can switch live, persists and preserves connection identity', async ({ page }) => {
-  await page.getByRole('combobox', { name: '语言', exact: true }).selectOption('en')
+  await chooseLanguage(page,'语言','en','en')
   await expect(page.getByRole('button', { name: '+ New connection', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Import connections', exact: true })).toBeVisible()
   await expect(page.locator('.connection-item').filter({ hasText: 'MySQL Local' })).toBeVisible()
@@ -375,10 +389,10 @@ test('English interface can switch live, persists and preserves connection ident
   await expect(page.getByLabel('Enable SSH tunnel')).toBeVisible()
   await page.getByRole('button', { name: 'Close dialog' }).click()
   await page.reload()
-  await expect(page.getByRole('combobox', { name: 'Language', exact: true })).toHaveValue('en')
+  {const {dialog,select}=await openLanguageSettings(page,'Language');await expect(select).toHaveValue('en');await dialog.getByRole('button',{name:'Cancel',exact:true}).click()}
   await page.locator('.connection-item').filter({ hasText: 'MySQL Local' }).getByTitle('Connect', { exact: true }).click()
   await expect(page.getByRole('button', { name: 'SQL editor', exact: true })).toBeVisible()
-  await page.getByRole('combobox', { name: 'Language', exact: true }).selectOption('zh-CN')
+  await chooseLanguage(page,'Language','zh-CN','zh-CN')
   await expect(page.getByRole('button', { name: 'SQL 编辑器', exact: true })).toBeVisible()
 })
 
@@ -386,26 +400,24 @@ test('English interface can switch live, persists and preserves connection ident
 test.describe('system language default', () => {
   test.use({ locale: 'de-DE' })
   test('first launch follows system; selecting a language overrides it, system resets it', async ({ page }) => {
-    await expect(page.getByRole('combobox', { name: 'Sprache', exact: true })).toHaveValue('system')
-    await expect(page.getByRole('button', { name: '+ Neue Verbindung', exact: true })).toBeVisible()
+    const {dialog,select}=await openLanguageSettings(page,'Sprache');await expect(select).toHaveValue('system')
     await expect(page.locator('html')).toHaveAttribute('lang', 'de')
-    await page.getByRole('combobox', { name: 'Sprache', exact: true }).selectOption('ja')
+    await select.selectOption('ja');await dialog.locator('[data-action="save-preferences"]').click();await expect(dialog).toHaveCount(0)
     await expect(page.getByRole('button', { name: '＋ 新規接続', exact: true })).toBeVisible()
     await page.reload()
-    await expect(page.getByRole('combobox', { name: '言語', exact: true })).toHaveValue('ja')
-    await page.getByRole('combobox', { name: '言語', exact: true }).selectOption('system')
+    {const reopened=await openLanguageSettings(page,'言語');await expect(reopened.select).toHaveValue('ja');await reopened.select.selectOption('system');await reopened.dialog.locator('[data-action="save-preferences"]').click();await expect(reopened.dialog).toHaveCount(0)}
     await expect(page.getByRole('button', { name: '+ Neue Verbindung', exact: true })).toBeVisible()
   })
 })
 test('Arabic direction and all 14 language options are available', async ({ page }) => {
-  const select = page.getByRole('combobox', { name: '语言', exact: true })
+  const {dialog,select}=await openLanguageSettings(page,'语言')
   await expect(select.locator('option')).toHaveCount(15)
-  await select.selectOption('ar')
+  await select.selectOption('ar');await dialog.locator('[data-action="save-preferences"]').click();await expect(dialog).toHaveCount(0)
   await expect(page.locator('html')).toHaveAttribute('lang', 'ar')
   await expect(page.locator('html')).toHaveAttribute('dir', 'rtl')
   await expect(page.getByRole('button', { name: '+ اتصال جديد', exact: true })).toBeVisible()
   await expect(page.locator('.connection-item').filter({ hasText: 'MySQL Local' })).toBeVisible()
-  await page.getByRole('combobox', { name: 'اللغة', exact: true }).selectOption('zh-TW')
+  await chooseLanguage(page,'اللغة','zh-TW','zh-TW')
   await expect(page.locator('html')).toHaveAttribute('dir', 'ltr')
   await expect(page.getByRole('button', { name: '＋ 新建連線', exact: true })).toBeVisible()
 })
