@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import { t, localize } from '../i18n'
 import { listOperators, listValues, stringOperators, compileMongoFilter, compileMysqlFilter, type FilterRule, type FilterType } from '../../shared/browse-filter'
+import { mongoValueCategories, valueCategory, categoryType, manualValueType } from '../../shared/filter-value-category'
 import type { FilterSuggestion } from '../../shared/filter-suggestions'
 const props=defineProps<{ rule:FilterRule; kind:'mysql'|'mongodb'; types:readonly FilterType[]; suggestions:FilterSuggestion[] }>()
 const emit=defineEmits<{ close:[]; save:[value:string,type:FilterType] }>()
@@ -11,10 +12,28 @@ const search=ref('')
 const error=ref('')
 const list= listOperators.includes(props.rule.operator)
 const stringOnly=stringOperators.includes(props.rule.operator)
-const options=computed(()=>props.suggestions.filter(item=>(!list||item.type===type.value)&&(!stringOnly||item.type==='String')&&item.value.toLowerCase().includes(search.value.toLowerCase())))
+const category=computed(()=>valueCategory(type.value))
+const options=computed(()=>props.suggestions.filter(item=>
+  (!list || (props.kind==='mongodb' ? valueCategory(item.type)===category.value : item.type===type.value))
+  && (!stringOnly||item.type==='String')
+  && item.value.toLowerCase().includes(search.value.toLowerCase())))
+function changeCategory(event:Event){
+  const next=categoryType((event.target as HTMLSelectElement).value)
+  if(valueCategory(next)===category.value)return
+  type.value=next;text.value=list?'[]':'';error.value=''
+}
+function manualInput(){if(props.kind==='mongodb')type.value=manualValueType(type.value);error.value=''}
+function suggestionText(item:FilterSuggestion):string {
+  if(props.kind==='mongodb'&&category.value==='custom'&&item.type==='Boolean')return item.value
+  return item.value
+}
 const selected=computed(()=>{if(!list)return [text.value];try{return listValues(text.value)}catch{return []}})
 function choose(item:FilterSuggestion){
-  if(list){const current=selected.value;const next=current.includes(item.value)?current.filter(value=>value!==item.value):[...current,item.value];text.value=JSON.stringify(next)}
+  if(list){
+    const value=suggestionText(item)
+    if(props.kind==='mongodb')type.value=manualValueType(type.value)
+    const current=selected.value;const next=current.includes(value)?current.filter(v=>v!==value):[...current,value];text.value=JSON.stringify(next)
+  }
   else {type.value=item.type;text.value=item.value}
 }
 function save(){
@@ -34,13 +53,16 @@ function save(){
         <header class="dialog-header"><h2>{{ t('编辑筛选值') }} · {{ rule.field }}</h2><button class="icon-button" type="button" :aria-label="t('关闭')" @click="emit('close')">×</button></header>
         <form @submit.prevent="save">
           <div class="filter-value-body">
-            <label class="field">{{ t('类型') }}<select v-model="type" :disabled="stringOnly"><option v-for="item in types" :key="item">{{ item }}</option></select></label>
-            <label class="field">{{ t('字段值') }}<textarea v-if="list" v-model="text" rows="3" placeholder='["value1","value2"]' /><input v-else v-model="text" autofocus spellcheck="false" /></label>
+            <label class="field filter-value-input">{{ t('字段值') }}<textarea v-if="list" v-model="text" @input="manualInput" rows="3" placeholder='["value1","value2"]' /><input v-else v-model="text" @input="manualInput" autofocus spellcheck="false" :placeholder="kind==='mongodb' && category==='datetime' ? '2026-01-01T00:00:00Z' : kind==='mongodb' && category==='objectId' ? '24 hex' : kind==='mongodb' && category==='custom' ? 'Long(&quot;123&quot;)' : ''" /></label>
+            <label class="field filter-category-field">{{ t('类型') }}<select v-if="kind==='mongodb'" :value="category" :disabled="stringOnly" @change="changeCategory"><option v-for="item in mongoValueCategories" :key="item.value" :value="item.value">{{ t(item.label) }}</option></select><select v-else v-model="type" :disabled="stringOnly"><option v-for="item in types" :key="item">{{ item }}</option></select></label>
+            <p v-if="kind==='mongodb' && category==='custom'" class="helper">{{ t('自定义支持 BSON 构造语法，不执行 JavaScript。') }}</p>
+            <p v-if="kind==='mongodb' && category==='datetime'" class="helper">{{ t('请输入 UTC 日期时间。') }}</p>
+            <p v-if="kind==='mongodb' && type!==categoryType(category)" class="helper">{{ t('当前实际类型') }}: {{ type }}</p>
             <p v-if="list" class="helper">{{ t('列表使用 JSON 字符串数组，可勾选同类型建议值。') }}</p>
             <p v-if="error" class="inline-message error" role="alert">{{ localize(error) }}</p>
             <div class="filter-suggestion-header"><strong>{{ t('建议值') }}</strong><small>{{ t('来自当前查询页') }}</small></div>
             <div class="filter-suggestions">
-              <label v-for="item in options" :key="JSON.stringify([item.type,item.value])" class="filter-suggestion"><input :type="list?'checkbox':'radio'" :checked="selected.includes(item.value) && type===item.type" @change="choose(item)" /><span :title="item.value">{{ item.value === '' ? t('空字符串') : item.value }}</span><small>{{ item.type }}</small></label>
+              <label v-for="item in options" :key="JSON.stringify([item.type,item.value])" class="filter-suggestion"><input :type="list?'checkbox':'radio'" :checked="selected.includes(item.value) && (list && kind==='mongodb' ? valueCategory(item.type)===category : type===item.type)" @change="choose(item)" /><span :title="item.value">{{ item.value === '' ? t('空字符串') : item.value }}</span><small>{{ item.type }}</small></label>
               <p v-if="!options.length" class="helper">{{ t('暂无建议值') }}</p>
             </div>
             <input v-model="search" :aria-label="t('搜索建议值')" :placeholder="t('搜索建议值')" />

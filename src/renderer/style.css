@@ -544,3 +544,6 @@ html[dir=rtl] .tree-chevron:not(.expanded) { transform: rotate(180deg); }
 .filter-suggestion > span { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .filter-value-dialog input[type=radio],.filter-value-dialog input[type=checkbox] { accent-color:var(--accent); }
 @media(max-width:1050px) { .builder-rule { grid-template-columns:18px minmax(64px,1fr) minmax(58px,.8fr) minmax(58px,.7fr) minmax(65px,1fr) 24px 50px 24px; gap:3px; } }
+
+.filter-value-body .filter-category-field { width: min(200px, 100%); align-self: flex-end; }
+.filter-value-body .filter-value-input input { min-height: 36px; }

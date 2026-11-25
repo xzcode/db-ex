@@ -3,7 +3,7 @@ import type { SqlValue } from './types'
 
 export const filterOperators = ['eq','ne','lt','lte','gt','gte','contains','notContains','starts','notStarts','ends','notEnds','null','notNull','empty','notEmpty','in','notIn','exists','missing','isType','notType','custom'] as const
 export type FilterOperator = typeof filterOperators[number]
-export const filterTypes = ['String','Int32','Long','Double','Decimal128','ObjectId','ISODate','Boolean'] as const
+export const filterTypes = ['String','Int32','Long','Double','Decimal128','ObjectId','ISODate','Boolean','Number','Custom'] as const
 export type FilterType = typeof filterTypes[number]
 export const mongoFieldTypes = ['double','string','object','array','binData','undefined','objectId','bool','date','null','regex','dbPointer','javascript','symbol','javascriptWithScope','int','timestamp','long','decimal','minKey','maxKey','number'] as const
 export const mongoOnlyOperators: readonly FilterOperator[] = ['exists','missing','isType','notType','custom']
@@ -36,7 +36,7 @@ function checked(input: unknown, mongo: boolean): BrowseFilter {
       const next = rule.join === undefined ? fallback : join(rule.join)
       if (rule.enabled === false || group.enabled === false) return { ...rule, join: next, enabled: false }
       if (!filterOperators.includes(rule.operator) || (!mongo && mongoOnlyOperators.includes(rule.operator)) || !filterTypes.includes(rule.type) || typeof rule.value !== 'string' || rule.value.length > 16384) return fail()
-      if (!mongo && ['ObjectId','ISODate'].includes(rule.type)) return fail()
+      if (!mongo && ['ObjectId','ISODate','Number','Custom'].includes(rule.type)) return fail()
       if (stringOperators.includes(rule.operator) && rule.type !== 'String') return fail()
       return { field: fieldName(rule.field, mongo), operator: rule.operator, type: rule.type, value: rule.value, enabled: true, join: next }
     }).filter(rule => rule.enabled !== false)
@@ -55,6 +55,30 @@ function checked(input: unknown, mongo: boolean): BrowseFilter {
 function typedValue(rule: FilterRule, value = rule.value): unknown {
   if (value.length > 4096) return fail()
   if (rule.type === 'String') return value
+  if (rule.type === 'Custom') return JSON.parse(parseMongoDocumentEditor('{"v":' + value + '}')).v
+  if (rule.type === 'Number') {
+    const input = value.trim()
+    // Numeric literals never pass through JSON.parse as JavaScript numbers.
+    // Signed integral values use Int32 or Long; fractional literals use
+    // Double at ordinary precision and Decimal128 when greater precision is
+    // required. Explicit BSON constructors remain available under Custom.
+    if (!/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(input) || input.length > 128) return fail()
+    let constructor: 'Int32'|'Long'|'Double'|'Decimal128'
+    if (/^-?\d+$/.test(input) && input !== '-0') {
+      const n = BigInt(input)
+      constructor = n >= -2147483648n && n <= 2147483647n ? 'Int32'
+        : n >= -9223372036854775808n && n <= 9223372036854775807n ? 'Long' : 'Decimal128'
+    } else {
+      const significant = input.split(/[eE]/)[0]!.replace(/[-.]/g,'').replace(/^0+/,'').replace(/0+$/,'').length
+      const numeric = Number(input)
+      constructor = significant <= 15 && Number.isFinite(numeric) && (numeric !== 0 || !/[1-9]/.test(input.split(/[eE]/)[0]!)) ? 'Double' : 'Decimal128'
+    }
+    if (constructor === 'Decimal128') {
+      const mantissa = input.split(/[eE]/)[0]!
+      if (mantissa.replace(/[-.]/g,'').replace(/^0+/,'').replace(/0+$/,'').length > 34) return fail()
+    }
+    return JSON.parse(parseMongoDocumentEditor('{"v":'+constructor+'('+JSON.stringify(input)+')}')).v
+  }
   if (rule.type === 'Boolean') {
     if (value !== 'true' && value !== 'false') return fail()
     return value === 'true'
