@@ -39,7 +39,9 @@ export const clickHouseManagementCatalogs = {
     "确认打开原生数据库 CLI？": "Open native database CLI?",
     "独立原生会话；关闭会话不会撤销已提交的操作。": "Independent native session; closing it does not undo committed operations.",
     "支持单条 SQL 与事务控制，不支持客户端 Shell 命令。输出不保存。": "Single SQL statements and transaction control only; no client shell commands. Output is not saved.",
-    "外部工具支持单节点连接；MongoDB 支持隧道内验证 TLS，MySQL 系列的隧道加 TLS 暂不支持。": "Native tools support single-node connections; MongoDB supports verified TLS over tunnels, MySQL-family tunnel plus TLS is unsupported."
+    "外部工具支持单节点连接；MongoDB 支持隧道内验证 TLS，MySQL 系列的隧道加 TLS 暂不支持。": "Native tools support single-node connections; MongoDB supports verified TLS over tunnels, MySQL-family tunnel plus TLS is unsupported.",
+    "OUTPUT_EXISTS: 目标文件已存在，不会覆盖": "OUTPUT_EXISTS: Destination already exists; it will not be overwritten.",
+    "OUTPUT_FILESYSTEM: 目标文件系统不支持安全的原子发布，请选择其他磁盘": "OUTPUT_FILESYSTEM: The destination filesystem cannot safely publish this file atomically; choose another disk."
   },
   "zh-TW": {
     "管理": "管理",
@@ -81,7 +83,9 @@ export const clickHouseManagementCatalogs = {
     "确认打开原生数据库 CLI？": "確認開啟原生資料庫 CLI？",
     "独立原生会话；关闭会话不会撤销已提交的操作。": "獨立原生工作階段；關閉不會復原已提交的操作。",
     "支持单条 SQL 与事务控制，不支持客户端 Shell 命令。输出不保存。": "支援單條 SQL 與交易控制，不支援用戶端 Shell 指令。輸出不儲存。",
-    "外部工具支持单节点连接；MongoDB 支持隧道内验证 TLS，MySQL 系列的隧道加 TLS 暂不支持。": "外部工具支援單節點連線；MongoDB 支援通道內驗證 TLS，MySQL 系列的通道加 TLS 暫不支援。"
+    "外部工具支持单节点连接；MongoDB 支持隧道内验证 TLS，MySQL 系列的隧道加 TLS 暂不支持。": "外部工具支援單節點連線；MongoDB 支援通道內驗證 TLS，MySQL 系列的通道加 TLS 暫不支援。",
+    "OUTPUT_EXISTS: 目标文件已存在，不会覆盖": "OUTPUT_EXISTS: 目標檔案已存在，不會覆蓋。",
+    "OUTPUT_FILESYSTEM: 目标文件系统不支持安全的原子发布，请选择其他磁盘": "OUTPUT_FILESYSTEM: 目標檔案系統不支援安全的原子發佈，請選擇其他磁碟。"
   },
   "ja": {
     "管理": "管理",
@@ -123,7 +127,9 @@ export const clickHouseManagementCatalogs = {
     "确认打开原生数据库 CLI？": "ネイティブ DB CLI を開きますか？",
     "独立原生会话；关闭会话不会撤销已提交的操作。": "独立セッションです。終了してもコミット済み操作は元に戻りません。",
     "支持单条 SQL 与事务控制，不支持客户端 Shell 命令。输出不保存。": "単一 SQL とトランザクション操作のみ。シェル命令不可。出力は保存されません。",
-    "外部工具支持单节点连接；MongoDB 支持隧道内验证 TLS，MySQL 系列的隧道加 TLS 暂不支持。": "単一ノードに対応。MongoDB はトンネル上の検証済み TLS に対応、MySQL 系の併用は未対応。"
+    "外部工具支持单节点连接；MongoDB 支持隧道内验证 TLS，MySQL 系列的隧道加 TLS 暂不支持。": "単一ノードに対応。MongoDB はトンネル上の検証済み TLS に対応、MySQL 系の併用は未対応。",
+    "OUTPUT_EXISTS: 目标文件已存在，不会覆盖": "OUTPUT_EXISTS: 出力先は既に存在します。上書きしません。",
+    "OUTPUT_FILESYSTEM: 目标文件系统不支持安全的原子发布，请选择其他磁盘": "OUTPUT_FILESYSTEM: 安全な原子的公開に対応していないファイルシステムです。別のディスクを選択してください。"
   },
   "ko": {
     "管理": "관리",
@@ -165,7 +171,9 @@ export const clickHouseManagementCatalogs = {
     "确认打开原生数据库 CLI？": "네이티브 DB CLI를 열까요?",
     "独立原生会话；关闭会话不会撤销已提交的操作。": "독립 세션입니다. 닫아도 커밋된 작업은 취소되지 않습니다.",
     "支持单条 SQL 与事务控制，不支持客户端 Shell 命令。输出不保存。": "단일 SQL 및 트랜잭션 제어만 지원하며 Shell 명령과 출력 저장은 지원하지 않습니다.",
-    "外部工具支持单节点连接；MongoDB 支持隧道内验证 TLS，MySQL 系列的隧道加 TLS 暂不支持。": "단일 노드 지원. MongoDB는 터널 TLS 검증을 지원하며 MySQL 계열의 터널과 TLS 조합은 미지원입니다."
+    "外部工具支持单节点连接；MongoDB 支持隧道内验证 TLS，MySQL 系列的隧道加 TLS 暂不支持。": "단일 노드 지원. MongoDB는 터널 TLS 검증을 지원하며 MySQL 계열의 터널과 TLS 조합은 미지원입니다.",
+    "OUTPUT_EXISTS: 目标文件已存在，不会覆盖": "OUTPUT_EXISTS: 대상 파일이 이미 존재합니다. 덮어쓰지 않습니다.",
+    "OUTPUT_FILESYSTEM: 目标文件系统不支持安全的原子发布，请选择其他磁盘": "OUTPUT_FILESYSTEM: 대상 파일 시스템에서 안전한 원자적 파일 게시를 지원하지 않습니다. 다른 디스크를 선택하세요."
   },
   "de": {
     "管理": "Verwaltung",
@@ -207,7 +215,9 @@ export const clickHouseManagementCatalogs = {
     "确认打开原生数据库 CLI？": "Native Datenbank-CLI öffnen?",
     "独立原生会话；关闭会话不会撤销已提交的操作。": "Unabhängige Sitzung; bestätigte Änderungen werden beim Schließen nicht rückgängig gemacht.",
     "支持单条 SQL 与事务控制，不支持客户端 Shell 命令。输出不保存。": "Einzelne SQL-Anweisungen und Transaktionen; keine Shell-Befehle. Ausgabe wird nicht gespeichert.",
-    "外部工具支持单节点连接；MongoDB 支持隧道内验证 TLS，MySQL 系列的隧道加 TLS 暂不支持。": "Einzelknoten: MongoDB unterstützt verifiziertes TLS im Tunnel, MySQL-Familie nicht."
+    "外部工具支持单节点连接；MongoDB 支持隧道内验证 TLS，MySQL 系列的隧道加 TLS 暂不支持。": "Einzelknoten: MongoDB unterstützt verifiziertes TLS im Tunnel, MySQL-Familie nicht.",
+    "OUTPUT_EXISTS: 目标文件已存在，不会覆盖": "OUTPUT_EXISTS: Zieldatei existiert bereits und wird nicht überschrieben.",
+    "OUTPUT_FILESYSTEM: 目标文件系统不支持安全的原子发布，请选择其他磁盘": "OUTPUT_FILESYSTEM: Das Zieldateisystem unterstützt keine sichere atomare Veröffentlichung. Wählen Sie ein anderes Laufwerk."
   },
   "fr": {
     "管理": "Gestion",
@@ -249,7 +259,9 @@ export const clickHouseManagementCatalogs = {
     "确认打开原生数据库 CLI？": "Ouvrir la CLI native ?",
     "独立原生会话；关闭会话不会撤销已提交的操作。": "Session indépendante ; la fermeture ne défait pas les opérations validées.",
     "支持单条 SQL 与事务控制，不支持客户端 Shell 命令。输出不保存。": "Instruction SQL unique et transactions uniquement ; pas de commandes shell. Sortie non enregistrée.",
-    "外部工具支持单节点连接；MongoDB 支持隧道内验证 TLS，MySQL 系列的隧道加 TLS 暂不支持。": "Outils à nœud unique : TLS vérifié dans le tunnel pour MongoDB, non pris en charge pour MySQL."
+    "外部工具支持单节点连接；MongoDB 支持隧道内验证 TLS，MySQL 系列的隧道加 TLS 暂不支持。": "Outils à nœud unique : TLS vérifié dans le tunnel pour MongoDB, non pris en charge pour MySQL.",
+    "OUTPUT_EXISTS: 目标文件已存在，不会覆盖": "OUTPUT_EXISTS: Le fichier cible existe déjà et ne sera pas écrasé.",
+    "OUTPUT_FILESYSTEM: 目标文件系统不支持安全的原子发布，请选择其他磁盘": "OUTPUT_FILESYSTEM: Le système de fichiers cible ne permet pas une publication atomique sûre ; choisissez un autre disque."
   },
   "es": {
     "管理": "Administración",
@@ -291,7 +303,9 @@ export const clickHouseManagementCatalogs = {
     "确认打开原生数据库 CLI？": "¿Abrir la CLI nativa?",
     "独立原生会话；关闭会话不会撤销已提交的操作。": "Sesión independiente; cerrarla no revierte operaciones confirmadas.",
     "支持单条 SQL 与事务控制，不支持客户端 Shell 命令。输出不保存。": "Solo SQL individual y transacciones; sin comandos shell. No guarda la salida.",
-    "外部工具支持单节点连接；MongoDB 支持隧道内验证 TLS，MySQL 系列的隧道加 TLS 暂不支持。": "Nodo único: MongoDB admite TLS verificado por túnel; MySQL no admite esa combinación."
+    "外部工具支持单节点连接；MongoDB 支持隧道内验证 TLS，MySQL 系列的隧道加 TLS 暂不支持。": "Nodo único: MongoDB admite TLS verificado por túnel; MySQL no admite esa combinación.",
+    "OUTPUT_EXISTS: 目标文件已存在，不会覆盖": "OUTPUT_EXISTS: El archivo de destino ya existe y no se sobrescribirá.",
+    "OUTPUT_FILESYSTEM: 目标文件系统不支持安全的原子发布，请选择其他磁盘": "OUTPUT_FILESYSTEM: El sistema de archivos no admite publicación atómica segura; elija otro disco."
   },
   "pt-BR": {
     "管理": "Gerenciamento",
@@ -333,7 +347,9 @@ export const clickHouseManagementCatalogs = {
     "确认打开原生数据库 CLI？": "Abrir CLI nativa?",
     "独立原生会话；关闭会话不会撤销已提交的操作。": "Sessão independente; fechar não desfaz operações confirmadas.",
     "支持单条 SQL 与事务控制，不支持客户端 Shell 命令。输出不保存。": "Apenas SQL individual e transações; sem comandos shell. A saída não é salva.",
-    "外部工具支持单节点连接；MongoDB 支持隧道内验证 TLS，MySQL 系列的隧道加 TLS 暂不支持。": "Nó único: MongoDB aceita TLS verificado no túnel; a família MySQL não aceita essa combinação."
+    "外部工具支持单节点连接；MongoDB 支持隧道内验证 TLS，MySQL 系列的隧道加 TLS 暂不支持。": "Nó único: MongoDB aceita TLS verificado no túnel; a família MySQL não aceita essa combinação.",
+    "OUTPUT_EXISTS: 目标文件已存在，不会覆盖": "OUTPUT_EXISTS: O arquivo de destino já existe e não será sobrescrito.",
+    "OUTPUT_FILESYSTEM: 目标文件系统不支持安全的原子发布，请选择其他磁盘": "OUTPUT_FILESYSTEM: O sistema de arquivos não permite publicação atômica segura; escolha outro disco."
   },
   "ru": {
     "管理": "Управление",
@@ -375,7 +391,9 @@ export const clickHouseManagementCatalogs = {
     "确认打开原生数据库 CLI？": "Открыть нативный CLI?",
     "独立原生会话；关闭会话不会撤销已提交的操作。": "Независимый сеанс; закрытие не отменяет зафиксированные операции.",
     "支持单条 SQL 与事务控制，不支持客户端 Shell 命令。输出不保存。": "Одна SQL-команда и транзакции; без команд оболочки. Вывод не сохраняется.",
-    "外部工具支持单节点连接；MongoDB 支持隧道内验证 TLS，MySQL 系列的隧道加 TLS 暂不支持。": "Один узел: MongoDB поддерживает проверенный TLS в туннеле, семейство MySQL — нет."
+    "外部工具支持单节点连接；MongoDB 支持隧道内验证 TLS，MySQL 系列的隧道加 TLS 暂不支持。": "Один узел: MongoDB поддерживает проверенный TLS в туннеле, семейство MySQL — нет.",
+    "OUTPUT_EXISTS: 目标文件已存在，不会覆盖": "OUTPUT_EXISTS: Файл назначения уже существует и не будет перезаписан.",
+    "OUTPUT_FILESYSTEM: 目标文件系统不支持安全的原子发布，请选择其他磁盘": "OUTPUT_FILESYSTEM: Файловая система не поддерживает безопасную атомарную публикацию; выберите другой диск."
   },
   "it": {
     "管理": "Gestione",
@@ -417,7 +435,9 @@ export const clickHouseManagementCatalogs = {
     "确认打开原生数据库 CLI？": "Aprire la CLI nativa?",
     "独立原生会话；关闭会话不会撤销已提交的操作。": "Sessione indipendente; la chiusura non annulla le operazioni confermate.",
     "支持单条 SQL 与事务控制，不支持客户端 Shell 命令。输出不保存。": "Singola istruzione SQL e transazioni; niente comandi shell. Output non salvato.",
-    "外部工具支持单节点连接；MongoDB 支持隧道内验证 TLS，MySQL 系列的隧道加 TLS 暂不支持。": "Nodo singolo: MongoDB supporta TLS verificato nel tunnel; famiglia MySQL non supportata."
+    "外部工具支持单节点连接；MongoDB 支持隧道内验证 TLS，MySQL 系列的隧道加 TLS 暂不支持。": "Nodo singolo: MongoDB supporta TLS verificato nel tunnel; famiglia MySQL non supportata.",
+    "OUTPUT_EXISTS: 目标文件已存在，不会覆盖": "OUTPUT_EXISTS: Il file di destinazione esiste già e non sarà sovrascritto.",
+    "OUTPUT_FILESYSTEM: 目标文件系统不支持安全的原子发布，请选择其他磁盘": "OUTPUT_FILESYSTEM: Il filesystem non supporta una pubblicazione atomica sicura; scegliere un altro disco."
   },
   "ar": {
     "管理": "الإدارة",
@@ -459,7 +479,9 @@ export const clickHouseManagementCatalogs = {
     "确认打开原生数据库 CLI？": "فتح واجهة قاعدة البيانات الأصلية؟",
     "独立原生会话；关闭会话不会撤销已提交的操作。": "جلسة مستقلة؛ إغلاقها لا يلغي العمليات المعتمدة.",
     "支持单条 SQL 与事务控制，不支持客户端 Shell 命令。输出不保存。": "عبارة SQL واحدة ومعاملات فقط؛ بلا أوامر Shell. لا تحفظ المخرجات.",
-    "外部工具支持单节点连接；MongoDB 支持隧道内验证 TLS，MySQL 系列的隧道加 TLS 暂不支持。": "عقدة واحدة: يدعم MongoDB تحقق TLS داخل النفق، ولا تدعم عائلة MySQL هذا الجمع."
+    "外部工具支持单节点连接；MongoDB 支持隧道内验证 TLS，MySQL 系列的隧道加 TLS 暂不支持。": "عقدة واحدة: يدعم MongoDB تحقق TLS داخل النفق، ولا تدعم عائلة MySQL هذا الجمع.",
+    "OUTPUT_EXISTS: 目标文件已存在，不会覆盖": "OUTPUT_EXISTS: الملف الهدف موجود ولن تتم الكتابة فوقه.",
+    "OUTPUT_FILESYSTEM: 目标文件系统不支持安全的原子发布，请选择其他磁盘": "OUTPUT_FILESYSTEM: نظام الملفات لا يدعم النشر الذري الآمن؛ اختر قرصًا آخر."
   },
   "hi": {
     "管理": "प्रबंधन",
@@ -501,7 +523,9 @@ export const clickHouseManagementCatalogs = {
     "确认打开原生数据库 CLI？": "मूल डेटाबेस CLI खोलें?",
     "独立原生会话；关闭会话不会撤销已提交的操作。": "स्वतंत्र सत्र; बंद करने से कमिट किए गए बदलाव वापस नहीं होते।",
     "支持单条 SQL 与事务控制，不支持客户端 Shell 命令。输出不保存。": "एक SQL कथन और लेनदेन नियंत्रण; Shell आदेश नहीं। आउटपुट सहेजा नहीं जाता।",
-    "外部工具支持单节点连接；MongoDB 支持隧道内验证 TLS，MySQL 系列的隧道加 TLS 暂不支持。": "एकल नोड: MongoDB टनल में सत्यापित TLS समर्थित; MySQL परिवार में संयोजन असमर्थित।"
+    "外部工具支持单节点连接；MongoDB 支持隧道内验证 TLS，MySQL 系列的隧道加 TLS 暂不支持。": "एकल नोड: MongoDB टनल में सत्यापित TLS समर्थित; MySQL परिवार में संयोजन असमर्थित।",
+    "OUTPUT_EXISTS: 目标文件已存在，不会覆盖": "OUTPUT_EXISTS: गंतव्य फ़ाइल मौजूद है; उसे बदला नहीं जाएगा।",
+    "OUTPUT_FILESYSTEM: 目标文件系统不支持安全的原子发布，请选择其他磁盘": "OUTPUT_FILESYSTEM: फ़ाइल सिस्टम सुरक्षित एटॉमिक प्रकाशन का समर्थन नहीं करता; दूसरी डिस्क चुनें।"
   },
   "id": {
     "管理": "Pengelolaan",
@@ -543,6 +567,8 @@ export const clickHouseManagementCatalogs = {
     "确认打开原生数据库 CLI？": "Buka CLI native?",
     "独立原生会话；关闭会话不会撤销已提交的操作。": "Sesi independen; menutup tidak membatalkan operasi yang sudah dikomit.",
     "支持单条 SQL 与事务控制，不支持客户端 Shell 命令。输出不保存。": "Satu pernyataan SQL dan transaksi; tanpa perintah shell. Output tidak disimpan.",
-    "外部工具支持单节点连接；MongoDB 支持隧道内验证 TLS，MySQL 系列的隧道加 TLS 暂不支持。": "Node tunggal: MongoDB mendukung TLS terverifikasi dalam tunnel; keluarga MySQL belum mendukung kombinasi ini."
+    "外部工具支持单节点连接；MongoDB 支持隧道内验证 TLS，MySQL 系列的隧道加 TLS 暂不支持。": "Node tunggal: MongoDB mendukung TLS terverifikasi dalam tunnel; keluarga MySQL belum mendukung kombinasi ini.",
+    "OUTPUT_EXISTS: 目标文件已存在，不会覆盖": "OUTPUT_EXISTS: File tujuan sudah ada dan tidak akan ditimpa.",
+    "OUTPUT_FILESYSTEM: 目标文件系统不支持安全的原子发布，请选择其他磁盘": "OUTPUT_FILESYSTEM: Sistem file tujuan tidak mendukung publikasi atomik yang aman; pilih disk lain."
   }
 } as const

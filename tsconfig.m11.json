@@ -1,0 +1,4 @@
+{
+  "extends":"./tsconfig.main.json",
+  "include":["src/main/**/*.ts","src/shared/**/*.ts","scripts/m11-ssh-fixture.ts","scripts/test-m11-*.ts"]
+}

@@ -1,7 +1,8 @@
 import type {ClickHouseClient,ClickHouseSettings} from '@clickhouse/client'
 import type {ClickHouseTransfer} from '../../shared/types'
 import {randomUUID} from 'node:crypto'
-import {open,mkdtemp,link,rm} from 'node:fs/promises'
+import {open,mkdtemp,rm} from 'node:fs/promises'
+import {publishNewFile} from './publish-file'
 import {createWriteStream} from 'node:fs'
 import {dirname,join} from 'node:path'
 import {Transform, type TransformCallback} from 'node:stream'
@@ -30,7 +31,7 @@ export async function streamClickHouse(client:ClickHouseClient,input:ClickHouseT
    await pipeline(result.stream,budget.stream,createWriteStream(temp,{flags:'wx',mode:0o600}),{signal})
    signal.throwIfAborted()
    // Atomic publication without replacing an existing file.
-   await link(temp,path)
+   await publishNewFile(temp,path,signal,input.format==='jsonl')
    return {bytes:budget.bytes()}
   }finally{await rm(tempDir,{recursive:true,force:true})}
  }

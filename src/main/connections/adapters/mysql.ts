@@ -28,13 +28,11 @@ export function createMysqlFamilyAdapter(kind:'mysql'|'mariadb'):DatabaseAdapter
       // Query one bounded server-version value for the explicit MariaDB profile.
       // Do not advertise a MariaDB profile against a different server family.
       const connected=client
-      let serverVersion:string|undefined
-      if(kind==='mariadb'){
-        const [rows]=await connected.query({sql:'SELECT VERSION() AS server_version',timeout:config.connectTimeoutMs||12000}) as [Record<string,unknown>[],unknown]
-        const version=rows[0]?.server_version
-        if(typeof version!=='string'||version.length>200||!version.toLowerCase().includes('mariadb'))throw new Error('INVALID_CONNECTION: 数据库类型错误')
-        serverVersion=version
-      }
+      const [rows]=await connected.query({sql:'SELECT VERSION() AS server_version',timeout:config.connectTimeoutMs||12000}) as [Record<string,unknown>[],unknown]
+      const version=rows[0]?.server_version
+      if(typeof version!=='string'||version.length>200||!version.trim())throw new Error('INVALID_CONNECTION: 数据库类型错误')
+      if(kind==='mariadb'&&!version.toLowerCase().includes('mariadb'))throw new Error('INVALID_CONNECTION: 数据库类型错误')
+      const serverVersion=version
       const operations=new MysqlOperations(connected,kind)
       return {
         serverVersion,

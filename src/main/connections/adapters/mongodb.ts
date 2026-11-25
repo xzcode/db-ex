@@ -1,5 +1,5 @@
 import { MongoClient,type MongoClientOptions } from 'mongodb'
-import { checkServerIdentity } from 'node:tls'
+import { checkServerIdentity,createSecureContext } from 'node:tls'
 import { isIP } from 'node:net'
 import { metric,metrics } from '../../../shared/object-inspection'
 import type { MongoOperation } from '../../../shared/types'
@@ -24,8 +24,10 @@ export const mongoAdapter:DatabaseAdapter={
       retryWrites:false,retryReads:true,promoteValues:true,
       ...(config.mongoReplicaSet?{replicaSet:config.mongoReplicaSet}:{}),
       ...(mongoDirectConnection(config)===undefined?{}:{directConnection:mongoDirectConnection(config)}),
-      ...(tlsActive?{tls:true,ca:tls.ca,cert:tls.cert,key:tls.key,minVersion:'TLSv1.2' as const}:{}),
-      ...(tlsActive&&config.tls.servername?{servername:config.tls.servername,checkServerIdentity:(_host:string,certificate:Parameters<typeof checkServerIdentity>[1])=>checkServerIdentity(config.tls.servername!,certificate)}:{})
+      // mongodb v6 rejects minVersion as a MongoClient option. A Node
+      // secure context preserves CA, mTLS material and the minimum protocol.
+      ...(tlsActive?{tls:true,rejectUnauthorized:true,secureContext:createSecureContext({ca:tls.ca,cert:tls.cert,key:tls.key,minVersion:'TLSv1.2'})}:{}),
+      ...(tlsActive&&config.tls.servername?{...(isIP(config.tls.servername)?{}:{servername:config.tls.servername}),checkServerIdentity:(_host:string,certificate:Parameters<typeof checkServerIdentity>[1])=>checkServerIdentity(config.tls.servername!,certificate)}:{})
     }
     if(config.ssh.enabled||config.proxy?.enabled){
       const proxy=await transport.socks()

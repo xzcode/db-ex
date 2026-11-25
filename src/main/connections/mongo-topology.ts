@@ -30,8 +30,8 @@ export function mongoDirectConnection(config: ConnectionConfig): boolean | undef
 export function mongoUriTlsEnabled(uri?: string): boolean {
   if (!uri?.trim()) return false
   const question = uri.indexOf('?')
-  const params = new URLSearchParams(question < 0 ? '' : uri.slice(question + 1))
+  const params = new Map([...new URLSearchParams(question < 0 ? '' : uri.slice(question + 1))].map(([key,value])=>[key.toLowerCase(),value]))
   const enabled = params.get('tls') ?? params.get('ssl')
-  if (enabled !== null) return enabled.toLowerCase() === 'true'
+  if (enabled !== undefined) return enabled.toLowerCase() === 'true'
   return /^mongodb\+srv:\/\//i.test(uri)
 }

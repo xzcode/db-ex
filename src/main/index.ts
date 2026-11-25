@@ -1,11 +1,11 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, shell, utilityProcess, nativeImage, screen, session as electronSession } from 'electron'
 import { windowChromeOptions } from '../shared/window-chrome'
 import { isLocale, resolveLocale, translate, localizeMessage, type Locale } from '../shared/i18n'
-import { constants } from 'node:fs'
+import {publishNewFile} from './operations/publish-file'
 import { randomUUID } from 'node:crypto'
 import { normalizeWorkspaceWindows,PRIMARY_WORKSPACE,type WorkspaceWindow } from '../shared/workspace-windows'
 import { join, basename, extname, dirname } from 'node:path'
-import { readFile, stat, writeFile, mkdir, mkdtemp, copyFile, rm, chmod } from 'node:fs/promises'
+import { readFile, stat, writeFile, mkdir, mkdtemp, rm, chmod } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 import type { ConnectionConfig, DatabaseOperation, FileImport, QuerySnippet } from '../shared/types'
 import { ConnectionStore } from './connections/store'
@@ -181,7 +181,17 @@ function registerIpc(): void {
   ipcMain.handle('connections:appearance', handler((_win, id: string, patch: unknown) => store.updateAppearance(id, patch)))
   ipcMain.handle('connections:edit', handler((_win, id: string) => store.edit(id)))
   ipcMain.handle('connections:save', handler((_win, config: ConnectionConfig, clearSecrets?: string[]) => store.save(config, clearSecrets)))
-  ipcMain.handle('connections:delete', handler(async (_win, id: string) => { validateId(id); await sessions.disconnectForConnection(id); await store.delete(id) }))
+  ipcMain.handle('connections:delete', handler(async (_win, id: string) => {
+    validateId(id)
+    const owned:string[]=[]
+    for(const sessionId of sessionOwners.keys()){
+      try{if(sessions.info(sessionId).connectionId===id)owned.push(sessionId)}
+      catch{sessionOwners.delete(sessionId)}
+    }
+    await Promise.all(owned.map(disconnectOwned))
+    await sessions.disconnectForConnection(id)
+    await store.delete(id)
+  }))
   ipcMain.handle('connections:trust-host', handler(async (win, id: string, fingerprint: string) => {
     validateId(id)
     if (!/^[a-f\d]{64}$/i.test(fingerprint)) throw new Error('指纹格式错误')
@@ -235,7 +245,7 @@ function registerIpc(): void {
     if(answer.canceled||!answer.filePath)return false
     await confirm(win,'备份数据库',info.name+'\n'+answer.filePath+'\n'+tr('导出仅创建新文件，不覆盖现有文件。'))
     const dir=await mkdtemp(join(dirname(answer.filePath),'.dbex-sqlite-'))
-    try{const temp=join(dir,'backup.sqlite');await sessions.backupSqlite(id,temp);await chmod(temp,0o600);await copyFile(temp,answer.filePath,constants.COPYFILE_EXCL);return true}
+    try{const temp=join(dir,'backup.sqlite');await sessions.backupSqlite(id,temp);await chmod(temp,0o600);await publishNewFile(temp,answer.filePath);return true}
     finally{await rm(dir,{recursive:true,force:true})}
   }))
   ipcMain.handle('sessions:native-tool',sessionHandler(async(win,id:string,task:NativeToolTask,database:string,entity?:string)=>{
@@ -387,5 +397,6 @@ app.on('before-quit', event => {
   if (quitting) return
   event.preventDefault(); quitting = true
   if(windowSaveTimer)clearTimeout(windowSaveTimer)
-  void Promise.allSettled([persistWindows(),sessions.closeAll()]).finally(() => app.quit())
+  for(const cli of nativeClis.values())cli.stop()
+  void Promise.allSettled([persistWindows(),sessions.closeAll(),...nativeCliJobs.values()]).finally(() => app.quit())
 })

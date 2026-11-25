@@ -17,7 +17,7 @@ import { mongoCategory, mongoCategoryNodes } from '../shared/mongo-catalog'
 import { protectedDatabase } from '../shared/database-admin'
 import PreferencesDialog from './components/PreferencesDialog.vue'
 import {workspaceStorageKey,PRIMARY_WORKSPACE} from '../shared/workspace-windows'
-import { normalizeWorkspace, workspacePosition, categoryForNode, matchWorkspaceNode, validWorkbenchTab, type WorkspacePosition, type WorkbenchTab } from '../shared/workspace-recovery'
+import { normalizeWorkspace, mergePendingWorkspace,forgetWorkspaceConnection,workspacePosition, categoryForNode, matchWorkspaceNode, validWorkbenchTab, type WorkspacePosition,type WorkspaceSnapshot, type WorkbenchTab } from '../shared/workspace-recovery'
 import { preferences, resolvedTheme } from './preferences'
 import NativeToolDialog from './components/NativeToolDialog.vue'
 import NativeCliDialog from './components/NativeCliDialog.vue'
@@ -66,6 +66,7 @@ const { confirmation, confirm, answer } = useConfirmation()
 let stopResize: (() => void) | undefined
 let restoringWorkspace=true
 const workspaceReady=ref(false)
+const pendingWorkspace=ref<WorkspaceSnapshot>(normalizeWorkspace({}))
 function workspaceSnapshot(){
   const positions:Record<string,WorkspacePosition>=Object.create(null)
   const ids:string[]=[]
@@ -75,7 +76,7 @@ function workspaceSnapshot(){
     const state=explorers[s.id]
     positions[s.connectionId]={...workspacePosition(state?.selected,state?.tab),tabs:state?.tabs.map(item=>workspacePosition(item.node,item.tab))}
   }
-  return normalizeWorkspace({ids,active:activeSession.value?.connectionId,positions})
+  return mergePendingWorkspace(normalizeWorkspace({ids,active:activeSession.value?.connectionId,positions}),pendingWorkspace.value)
 }
 function persistWorkspace(){if(restoringWorkspace)return;try{localStorage.setItem(workspaceKey,JSON.stringify(workspaceSnapshot()))}catch{}}
 watch(workspaceSnapshot,persistWorkspace,{deep:true})
@@ -197,7 +198,7 @@ async function task<T>(callback: () => Promise<T>): Promise<T | undefined> {
   finally { busy.value = false }
 }
 async function refreshConnections() {
-  try { connections.value = await window.dbex.listConnections() } catch (reason) { error.value = messageOf(reason) }
+  try { connections.value = await window.dbex.listConnections();return true } catch (reason) { error.value = messageOf(reason);return false }
 }
 async function refreshRoots(id: string) {
   const state = explorers[id]
@@ -229,7 +230,21 @@ async function connectSaved(connection: SavedConnection) {
   const existing = sessions.value.find(item => item.connectionId === connection.id)
   if (existing) { current.value = existing.id; return }
   const session = await task(() => window.dbex.connectSaved(connection.id))
-  if (session) await startSession(session)
+  if (session){
+    await startSession(session)
+    const position=pendingWorkspace.value.positions[connection.id]
+    if(pendingWorkspace.value.ids.includes(connection.id)){
+      const wasRestoring=restoringWorkspace
+      restoringWorkspace=true
+      try{
+        for(const tab of position?.tabs||[])try{await restorePosition(session,tab)}catch(reason){error.value=messageOf(reason)}
+        try{await restorePosition(session,position)}catch(reason){error.value=messageOf(reason)}
+        const state=explorers[session.id],activeTab=state?.tabs.find(tab=>tab.node.id===state.activeObject)
+        if(activeTab)activeTab.mounted=true
+        pendingWorkspace.value=forgetWorkspaceConnection(pendingWorkspace.value,connection.id)
+      }finally{restoringWorkspace=wasRestoring;persistWorkspace()}
+    }
+  }
 }
 async function updateAppearance(id: string, patch: ConnectionAppearancePatch) {
   await task(async () => {
@@ -247,7 +262,7 @@ async function editConnection(connection: SavedConnection) {
 }
 async function deleteConnection(connection: SavedConnection) {
   if (!await confirm({ title: t('删除保存的连接'), message: t('删除“{0}”的本地连接配置，并断开其活动会话。未提交事务将回滚；数据库中已提交的数据不受影响。', [connection.name]), danger: true, confirmLabel: t('删除配置') })) return
-  await task(async () => { await window.dbex.deleteConnection(connection.id); for (const session of [...sessions.value]) if (session.connectionId === connection.id) removeSession(session.id); await refreshConnections() })
+  await task(async () => { await window.dbex.deleteConnection(connection.id);pendingWorkspace.value=forgetWorkspaceConnection(pendingWorkspace.value,connection.id); for (const session of [...sessions.value]) if (session.connectionId === connection.id) removeSession(session.id); await refreshConnections() })
 }
 function removeSession(id: string) {
   sessions.value = sessions.value.filter(item => item.id !== id)
@@ -259,7 +274,7 @@ async function disconnect(id: string) {
   if (!session) return
   if(explorers[id]?.tabs.some(tab=>tab.dirty)&&!await confirm({title:t('关闭'),message:t('关闭标签页将丢弃未保存的修改。'),danger:false,confirmLabel:t('关闭')}))return
   if (session.transaction && !await confirm({ title: t('断开并回滚事务'), message: t('“{0}”仍有打开的事务。断开连接会回滚尚未提交的修改。', [session.name]), danger: true, confirmLabel: t('回滚并断开') })) return
-  await task(async () => { await window.dbex.disconnect(id); removeSession(id) })
+  await task(async () => { await window.dbex.disconnect(id);if(session.connectionId)pendingWorkspace.value=forgetWorkspaceConnection(pendingWorkspace.value,session.connectionId); removeSession(id) })
 }
 function closeDbMenu(){dbMenu.value=undefined}
 function outsideMenu(event:PointerEvent){if(dbMenu.value&&!dbMenuHost.value?.contains(event.target as Node))closeDbMenu()}
@@ -426,19 +441,20 @@ onMounted(() => {
   window.addEventListener('pointerdown',outsideMenu); window.addEventListener('keydown',menuKey); window.addEventListener('keydown',settingsKey); window.addEventListener('resize',closeDbMenu)
   void (async()=>{
     try{
-      await refreshConnections()
+      const restore=preferences.value.startup==='workspace'
+      if(restore)pendingWorkspace.value=normalizeWorkspace(JSON.parse(localStorage.getItem(workspaceKey)||'{}'))
+      const available=await refreshConnections()
+      if(!available)return
       if(preferences.value.startup==='lastConnection'){
         const id=localStorage.getItem('dbex.last-connection');const item=connections.value.find(value=>value.id===id&&!value.locked)
         if(item&&!sessions.value.length)await connectSaved(item)
       }else if(preferences.value.startup==='workspace'){
-        const saved=normalizeWorkspace(JSON.parse(localStorage.getItem(workspaceKey)||'{}'))
-        for(const id of saved.ids){const item=connections.value.find(value=>value.id===id&&!value.locked);if(item){await connectSaved(item);const session=sessions.value.find(s=>s.connectionId===id);if(session){
-          const position=saved.positions[id]
-          for(const tab of position?.tabs||[])try{await restorePosition(session,tab)}catch(reason){error.value=messageOf(reason)}
-          try{await restorePosition(session,position)}catch(reason){error.value=messageOf(reason)}
-          const state=explorers[session.id],activeTab=state?.tabs.find(tab=>tab.node.id===state.activeObject)
-          if(activeTab)activeTab.mounted=true
-        }}}
+        const saved=pendingWorkspace.value
+        for(const id of saved.ids){
+          const item=connections.value.find(value=>value.id===id)
+          if(!item)pendingWorkspace.value=forgetWorkspaceConnection(pendingWorkspace.value,id)
+          else if(!item.locked)await connectSaved(item)
+        }
         const active=sessions.value.find(s=>s.connectionId===saved.active);if(active)current.value=active.id
       }
     }catch{}finally{restoringWorkspace=false;workspaceReady.value=true;persistWorkspace();if(window.dbex.restoreWorkspaceWindows)await window.dbex.restoreWorkspaceWindows(preferences.value.startup==='workspace').catch(()=>{})}

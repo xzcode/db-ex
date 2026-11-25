@@ -50,6 +50,15 @@ export function normalizeWorkspace(input:unknown):WorkspaceSnapshot{
  }
  return {ids,active:isId(raw.active)&&ids.includes(raw.active)?raw.active:undefined,positions}
 }
+// A temporary connection failure must not erase an otherwise valid saved workspace.
+export function mergePendingWorkspace(live:WorkspaceSnapshot,pending:WorkspaceSnapshot):WorkspaceSnapshot{
+ const ids=[...new Set([...live.ids,...pending.ids])]
+ return normalizeWorkspace({ids,active:live.active||pending.active,positions:{...live.positions,...pending.positions}})
+}
+export function forgetWorkspaceConnection(snapshot:WorkspaceSnapshot,id:string):WorkspaceSnapshot{
+ const positions={...snapshot.positions};delete positions[id]
+ return normalizeWorkspace({ids:snapshot.ids.filter(value=>value!==id),active:snapshot.active===id?undefined:snapshot.active,positions})
+}
 export function categoryForNode(node:SelectedNode):MongoCategory|undefined{
   if(node.kind==='mongo-category')return node.category
   return ({collection:'collections',view:'views','mongo-indexes':'indexes','mongo-function':'functions','gridfs-bucket':'gridfs'} as Partial<Record<ExplorerNode['kind'],MongoCategory>>)[node.kind]

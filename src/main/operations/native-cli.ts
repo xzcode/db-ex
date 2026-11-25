@@ -81,7 +81,7 @@ export class NativeCliProcess{
   this.send('SELECT 1')
   const until=Date.now()+12000
   while(this.pending&&!this.closed&&Date.now()<until)await new Promise(resolve=>setTimeout(resolve,50))
-  if(this.pending||this.closed){this.stop();throw new Error('NATIVE_TOOL_FAILED: 外部工具执行失败。')}
+  if(this.pending||this.closed||this.status!=='ready'){this.stop();throw new Error('NATIVE_TOOL_FAILED: 外部工具执行失败。')}
   this.transcript=''
  }
  snapshot():NativeCliSnapshot{return {output:this.transcript,status:this.status,running:!!this.pending,closed:this.closed}}

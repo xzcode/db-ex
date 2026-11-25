@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
-import { open, mkdtemp, rm, copyFile, stat, writeFile } from 'node:fs/promises'
-import { constants } from 'node:fs'
+import { open, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
+import {publishNewFile} from './publish-file'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { isMysqlFamily } from '../../shared/relational-capabilities'
@@ -97,7 +97,7 @@ export async function runNativeTool(path:string,task:NativeToolTask,config:Conne
    await child(path,command.args,{stdin:inputHandle?.fd,stdout:outputHandle?.fd,signal,timeout:30*60*1000})
    if(signal.aborted)throw new Error('CANCELLED: 已取消操作')
    await outputHandle?.close();outputHandle=undefined
-   if(resultPath)await copyFile(resultPath,file,constants.COPYFILE_EXCL)
+   if(resultPath)await publishNewFile(resultPath,file,signal,task==='mongo-export')
  }finally{
    await inputHandle?.close().catch(()=>{});await outputHandle?.close().catch(()=>{})
    await rm(secretDir,{recursive:true,force:true})

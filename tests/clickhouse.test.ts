@@ -127,7 +127,7 @@ test('ClickHouse file transfer streams formats without overwriting, rejects over
   assert.equal((await streamClickHouse(client,target,file,'"app"."events"',['"id"'])).bytes,content.length)
   assert.deepEqual(await readFile(file),content)
   assert.equal(calls[0].clickhouse_settings.readonly,'1')
-  await assert.rejects(()=>streamClickHouse(client,target,file,'"app"."events"',['"id"']),/EEXIST/)
+  await assert.rejects(()=>streamClickHouse(client,target,file,'"app"."events"',['"id"']),/OUTPUT_EXISTS/)
   assert.deepEqual(await readFile(file),content)
   assert.equal((await streamClickHouse(client,{...target,direction:'import'},file,'"app"."events"',['"id"'])).bytes,content.length)
   assert.match(calls.at(-1).query,/FORMAT Parquet$/)
