@@ -19,7 +19,7 @@ const result = ref<OperationResult | null>(null)
 const selectedRow = ref(-1)
 const checked = ref<number[]>([])
 const offset = ref(0)
-const limit = ref(100)
+const limit = ref(props.session.kind === 'mongodb' ? 200 : 100)
 const sql = ref('SELECT 1 AS result;')
 let generatedSql = sql.value
 const parameters = ref('[]')
@@ -27,6 +27,9 @@ const sqlEditor = ref<InstanceType<typeof CodeEditor>>()
 const filter = ref('{}')
 const projection = ref('{}')
 const sort = ref('{}')
+const showMongoFilters = ref(false)
+const mongoQuery = ref('')
+const filtersActive = computed(() => [filter.value, projection.value, sort.value].some(value => { try { return Object.keys(JSON.parse(value || '{}')).length > 0 } catch { return true } }))
 const pipeline = ref('[\n  { "$limit": 100 }\n]')
 const primaryKeys = ref<string[]>([])
 const structure = ref<OperationResult | null>(null)
@@ -125,7 +128,12 @@ async function loadData(nextOffset = 0) {
     editableRows.value = !!next?.rawRows
   } else if (isMongo.value) {
     const projectionText = projection.value
-    const next = await execute({ action: 'mongo.find', ...entity.value, filter: filter.value, projection: projectionText, sort: sort.value, offset: nextOffset, limit: limit.value })
+    const target = { ...entity.value }, queryFilter = filter.value, querySort = sort.value, pageSize = limit.value
+    const next = await execute({ action: 'mongo.find', ...target, filter: queryFilter, projection: projectionText, sort: querySort, offset: nextOffset, limit: pageSize })
+    if (next) {
+      const find = 'db.getCollection(' + JSON.stringify(target.entity) + ').find(' + (queryFilter.trim() || '{}') + ', ' + (projectionText.trim() || '{}') + ')'
+      mongoQuery.value = (find + '.sort(' + (querySort.trim() || '{}') + ').skip(' + nextOffset + ').limit(' + pageSize + ')').slice(0, 1000)
+    }
     try { editableRows.value = !!next?.documents && Object.keys(JSON.parse(projectionText || '{}')).length === 0 } catch { editableRows.value = false }
   }
 }
@@ -371,7 +379,7 @@ async function refreshSelection(version: number) {
   }
 }
 watch(() => props.node?.id, () => {
-  generation++; result.value = null; structure.value = null; primaryKeys.value = []; selectedRow.value = -1; checked.value = []; offset.value = 0; editableRows.value = false
+  generation++; mongoQuery.value = ''; result.value = null; structure.value = null; primaryKeys.value = []; selectedRow.value = -1; checked.value = []; offset.value = 0; editableRows.value = false
   if (busy.value) { pendingSelection = true; return }
   void refreshSelection(generation)
 }, { immediate: true })
@@ -379,7 +387,7 @@ onBeforeUnmount(() => { disposed = true; generation++ })
 </script>
 
 <template>
-  <div class="workbench">
+  <div :class="['workbench', { 'mongo-workbench': isMongo }]">
     <header class="workbench-header"><div><span class="eyebrow">{{ session.kind.toUpperCase() }}</span><h2>{{ node?.label || session.name }}</h2></div><div class="header-tools"><span v-if="session.transaction" class="transaction-badge">{{ t('事务进行中') }}</span><button :class="['btn', session.writable ? 'warning' : 'secondary']" :disabled="busy" @click="toggleWrite">{{ session.writable ? t('写入已启用 · 锁定') : t('只读 · 启用写入') }}</button></div></header>
     <nav class="workbench-tabs"><button :disabled="busy" :class="{ active: tab === 'data' }" @click="changeTab('data')">{{ isRedis ? t('Key 浏览器') : t('数据') }}</button><button v-if="isMysql" :disabled="busy" :class="{ active: tab === 'query' }" @click="changeTab('query')">{{ t('SQL 编辑器') }}</button><button v-if="isMongo" :disabled="busy" :class="{ active: tab === 'aggregation' }" @click="changeTab('aggregation')">Aggregation</button><button v-if="!isRedis" :disabled="busy" :class="{ active: tab === 'structure' }" @click="changeTab('structure')">{{ isMysql ? t('结构与索引') : t('索引') }}</button><button v-if="isRedis" :disabled="busy" :class="{ active: tab === 'console' }" @click="changeTab('console')">{{ t('命令台') }}</button><div class="tab-filler"></div><button v-if="isMongo" @click="bsonSettingsOpen = true">{{ t('BSON 类型配色') }}</button><button v-if="!isRedis" @click="openHistory">{{ t('历史 / 收藏') }}</button></nav>
     <div v-if="error" class="inline-message error" role="alert">{{ localize(error) }}<button class="ghost-icon" :aria-label="t('关闭错误')" @click="error = ''">×</button></div>
@@ -401,7 +409,7 @@ onBeforeUnmount(() => { disposed = true; generation++ })
     </template>
     <template v-if="tab === 'structure'">
       <div class="editor-toolbar"><button class="btn secondary" :disabled="busy || !hasEntity" @click="loadStructure">{{ t('刷新结构') }}</button><template v-if="isMongo"><button class="btn secondary" :disabled="busy || !hasEntity || !session.writable" @click="indexDialog = true">{{ t('新建索引') }}</button><button class="btn danger-text" :disabled="busy || !session.writable || selectedRow < 0" @click="dropIndex">{{ t('删除选中索引') }}</button></template><span v-if="isMysql" class="muted-text">{{ t('主键：') }}{{ primaryKeys.join(', ') || t('无（记录修改已禁用）') }}</span></div>
-      <ResultGrid v-if="structure" :columns="structure.columns" :rows="structure.rows" :selected="selectedRow" :bson-types="isMongo ? structure.bsonTypes : undefined" @select="selectedRow = $event" />
+      <ResultGrid v-if="structure" :columns="structure.columns" :rows="structure.rows" :selected="selectedRow" :bson-types="isMongo ? structure.bsonTypes : undefined" :documents="isMongo ? structure.documents : undefined" @select="selectedRow = $event" />
       <div v-else class="empty-state"><strong>{{ t('选择表或集合查看结构') }}</strong><span>{{ t('从左侧资源树选择一个对象。') }}</span></div>
     </template>
     <template v-else-if="isRedis && tab === 'data'">
@@ -414,11 +422,11 @@ onBeforeUnmount(() => { disposed = true; generation++ })
       </div>
     </template>
     <template v-else>
-      <div v-if="tab === 'data' && isMongo" class="mongo-filters"><label>Filter<textarea v-model="filter" rows="2" spellcheck="false" /></label><label>Projection<textarea v-model="projection" rows="2" spellcheck="false" /></label><label>Sort<textarea v-model="sort" rows="2" spellcheck="false" /></label><button class="btn primary" :disabled="busy || !hasEntity" @click="loadData()">{{ t('查询') }}</button></div>
-      <div class="editor-toolbar"><template v-if="tab === 'data' && !isRedis"><button class="btn secondary" :disabled="busy || !hasEntity" @click="loadData(offset)">{{ t('刷新') }}</button><button class="btn secondary" :disabled="busy || !hasEntity || !session.writable" @click="openInsert">{{ t('新增') }}</button><button class="btn secondary" :disabled="busy || !canEditRow || !session.writable" @click="openEdit">{{ t('编辑') }}</button><button class="btn danger-text" :disabled="busy || !canEditRow || !session.writable" @click="deleteRow">{{ t('删除') }}</button><button class="btn secondary" :disabled="busy || !hasEntity || !session.writable" @click="importData">{{ t('导入') }} {{ isMysql ? 'CSV / JSON' : 'EJSON' }}</button></template><button v-if="isMongo" class="btn secondary small" :disabled="selectedRow < 0 || !result?.documents?.[selectedRow]" @click="viewMongoDocument()">{{ t('查看文档') }}</button><span class="toolbar-spacer"></span><button class="btn secondary small" :disabled="!result?.rows.length" @click="exportData('json')">{{ t('导出当前页 JSON') }}</button><button class="btn secondary small" :disabled="!result?.rows.length" @click="exportData('csv')">CSV</button></div>
-      <ResultGrid v-if="result" :columns="result.columns" :rows="result.rows" :selected="selectedRow" :offset="offset" :bson-types="isMongo ? result.bsonTypes : undefined" @select="selectedRow = $event" @open="openResultRow" />
+      <div v-if="tab === 'data' && isMongo && showMongoFilters" class="mongo-filters"><label>Filter<textarea v-model="filter" rows="2" spellcheck="false" /></label><label>Projection<textarea v-model="projection" rows="2" spellcheck="false" /></label><label>Sort<textarea v-model="sort" rows="2" spellcheck="false" /></label><button class="btn primary" :disabled="busy || !hasEntity" @click="loadData()">{{ t('查询') }}</button></div>
+      <div class="editor-toolbar"><template v-if="tab === 'data' && !isRedis"><button v-if="isMongo" class="btn secondary small" :aria-expanded="showMongoFilters" :class="{ 'active-filter': filtersActive }" @click="showMongoFilters = !showMongoFilters">{{ t('查询条件') }} <span v-if="filtersActive">•</span></button><button class="btn secondary" :disabled="busy || !hasEntity" @click="loadData(offset)">{{ t('刷新') }}</button><button class="btn secondary" :disabled="busy || !hasEntity || !session.writable" @click="openInsert">{{ t('新增') }}</button><button class="btn secondary" :disabled="busy || !canEditRow || !session.writable" @click="openEdit">{{ t('编辑') }}</button><button class="btn danger-text" :disabled="busy || !canEditRow || !session.writable" @click="deleteRow">{{ t('删除') }}</button><button class="btn secondary" :disabled="busy || !hasEntity || !session.writable" @click="importData">{{ t('导入') }} {{ isMysql ? 'CSV / JSON' : 'EJSON' }}</button></template><button v-if="isMongo" class="btn secondary small" :disabled="selectedRow < 0 || !result?.documents?.[selectedRow]" @click="viewMongoDocument()">{{ t('查看文档') }}</button><span class="toolbar-spacer"></span><button class="btn secondary small" :disabled="!result?.rows.length" @click="exportData('json')">{{ t('导出当前页 JSON') }}</button><button class="btn secondary small" :disabled="!result?.rows.length" @click="exportData('csv')">CSV</button></div>
+      <ResultGrid v-if="result" :columns="result.columns" :rows="result.rows" :selected="selectedRow" :offset="offset" :bson-types="isMongo ? result.bsonTypes : undefined" :documents="isMongo ? result.documents : undefined" @select="selectedRow = $event" @open="openResultRow" />
       <div v-else class="empty-state"><span class="empty-icon">▤</span><strong>{{ hasEntity ? t('运行查询查看结果') : t('选择数据库中的表或集合') }}</strong><span>{{ isMysql ? t('可直接切换到 SQL 编辑器执行查询。') : t('使用左侧资源树选择目标。') }}</span></div>
-      <footer class="result-footer"><span>{{ result?.rows.length || 0 }} {{ t('条记录') }}<span v-if="result?.durationMs !== undefined"> · {{ result.durationMs }} ms</span><span v-if="result?.truncated"> {{ t('· 已达到单页限制') }}</span></span><div><button v-if="offset > 0 && tab !== 'aggregation'" class="btn secondary small" :disabled="busy" @click="tab === 'query' ? runQuery(Math.max(0, offset - limit)) : loadData(Math.max(0, offset - limit))">{{ t('← 上一页') }}</button><button v-if="result?.nextOffset !== undefined && tab !== 'aggregation'" class="btn secondary small" :disabled="busy" @click="tab === 'query' ? runQuery(result.nextOffset) : loadData(result.nextOffset)">{{ t('下一页 →') }}</button></div><span>{{ session.writable ? t('可写会话') : t('只读会话') }}</span></footer>
+      <footer class="result-footer"><span>{{ result?.rows.length || 0 }} {{ t('条记录') }}<span v-if="result?.durationMs !== undefined"> · {{ result.durationMs }} ms</span><span v-if="result?.truncated"> {{ t('· 已达到单页限制') }}</span></span><span v-if="isMongo && tab === 'data' && mongoQuery" class="mongo-query-summary" dir="ltr" :title="mongoQuery">{{ mongoQuery }}</span><div class="result-page-controls"><label v-if="isMongo && tab === 'data'" class="inline-field">{{ t('每页') }}<select v-model.number="limit" :disabled="busy || !hasEntity" @change="loadData()"><option :value="100">100</option><option :value="200">200</option><option :value="500">500</option></select></label><button v-if="offset > 0 && tab !== 'aggregation'" class="btn secondary small" :disabled="busy" @click="tab === 'query' ? runQuery(Math.max(0, offset - limit)) : loadData(Math.max(0, offset - limit))">{{ t('← 上一页') }}</button><button v-if="result?.nextOffset !== undefined && tab !== 'aggregation'" class="btn secondary small" :disabled="busy" @click="tab === 'query' ? runQuery(result.nextOffset) : loadData(result.nextOffset)">{{ t('下一页 →') }}</button></div><span>{{ session.writable ? t('可写会话') : t('只读会话') }}</span></footer>
     </template>
 
     <BsonColorSettings v-if="bsonSettingsOpen" @close="bsonSettingsOpen = false" />

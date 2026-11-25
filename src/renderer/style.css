@@ -422,3 +422,27 @@ html[dir=rtl] .tree-chevron:not(.expanded) { transform: rotate(180deg); }
 .bson-expand, .bson-expand-spacer { width: 19px; height: 17px; flex: none; }
 .bson-tree-value { max-width: 500px; }
 .bson-raw-document { flex: 1; min-height: 0; overflow: auto; padding: 16px 22px; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.7 'SFMono-Regular', Consolas, monospace; margin: 0; text-align: left; }
+
+/* Compact desktop-style MongoDB browsing: the grid is the primary surface. */
+.mongo-workbench .workbench-header { padding: 8px 12px 6px; }
+.mongo-workbench .workbench-header > div:first-child { display: flex; align-items: baseline; gap: 9px; min-width: 0; }
+.mongo-workbench .workbench-header h2 { margin: 0; font-size: 15px; }
+.mongo-workbench .workbench-header .eyebrow { font-size: 9px; }
+.mongo-workbench .workbench-header .btn { font-size: 11px; padding: 5px 8px; }
+.mongo-workbench .workbench-tabs > button { padding: 8px 10px; font-size: 12px; }
+.mongo-workbench .editor-toolbar { padding: 5px 8px; gap: 5px; }
+.mongo-workbench .editor-toolbar .btn { font-size: 11px; padding: 5px 8px; }
+.mongo-workbench .mongo-filters { padding: 6px 8px; gap: 6px; flex: none; }
+.mongo-workbench .mongo-filters textarea { min-height: 34px; resize: vertical; }
+.mongo-workbench .active-filter { color: var(--accent); border-color: var(--accent); }
+.mongo-workbench .result-footer { padding: 4px 8px; min-height: 33px; gap: 8px; }
+.mongo-query-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 10px monospace; }
+.result-page-controls { flex: none; align-items: center; }
+.result-page-controls select { font-size: 11px; padding: 3px 5px; }
+.mongo-grid tbody tr:nth-child(even):not(.selected) td:not(.has-bson-color) { background: color-mix(in srgb, var(--panel-raised) 45%, var(--panel)); }
+.mongo-grid td.has-bson-color { box-shadow: none; background: color-mix(in srgb, var(--bson-color) 32%, var(--panel)); color: var(--text); }
+.mongo-grid tr:hover td.has-bson-color { background: color-mix(in srgb, var(--bson-color) 38%, var(--panel)); }
+.mongo-grid tr.selected td.has-bson-color { background: color-mix(in srgb, var(--bson-color) 38%, var(--selected)); box-shadow: inset 0 1px var(--accent), inset 0 -1px var(--accent); }
+.mongo-grid .null-cell { color: var(--muted); font-style: normal; }
+.mongo-grid .bson-type-label { margin-inline-end: 5px; line-height: 12px; }
+.bson-document-table .bson-tree-value { font-family: inherit; }

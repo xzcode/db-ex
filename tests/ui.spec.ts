@@ -145,6 +145,7 @@ test('MongoDB edits preserve canonical EJSON and disable editing projected docum
   await expect(page.locator('.document-editor')).toContainText('$oid')
   await page.getByRole('button', { name: '审阅并保存', exact: true }).click()
   await expect.poll(() => page.evaluate(() => (window as any).__dbexCalls.some((call: any) => call.action === 'mongo.replace' && call.original.includes('$oid') && call.document.includes('$date') && call.confirmed))).toBe(true)
+  await page.getByRole('button', { name: '查询条件', exact: true }).click()
   await page.getByLabel('Projection', { exact: true }).fill('{"name":1}')
   await page.getByRole('button', { name: '查询', exact: true }).click()
   await page.locator('.workbench:visible .data-table tbody tr').first().click()
@@ -371,7 +372,13 @@ test('connection context colors, custom colors, grouping and live tab highlighti
 test('MongoDB uses per-value BSON colors, nested document types and saved custom preferences', async ({ page }) => {
   await connect(page, 'Mongo Local'); await openUsers(page)
   const grid = page.locator('.workbench:visible .data-table').first()
-  await expect(grid.locator('tr[data-row-index="0"] [data-bson-type="Int32"]')).toContainText('Int32')
+  await expect(grid.locator('tr[data-row-index="0"] [data-bson-type="Int32"]')).toHaveText('7')
+  await expect(grid.locator('tr[data-row-index="0"] [data-bson-type="ObjectId"]')).toHaveText('64b000000000000000000001')
+  await expect(grid.locator('tr[data-row-index="0"] [data-bson-type="Document"]')).toHaveText('(Document) 1 个字段')
+  await expect(grid.locator('tr[data-row-index="0"] [data-bson-type="Date"]')).toHaveText('2023-11-14 22:13:20.000 UTC')
+  await expect(grid.locator('.bson-type-label')).toHaveCount(0)
+  await expect(page.getByLabel('Projection', { exact: true })).toHaveCount(0)
+  await expect(page.locator('.mongo-query-summary')).toContainText('.limit(200)')
   await expect(grid.locator('tr[data-row-index="1"] [data-bson-type="String"]').filter({ hasText: '7' })).toBeVisible()
   await expect(grid.locator('tr[data-row-index="2"] [data-bson-type="Double"]')).toBeVisible()
   await expect(grid.locator('tr[data-row-index="0"] [data-bson-type="Null"]')).toContainText('NULL')
@@ -398,7 +405,7 @@ test('MongoDB uses per-value BSON colors, nested document types and saved custom
   await page.getByRole('button', { name: 'BSON 类型配色', exact: true }).click()
   await page.getByRole('dialog', { name: 'BSON 类型配色' }).getByRole('button', { name: '恢复全部默认颜色' }).click()
   await page.getByRole('dialog', { name: 'BSON 类型配色' }).getByRole('button', { name: '保存', exact: true }).click()
-  await expect(page.locator('.workbench:visible [data-bson-type="Int32"]')).toHaveAttribute('data-bson-color', '#4b88d9')
+  await expect(page.locator('.workbench:visible [data-bson-type="Int32"]')).toHaveAttribute('data-bson-color', '#4da96b')
 })
 
 test('connection settings use optional custom groups and colors, not fixed environments', async ({ page }) => {
