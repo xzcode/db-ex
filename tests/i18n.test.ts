@@ -57,3 +57,7 @@ test('app messages retain error codes, diagnostics and user-controlled values', 
 test('BSON appearance and expanded color picker controls have translations in every locale', () => {
   for (const { locale } of languages) if (locale !== 'zh-CN') for (const key of ['BSON 类型配色','BSON 数据类型','按类型着色','显示类型标记','缺失字段','未知类型','最近使用的颜色','恢复此类型默认颜色','恢复全部默认颜色','配色仅影响显示，不修改数据库数据。','查看文档','文档树','原始 EJSON','无法解析文档，请查看原始 EJSON。','部分类型或字段预览受限，完整内容请查看原始 EJSON。','预览','字段','字段值']) assert.ok(Object.hasOwn(catalogs[locale], key), locale + ': ' + key)
 })
+
+test('compact MongoDB grid summaries and controls are localized', () => {
+  for (const { locale } of languages) if (locale !== 'zh-CN') for (const key of ['(Array) {0} 个元素','(Document) {0} 个字段','(Binary) {0} 字节','查询条件','调整列宽']) assert.ok(Object.hasOwn(catalogs[locale], key), locale + ': ' + key)
+})

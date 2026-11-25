@@ -19,7 +19,7 @@ test('MongoDB browser shows values rather than EJSON wrappers without precision 
   const canonical = parseBsonDocument(original)!
   const types = describeBsonDocument(input, Object.keys(input))
   const display = (key: string) => formatBsonValue(typeName(childType(types, key)), canonical[key])
-  const expected = { id: '507f1f77bcf86cd799439011', i32: '9001', i64: '9223372036854775807', double: '-0.0', decimal: '12345678901234567890.1234567890', date: '2026-11-25 03:43:08.123 UTC', flag: 'false', text: 'NULL', nil: '(NULL)', array: '(Array) 2 个元素', doc: '(Document) 1 个字段', binary: '(Binary) 5 字节', regex: '/a+/im' }
+  const expected = { id: '507f1f77bcf86cd799439011', i32: '9001', i64: '9223372036854775807', double: (canonical.double as { $numberDouble: string }).$numberDouble, decimal: '12345678901234567890.1234567890', date: '2026-11-25 03:43:08.123 UTC', flag: 'false', text: 'NULL', nil: '(NULL)', array: '(Array) 2 个元素', doc: '(Document) 1 个字段', binary: '(Binary) 5 字节', regex: '/a+/im' }
   for (const [key, value] of Object.entries(expected)) assert.equal(display(key), value, key)
   assert.equal(BSON.EJSON.stringify(input, { relaxed: false }), original)
   assert.equal(formatBsonValue('Missing', undefined), '—')

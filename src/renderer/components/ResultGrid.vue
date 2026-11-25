@@ -40,7 +40,7 @@ const cellRows = computed(() => {
       // Canonical EJSON + actual BSON metadata are separate from the legacy
       // string rows used by CSV and from the original document for editing.
       const value = doc && Object.hasOwn(doc, column) ? doc[column] : row[column]
-      cells[column] = { type, text: formatBsonValue(type, value, t) }
+      cells[column] = { type, text: formatBsonValue(type, value, t).replace(/\r\n|\r|\n/g, '↵').replace(/\t/g, '⇥') }
     }
     return cells
   })

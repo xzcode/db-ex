@@ -751,5 +751,10 @@ export const en: Readonly<Record<string, string>> = {
   "原始 EJSON": "Raw EJSON",
   "无法解析文档，请查看原始 EJSON。": "Cannot parse document; view raw EJSON.",
   "部分类型或字段预览受限，完整内容请查看原始 EJSON。": "Some type or field previews are limited; view raw EJSON for the complete document.",
-  "预览": "Preview"
+  "预览": "Preview",
+  "(Array) {0} 个元素": "(Array) {0} elements",
+  "(Document) {0} 个字段": "(Document) {0} fields",
+  "(Binary) {0} 字节": "(Binary) {0} bytes",
+  "查询条件": "Query filters",
+  "调整列宽": "Resize column"
 }

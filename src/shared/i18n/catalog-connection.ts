@@ -63,7 +63,12 @@ export const connectionCatalogs = {
     "部分类型或字段预览受限，完整内容请查看原始 EJSON。": "部分類型或欄位預覽受限，完整內容請檢視原始 EJSON。",
     "预览": "預覽",
     "字段": "欄位",
-    "字段值": "欄位值"
+    "字段值": "欄位值",
+    "(Array) {0} 个元素": "（Array）{0} 個元素",
+    "(Document) {0} 个字段": "（Document）{0} 個欄位",
+    "(Binary) {0} 字节": "（Binary）{0} 位元組",
+    "查询条件": "查詢條件",
+    "调整列宽": "調整欄寬"
   },
   "ja": {
     "选择数据库类型": "データベースの種類を選択",
@@ -128,7 +133,12 @@ export const connectionCatalogs = {
     "部分类型或字段预览受限，完整内容请查看原始 EJSON。": "一部の型やフィールドのプレビューが制限されています。完全な内容は生の EJSON で確認できます。",
     "预览": "プレビュー",
     "字段": "フィールド",
-    "字段值": "フィールド値"
+    "字段值": "フィールド値",
+    "(Array) {0} 个元素": "(Array) {0} 要素",
+    "(Document) {0} 个字段": "(Document) {0} フィールド",
+    "(Binary) {0} 字节": "(Binary) {0} バイト",
+    "查询条件": "クエリ条件",
+    "调整列宽": "列幅を変更"
   },
   "ko": {
     "选择数据库类型": "데이터베이스 유형 선택",
@@ -193,7 +203,12 @@ export const connectionCatalogs = {
     "部分类型或字段预览受限，完整内容请查看原始 EJSON。": "일부 유형 또는 필드 미리보기가 제한됩니다. 전체 내용은 원본 EJSON을 확인하세요.",
     "预览": "미리보기",
     "字段": "필드",
-    "字段值": "필드 값"
+    "字段值": "필드 값",
+    "(Array) {0} 个元素": "(Array) 요소 {0}개",
+    "(Document) {0} 个字段": "(Document) 필드 {0}개",
+    "(Binary) {0} 字节": "(Binary) {0}바이트",
+    "查询条件": "쿼리 조건",
+    "调整列宽": "열 너비 조정"
   },
   "de": {
     "选择数据库类型": "Datenbanktyp wählen",
@@ -258,7 +273,12 @@ export const connectionCatalogs = {
     "部分类型或字段预览受限，完整内容请查看原始 EJSON。": "Einige Typ- oder Feldvorschauen sind begrenzt; vollständiges Dokument im rohen EJSON.",
     "预览": "Vorschau",
     "字段": "Feld",
-    "字段值": "Feldwert"
+    "字段值": "Feldwert",
+    "(Array) {0} 个元素": "(Array) {0} Elemente",
+    "(Document) {0} 个字段": "(Document) {0} Felder",
+    "(Binary) {0} 字节": "(Binary) {0} Bytes",
+    "查询条件": "Abfragefilter",
+    "调整列宽": "Spaltenbreite ändern"
   },
   "fr": {
     "选择数据库类型": "Choisir le type de base",
@@ -323,7 +343,12 @@ export const connectionCatalogs = {
     "部分类型或字段预览受限，完整内容请查看原始 EJSON。": "Certaines informations de type ou de champ sont limitées ; consultez l’EJSON brut pour le document complet.",
     "预览": "Aperçu",
     "字段": "Champ",
-    "字段值": "Valeur du champ"
+    "字段值": "Valeur du champ",
+    "(Array) {0} 个元素": "(Array) {0} éléments",
+    "(Document) {0} 个字段": "(Document) {0} champs",
+    "(Binary) {0} 字节": "(Binary) {0} octets",
+    "查询条件": "Filtres de requête",
+    "调整列宽": "Redimensionner la colonne"
   },
   "es": {
     "选择数据库类型": "Elegir tipo de base de datos",
@@ -388,7 +413,12 @@ export const connectionCatalogs = {
     "部分类型或字段预览受限，完整内容请查看原始 EJSON。": "Algunas vistas de tipos o campos están limitadas; consulta el EJSON completo.",
     "预览": "Vista previa",
     "字段": "Campo",
-    "字段值": "Valor del campo"
+    "字段值": "Valor del campo",
+    "(Array) {0} 个元素": "(Array) {0} elementos",
+    "(Document) {0} 个字段": "(Document) {0} campos",
+    "(Binary) {0} 字节": "(Binary) {0} bytes",
+    "查询条件": "Filtros de consulta",
+    "调整列宽": "Cambiar ancho de columna"
   },
   "pt-BR": {
     "选择数据库类型": "Escolher tipo de banco de dados",
@@ -453,7 +483,12 @@ export const connectionCatalogs = {
     "部分类型或字段预览受限，完整内容请查看原始 EJSON。": "Algumas prévias de tipos ou campos são limitadas; veja o EJSON bruto completo.",
     "预览": "Prévia",
     "字段": "Campo",
-    "字段值": "Valor do campo"
+    "字段值": "Valor do campo",
+    "(Array) {0} 个元素": "(Array) {0} elementos",
+    "(Document) {0} 个字段": "(Document) {0} campos",
+    "(Binary) {0} 字节": "(Binary) {0} bytes",
+    "查询条件": "Filtros de consulta",
+    "调整列宽": "Redimensionar coluna"
   },
   "ru": {
     "选择数据库类型": "Выберите тип базы данных",
@@ -518,7 +553,12 @@ export const connectionCatalogs = {
     "部分类型或字段预览受限，完整内容请查看原始 EJSON。": "Предпросмотр некоторых типов или полей ограничен; полный документ доступен в исходном EJSON.",
     "预览": "Предпросмотр",
     "字段": "Поле",
-    "字段值": "Значение поля"
+    "字段值": "Значение поля",
+    "(Array) {0} 个元素": "(Array) {0} эл.",
+    "(Document) {0} 个字段": "(Document) {0} полей",
+    "(Binary) {0} 字节": "(Binary) {0} байт",
+    "查询条件": "Фильтры запроса",
+    "调整列宽": "Изменить ширину столбца"
   },
   "it": {
     "选择数据库类型": "Scegli il tipo di database",
@@ -583,7 +623,12 @@ export const connectionCatalogs = {
     "部分类型或字段预览受限，完整内容请查看原始 EJSON。": "Alcune anteprime di tipi o campi sono limitate; consulta l’EJSON originale.",
     "预览": "Anteprima",
     "字段": "Campo",
-    "字段值": "Valore del campo"
+    "字段值": "Valore del campo",
+    "(Array) {0} 个元素": "(Array) {0} elementi",
+    "(Document) {0} 个字段": "(Document) {0} campi",
+    "(Binary) {0} 字节": "(Binary) {0} byte",
+    "查询条件": "Filtri di query",
+    "调整列宽": "Ridimensiona colonna"
   },
   "ar": {
     "选择数据库类型": "اختر نوع قاعدة البيانات",
@@ -648,7 +693,12 @@ export const connectionCatalogs = {
     "部分类型或字段预览受限，完整内容请查看原始 EJSON。": "معاينات بعض الأنواع أو الحقول محدودة؛ اعرض EJSON الأصلي للمحتوى الكامل.",
     "预览": "معاينة",
     "字段": "حقل",
-    "字段值": "قيمة الحقل"
+    "字段值": "قيمة الحقل",
+    "(Array) {0} 个元素": "(Array) {0} عنصر",
+    "(Document) {0} 个字段": "(Document) {0} حقل",
+    "(Binary) {0} 字节": "(Binary) {0} بايت",
+    "查询条件": "عوامل تصفية الاستعلام",
+    "调整列宽": "تغيير عرض العمود"
   },
   "hi": {
     "选择数据库类型": "डेटाबेस प्रकार चुनें",
@@ -713,7 +763,12 @@ export const connectionCatalogs = {
     "部分类型或字段预览受限，完整内容请查看原始 EJSON。": "कुछ प्रकार या फ़ील्ड का पूर्वावलोकन सीमित है; पूरा दस्तावेज़ मूल EJSON में देखें।",
     "预览": "पूर्वावलोकन",
     "字段": "फ़ील्ड",
-    "字段值": "फ़ील्ड मान"
+    "字段值": "फ़ील्ड मान",
+    "(Array) {0} 个元素": "(Array) {0} तत्व",
+    "(Document) {0} 个字段": "(Document) {0} फ़ील्ड",
+    "(Binary) {0} 字节": "(Binary) {0} बाइट",
+    "查询条件": "क्वेरी फ़िल्टर",
+    "调整列宽": "कॉलम की चौड़ाई बदलें"
   },
   "id": {
     "选择数据库类型": "Pilih jenis basis data",
@@ -778,6 +833,11 @@ export const connectionCatalogs = {
     "部分类型或字段预览受限，完整内容请查看原始 EJSON。": "Pratinjau beberapa tipe atau bidang terbatas; lihat EJSON asli untuk dokumen lengkap.",
     "预览": "Pratinjau",
     "字段": "Bidang",
-    "字段值": "Nilai bidang"
+    "字段值": "Nilai bidang",
+    "(Array) {0} 个元素": "(Array) {0} elemen",
+    "(Document) {0} 个字段": "(Document) {0} bidang",
+    "(Binary) {0} 字节": "(Binary) {0} byte",
+    "查询条件": "Filter kueri",
+    "调整列宽": "Ubah lebar kolom"
   }
 } as const
