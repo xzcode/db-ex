@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { t } from '../i18n'
+import {cellDraftKey,type CellDraft} from '../../shared/grid-edit'
 import type { ColumnAction } from '../../shared/column-actions'
 import type { SortRule } from '../../shared/browse-filter'
 import { preferences } from '../preferences'
@@ -34,8 +35,12 @@ const props = withDefaults(defineProps<{
   active?:boolean
   actionColumns?: string[]
   columnSort?: SortRule[]
+  inlineCell?:CellDraft
+  inlineDrafts?:Record<string,string>
+  canInlineEdit?:(row:number,field:string)=>boolean
+  canEditColumn?:(field:string)=>boolean
 }>(), { selected: -1, selectable: false, checked: () => [], offset: 0 })
-const emit = defineEmits<{ columnAction:[action:ColumnAction,field:string]; select: [index: number]; open: [index: number]; check: [index: number]; checkAll: []; documentEdit: [index: number]; documentView: [index: number]; documentAction: [action: 'add' | 'copy-value' | 'copy-document' | 'duplicate' | 'delete' | 'null' | 'empty' | 'filter', index: number, field?: string] }>()
+const emit = defineEmits<{ inlineBegin:[row:number,field:string];inlineInput:[text:string];inlineFinish:[cancel:boolean];columnSelected:[field:string];columnEdit:[field:string]; columnAction:[action:ColumnAction,field:string]; select: [index: number]; open: [index: number]; check: [index: number]; checkAll: []; documentEdit: [index: number]; documentView: [index: number]; documentAction: [action: 'add' | 'copy-value' | 'copy-document' | 'duplicate' | 'delete' | 'null' | 'empty' | 'filter', index: number, field?: string] }>()
 const mongo = computed(() => props.bsonTypes !== undefined)
 const rowHeight = computed(() => gridRowHeight(preferences.value,mongo.value))
 const headerHeight = computed(() => Math.max(mongo.value?28:34,preferences.value.records.fontSize+12))
@@ -54,11 +59,27 @@ const columnMenu=ref<{field:string;x:number;y:number}>()
 const columnMenuHost=ref<HTMLElement>()
 const selectedColumn=ref('')
 const canUseColumn=(field:string)=>props.actionColumns?.includes(field)===true
+function selectColumn(field:string){
+ if(canUseColumn(field)||props.canEditColumn?.(field)){selectedColumn.value=field;emit('columnSelected',field)}
+}
+function beginInline(event:MouseEvent,row:number,field:string){
+ if(!props.canInlineEdit?.(row,field))return
+ event.preventDefault();event.stopPropagation();emit('inlineBegin',row,field)
+}
+watch(()=>props.inlineCell?cellDraftKey(props.inlineCell.row,props.inlineCell.field):undefined,async key=>{
+ if(!key)return
+ await nextTick()
+ const element=scrollHost.value?.querySelector<HTMLInputElement>('.inline-grid-input')
+ if(element){element.focus();element.select()}
+})
+function draftText(row:number,field:string){const key=cellDraftKey(row,field);return props.inlineDrafts&&Object.hasOwn(props.inlineDrafts,key)?props.inlineDrafts[key]:undefined}
+function isInline(row:number,field:string){return props.inlineCell?.row===row&&props.inlineCell.field===field}
+
 function directionFor(field:string){return props.columnSort?.find(rule=>rule.field===field)?.direction}
 function closeColumnMenu(){columnMenu.value=undefined}
 async function openColumnMenu(event:MouseEvent|KeyboardEvent,field:string){
   if(!canUseColumn(field))return
-  event.preventDefault();event.stopPropagation();closeRowMenu();selectedColumn.value=field
+  event.preventDefault();event.stopPropagation();closeRowMenu();selectColumn(field)
   const rect=(event.currentTarget as HTMLElement).getBoundingClientRect()
   columnMenu.value={field,x:Math.max(4,Math.min(rect.right-195,window.innerWidth-212)),y:Math.max(4,rect.bottom+3)}
   await nextTick()
@@ -237,24 +258,26 @@ function display(value: unknown): string {
       <colgroup v-if="mongo"><col style="width: 38px" /><col v-for="column in columns" :key="column" :style="{ width: columnWidth(column) + 'px' }" /></colgroup>
       <thead><tr>
         <th v-if="selectable" class="number-cell"><input type="checkbox" :aria-label="t('选择当前页')" :checked="rows.length > 0 && checked.length === rows.length" @change="emit('checkAll')" /></th>
-        <th class="number-cell">#</th><th v-for="column in columns" :key="column" :title="column" :class="{'column-active':selectedColumn===column,'column-actionable':canUseColumn(column)}" :aria-sort="columnSort?.[0]?.field===column?(directionFor(column)===1?'ascending':'descending'):undefined" @click="canUseColumn(column)&&(selectedColumn=column)" @contextmenu="openColumnMenu($event,column)">
+        <th class="number-cell">#</th><th v-for="column in columns" :key="column" :title="column" :class="{'column-active':selectedColumn===column,'column-actionable':canUseColumn(column)}" :aria-sort="columnSort?.[0]?.field===column?(directionFor(column)===1?'ascending':'descending'):undefined" @click="selectColumn(column)" @dblclick="canEditColumn?.(column)&&emit('columnEdit',column)" @contextmenu="openColumnMenu($event,column)">
           <div class="grid-heading-content"><span class="grid-column-title">{{ column }}</span><span v-if="directionFor(column)" class="column-sort-indicator" aria-hidden="true">{{ directionFor(column)===1?'↑':'↓' }}<small v-if="(columnSort?.length||0)>1">{{ (columnSort?.findIndex(rule=>rule.field===column)??0)+1 }}</small></span><button v-if="canUseColumn(column)" type="button" class="column-menu-trigger" :title="t('列操作')+': '+column" :aria-label="t('列操作')+': '+column" aria-haspopup="menu" :aria-expanded="columnMenu?.field===column" @click.stop="openColumnMenu($event,column)" @keydown.shift.f10.stop="openColumnMenu($event,column)">···</button></div><span v-if="mongo" class="grid-column-resize" role="separator" aria-orientation="vertical" :aria-label="t('调整列宽') + ': ' + column" :aria-valuemin="52" :aria-valuemax="1000" :aria-valuenow="columnWidth(column)" tabindex="0" @pointerdown.stop="resizeColumn($event, column)" @keydown.stop="resizeColumnKey($event, column)" @dblclick.stop="delete widths[column]"></span></th>
       </tr></thead>
       <tbody>
         <tr v-if="topSpace" class="virtual-spacer" aria-hidden="true"><td :colspan="columnCount" :style="{ height: topSpace + 'px' }"></td></tr>
-        <tr v-for="item in visibleRows" :key="item.index" :data-row-index="item.index" :aria-rowindex="item.index + 2" :class="{ selected: selected === item.index, 'record-stripe': preferences.records.stripes > 0 && (offset + item.index + 1) % preferences.records.stripes === 0 }" @click="emit('select', item.index)" @dblclick="emit('open', item.index)" :tabindex="documentMenu ? 0 : undefined" @contextmenu="openRowMenu($event, item.index)" @keydown.shift.f10="openRowMenu($event, item.index)">
+        <tr v-for="item in visibleRows" :key="item.index" :data-row-index="item.index" :aria-rowindex="item.index + 2" :class="{ selected: selected === item.index, 'record-stripe': preferences.records.stripes > 0 && (offset + item.index + 1) % preferences.records.stripes === 0 }" @click="selectedColumn='';emit('select', item.index)" @dblclick="emit('open', item.index)" :tabindex="documentMenu ? 0 : undefined" @contextmenu="openRowMenu($event, item.index)" @keydown.shift.f10="openRowMenu($event, item.index)">
           <td v-if="selectable" class="number-cell"><input type="checkbox" :aria-label="t('选择第 {0} 行', [item.index + 1])" :checked="checked.includes(item.index)" @click.stop @change="emit('check', item.index)" /></td>
           <td class="number-cell">{{ offset + item.index + 1 }}</td>
           <td v-for="(column, columnIndex) in columns" :key="column"
-            :class="{ 'column-active':selectedColumn===column&&canUseColumn(column), 'null-cell': item.row[column] === null || !Object.hasOwn(item.row, column) || cellType(item.row, item.index, column) === 'Null' || cellType(item.row, item.index, column) === 'Undefined' || genericType(item.index, columnIndex) === 'NULL', 'has-bson-color': !!gridColor(item.row, item.index, column, columnIndex) }"
+            :class="{ 'column-active':selectedColumn===column&&canUseColumn(column), 'inline-draft-cell':draftText(item.index,column)!==undefined, 'inline-editable-cell':!!canInlineEdit?.(item.index,column), 'null-cell': item.row[column] === null || !Object.hasOwn(item.row, column) || cellType(item.row, item.index, column) === 'Null' || cellType(item.row, item.index, column) === 'Undefined' || genericType(item.index, columnIndex) === 'NULL', 'has-bson-color': !!gridColor(item.row, item.index, column, columnIndex) }"
             :data-mongo-field="documentMenu ? column : undefined"
+            :data-grid-field="column" @dblclick="beginInline($event,item.index,column)"
             :data-bson-type="cellType(item.row, item.index, column)"
             :data-value-type="gridType(item.row, item.index, column, columnIndex)"
             :data-type-color="gridColor(item.row, item.index, column, columnIndex)"
             :data-bson-color="mongo ? gridColor(item.row, item.index, column, columnIndex) : undefined"
             :style="gridColor(item.row, item.index, column, columnIndex) ? { '--bson-color': gridColor(item.row, item.index, column, columnIndex) } : {}"
             :title="(gridLabel(item.row, item.index, column, columnIndex) ? gridLabel(item.row, item.index, column, columnIndex) + ': ' : '') + cellText(item.row, item.index, column)">
-            <span v-if="showTypeLabels && gridType(item.row, item.index, column, columnIndex)" class="bson-type-label">{{ gridLabel(item.row, item.index, column, columnIndex) }}</span><span class="grid-value">{{ cellText(item.row, item.index, column) }}</span>
+            <input v-if="isInline(item.index,column)" class="inline-grid-input" :value="inlineCell?.text" :aria-label="t('编辑')+' '+column" spellcheck="false" @input="emit('inlineInput',($event.target as HTMLInputElement).value)" @click.stop @dblclick.stop @keydown.enter.prevent.stop="emit('inlineFinish',false)" @keydown.esc.prevent.stop="emit('inlineFinish',true)" @blur="emit('inlineFinish',false)" />
+            <template v-else><span v-if="showTypeLabels && gridType(item.row, item.index, column, columnIndex)" class="bson-type-label">{{ gridLabel(item.row, item.index, column, columnIndex) }}</span><span class="grid-value">{{ draftText(item.index,column) ?? cellText(item.row, item.index, column) }}</span></template>
           </td>
         </tr>
         <tr v-if="bottomSpace" class="virtual-spacer" aria-hidden="true"><td :colspan="columnCount" :style="{ height: bottomSpace + 'px' }"></td></tr>
@@ -314,4 +337,8 @@ function display(value: unknown): string {
 
 <style>
 .grid-heading-content{display:flex;align-items:center;gap:5px;min-width:0;white-space:nowrap}.grid-heading-content .grid-column-title{min-width:0;overflow:hidden;text-overflow:ellipsis;flex:1}.column-menu-trigger{width:23px;height:22px;flex:none;padding:0;border:0;border-radius:3px;background:transparent;color:var(--accent);font-size:17px;line-height:18px;font-weight:700;opacity:0;cursor:pointer}.column-actionable:hover .column-menu-trigger,.column-active .column-menu-trigger,.column-menu-trigger:focus-visible,.column-menu-trigger[aria-expanded=true]{opacity:1}.column-sort-indicator{flex:none;color:var(--accent);font-size:12px;font-weight:700}.column-sort-indicator small{font-size:9px}.data-table th.column-active{background:var(--selected);color:var(--text);box-shadow:inset 0 -2px var(--accent)}.data-table tbody td.column-active{background:color-mix(in srgb,var(--accent) 18%,var(--panel));}.data-table tbody tr.selected td.column-active{background:color-mix(in srgb,var(--accent) 28%,var(--panel));}.grid-column-menu{width:208px;z-index:85}.grid-column-menu .context-action{display:flex;align-items:center;gap:9px;padding:8px 10px}.column-menu-symbol{display:inline-flex;width:18px;justify-content:center;align-items:center;font-size:16px;color:var(--muted)}.column-menu-symbol.clear-sort{color:var(--danger)}
+</style>
+
+<style scoped>
+.inline-grid-input{width:100%;min-width:0;height:100%;padding:1px 4px;background:var(--input);color:var(--text);border:1px solid var(--accent);border-radius:0;font:inherit;outline:none}.inline-draft-cell{box-shadow:inset 0 -2px var(--warning)!important;background:color-mix(in srgb,var(--warning) 13%,var(--panel))!important}.inline-editable-cell{cursor:text}
 </style>

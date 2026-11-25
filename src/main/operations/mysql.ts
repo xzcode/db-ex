@@ -121,6 +121,7 @@ export class MysqlOperations {
       }
       case 'mysql.insert': return this.insert(operation.database, operation.entity, operation.values, context, signal)
       case 'mysql.update': return this.change(operation, context, signal)
+      case 'mysql.updateBatch': return this.updateBatch(operation,context,signal)
       case 'mysql.delete': return this.change(operation, context, signal)
       case 'mysql.import': return this.importRows(operation, context, signal)
       default: throw new Error('INVALID_OPERATION: 不支持的 MySQL 操作')
@@ -276,11 +277,11 @@ export class MysqlOperations {
     return data.header?.affectedRows ?? 0
   }
 
-  private async change(operation: Extract<MysqlOperation, { action: 'mysql.update' | 'mysql.delete' }>, context: OperationContext, signal: AbortSignal): Promise<OperationResult> {
+  private async change(operation: Extract<MysqlOperation, { action: 'mysql.update' | 'mysql.delete' }>, context: OperationContext, signal: AbortSignal,knownStructure?:Structure): Promise<OperationResult> {
     requireWrite(context)
     const key = sqlRow(operation.key, '主键')
     const original = sqlRow(operation.original, '原始记录')
-    const structure = await this.structure(operation.database, operation.entity, signal)
+    const structure = knownStructure||await this.structure(operation.database, operation.entity, signal)
     this.assertRecordWrite(structure,operation.action==='mysql.update'?'update':'delete')
     if (!structure.primaryKeys.length) throw new Error('NO_PRIMARY_KEY: 该表没有主键，不能安全进行单行修改或删除')
     if (Object.keys(key).length !== structure.primaryKeys.length || structure.primaryKeys.some(name => !(name in key) || key[name] === null || key[name] !== original[name])) {
@@ -316,6 +317,51 @@ export class MysqlOperations {
     const result = await this.query(sql, parameters, signal, 1)
     if (result.header?.affectedRows !== 1) throw new Error('EDIT_CONFLICT: 记录已被修改或删除，请刷新后重试')
     return emptyResult(`已${operation.action === 'mysql.update' ? '修改' : '删除'} 1 行${this.transaction ? '（事务尚未提交）' : ''}`, 1)
+  }
+
+  private async updateBatch(operation:Extract<MysqlOperation,{action:'mysql.updateBatch'}>,context:OperationContext,signal:AbortSignal):Promise<OperationResult>{
+    requireWrite(context)
+    if(!Array.isArray(operation.edits)||!operation.edits.length||operation.edits.length>MAX_ROWS||Buffer.byteLength(JSON.stringify(operation.edits))>MAX_BYTES)throw new Error('LIMIT_EXCEEDED: 单批编辑最多 500 行和 2 MiB')
+    const structure=await this.structure(operation.database,operation.entity,signal)
+    this.assertRecordWrite(structure,'update')
+    if(!mysqlObjectCapabilities(structure.tableType,structure.engine,structure.primaryKeys.length>0).update)throw new Error('READ_ONLY: 只读对象')
+    const atomic=structure.engine.toUpperCase()==='INNODB',existing=this.transaction
+    if(existing&&!atomic)throw new Error('TRANSACTION_REQUIRED: 非事务表不能参与批量事务编辑')
+    const identities=new Set<string>()
+    const edits=operation.edits.map(item=>{
+      const key=sqlRow(item.key,'主键'),original=sqlRow(item.original,'原始记录'),changes=sqlRow(item.changes,'修改值')
+      if(Object.keys(key).length!==structure.primaryKeys.length||structure.primaryKeys.some(k=>key[k]===null||key[k]===undefined||key[k]!==original[k]))throw new Error('INVALID_PRIMARY_KEY: 必须提供完整且与原始记录相符的主键')
+      if(structure.columns.some(c=>!Object.hasOwn(original,c.name)))throw new Error('INCOMPLETE_ROW: 编辑前请获取包含全部字段的原始记录')
+      this.validateColumns(original,structure,false);this.validateColumns(changes,structure,true)
+      if(!Object.keys(changes).length||Object.keys(changes).some(k=>structure.primaryKeys.includes(k)))throw new Error('INVALID_INPUT: 批量编辑不能修改主键')
+      const identity=JSON.stringify(structure.primaryKeys.map(k=>key[k]))
+      if(identities.has(identity))throw new Error('INVALID_INPUT: 重复记录')
+      identities.add(identity)
+      return {key,original,changes}
+    })
+    let completed=0
+    if(atomic)await this.query(existing?'SAVEPOINT dbex_grid_batch':'START TRANSACTION READ WRITE',[],signal,1,false)
+    try{
+      for(const edit of edits){
+        checkAborted(signal)
+        await this.change({action:'mysql.update',database:operation.database,entity:operation.entity,...edit,confirmed:true},context,signal,structure)
+        completed++
+      }
+      if(atomic)await this.query(existing?'RELEASE SAVEPOINT dbex_grid_batch':'COMMIT',[],signal,1,false)
+      return {...emptyResult('操作已完成',completed),gridBatch:{total:edits.length,completed,atomic}}
+    }catch(error){
+      if(atomic){
+        if(!this.closed&&!signal.aborted){
+          try{
+            await this.query(existing?'ROLLBACK TO SAVEPOINT dbex_grid_batch':'ROLLBACK',[],signal,1,false)
+            if(existing)await this.query('RELEASE SAVEPOINT dbex_grid_batch',[],signal,1,false)
+          }catch{this.destroy();throw new Error('BATCH_UNCERTAIN: 写入结果待核对，请重新连接。')}
+        }else throw new Error('BATCH_UNCERTAIN: 写入结果待核对，请重新连接。')
+        throw error
+      }
+      const failure=databaseError(error)
+      return {...emptyResult('批量编辑未全部完成',completed),gridBatch:{total:edits.length,completed,atomic:false,failed:true,uncertain:!failure.message.startsWith('EDIT_CONFLICT:'),error:failure.message}}
+    }
   }
 
   private async importRows(operation: Extract<MysqlOperation, { action: 'mysql.import' }>, context: OperationContext, signal: AbortSignal): Promise<OperationResult> {

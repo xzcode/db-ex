@@ -128,6 +128,7 @@ export interface OperationResult extends DataPreview {
   /** Per-document metadata aligned with rows and canonical Extended JSON. */
   bsonTypes?: BsonTypeBranch[]
   affectedRows?: number
+  gridBatch?:{total:number;completed:number;atomic:boolean;failed?:boolean;uncertain?:boolean;error?:string}
   queryId?:string
   durationMs?: number
   truncated?: boolean
@@ -139,6 +140,8 @@ export interface OperationResult extends DataPreview {
 }
 interface Confirmed { confirmed?: boolean }
 interface Entity { database: string; entity: string }
+export interface SqlGridEdit {key:SqlRow;original:SqlRow;changes:SqlRow}
+export interface MongoGridEdit {original:string;document:string}
 export type MysqlOperation =
   | ({ action: 'mysql.query'; database?: string; sql: string; parameters?: SqlValue[]; limit?: number; offset?: number } & Confirmed)
   | ({ action: 'mysql.structure' | 'mysql.inspect' } & Entity)
@@ -146,6 +149,7 @@ export type MysqlOperation =
   | ({ action: 'mysql.browse'; filter: BrowseFilter; countOnly?: boolean; limit?: number; offset?: number } & Entity)
   | ({ action: 'mysql.insert'; values: SqlRow } & Entity & Confirmed)
   | ({ action: 'mysql.update'; key: SqlRow; original: SqlRow; changes: SqlRow } & Entity & Confirmed)
+  | ({action:'mysql.updateBatch';edits:SqlGridEdit[]} & Entity & Confirmed)
   | ({ action: 'mysql.delete'; key: SqlRow; original: SqlRow } & Entity & Confirmed)
   | ({ action: 'mysql.import'; rows: SqlRow[] } & Entity & Confirmed)
   | ({ action: 'mysql.begin' | 'mysql.commit' | 'mysql.rollback' } & Confirmed)
@@ -157,6 +161,7 @@ export type MongoOperation =
   | ({ action: 'mongo.aggregate'; pipeline: string; limit?: number } & Entity)
   | ({ action: 'mongo.insert'; documents: string[] } & Entity & Confirmed)
   | ({ action: 'mongo.replace'; original: string; document: string } & Entity & Confirmed)
+  | ({action:'mongo.replaceBatch';edits:MongoGridEdit[]} & Entity & Confirmed)
   | ({ action: 'mongo.delete'; original: string } & Entity & Confirmed)
   | ({ action: 'mongo.indexes' | 'mongo.inspect' } & Entity)
   | ({ action: 'mongo.createIndex'; keys: string; options?: string } & Entity & Confirmed)

@@ -634,3 +634,5 @@ html[dir=rtl] .tree-chevron:not(.expanded) { transform: rotate(180deg); }
 .temporary-session-row.selected { background:var(--selected); }
 .temporary-session-row .active-item { flex:1; min-width:0; padding:3px 0; }
 .temporary-session-row .ghost-icon { width:21px; }
+
+.grid-batch-editor input{flex:1;min-width:100px}.grid-save:not(:disabled){color:var(--success)}.grid-discard:not(:disabled){color:var(--danger)}.grid-pending-indicator{flex:none;color:var(--warning);font-size:11px;max-width:175px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

@@ -5,9 +5,9 @@ import { MysqlOperations } from '../../operations/mysql'
 import { inspectSql, quoteIdentifier } from '../../operations/sql-policy'
 import type { DatabaseAdapter, OperationAction } from './types'
 
-export const mysqlActions = ['mysql.query','mysql.createDatabase','mysql.dropDatabase','mysql.browse','mysql.structure','mysql.inspect','mysql.insert','mysql.update','mysql.delete','mysql.import','mysql.begin','mysql.commit','mysql.rollback'] as const satisfies readonly OperationAction[]
+export const mysqlActions = ['mysql.query','mysql.createDatabase','mysql.dropDatabase','mysql.browse','mysql.structure','mysql.inspect','mysql.insert','mysql.update','mysql.updateBatch','mysql.delete','mysql.import','mysql.begin','mysql.commit','mysql.rollback'] as const satisfies readonly OperationAction[]
 
-const writes=new Set<OperationAction>(['mysql.createDatabase','mysql.dropDatabase','mysql.insert','mysql.update','mysql.delete','mysql.import','mysql.begin','mysql.commit'])
+const writes=new Set<OperationAction>(['mysql.createDatabase','mysql.dropDatabase','mysql.insert','mysql.update','mysql.updateBatch','mysql.delete','mysql.import','mysql.begin','mysql.commit'])
 export function createMysqlFamilyAdapter(kind:'mysql'|'mariadb'):DatabaseAdapter{return {
   kind,
   actions:mysqlActions,

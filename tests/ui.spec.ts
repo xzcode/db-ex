@@ -79,6 +79,7 @@ async function installBridge(page: Page) {
           const values = (window as any).__dbexLargeGrid ? Array.from({ length: 500 }, (_, index) => ({ id: String(index + 1), name: 'User ' + (index + 1), email: 'user' + (index + 1) + '@example.test' })) : id === 'sql2' ? [{ id: '2', name: 'Grace', email: 'grace@example.test' }] : rows
           return { ...grid(values), rawRows: values, columnTypes: ['BIGINT','VARCHAR','VARCHAR'], nullCells: values.map(() => []), durationMs: 4, transaction: false, nextOffset: op.action === 'mysql.browse' && (op.offset || 0) < 500 ? (op.offset || 0) + op.limit : undefined }
         }
+        if(op.action==='mysql.updateBatch'||op.action==='mongo.replaceBatch')return {columns:[],rows:[],affectedRows:op.edits.length,gridBatch:{total:op.edits.length,completed:op.edits.length,atomic:op.action==='mysql.updateBatch'}}
         if (op.action === 'mysql.begin') return { columns: [], rows: [], transaction: true }
         if (op.action === 'mysql.commit' || op.action === 'mysql.rollback') return { columns: [], rows: [], transaction: false }
         if (op.action === 'mongo.find' || op.action === 'mongo.aggregate') return { columns: ['_id', 'name', 'createdAt', 'score', 'nullable', 'nested'], rows: [{ _id: '64b000000000000000000001', name: 'Ada', createdAt: 'date', score: '7', nullable: 'NULL', nested: '{...}' }, { _id: '64b000000000000000000002', name: 'Grace', score: '7', nullable: 'NULL' }, { _id: '64b000000000000000000003', name: 'Lin', score: '7' }], documents: [document, secondDocument, thirdDocument], bsonTypes: mongoMetadata, durationMs: 3, nextOffset: op.action === 'mongo.find' && (op.offset || 0) < 400 ? (op.offset || 0) + op.limit : undefined }
@@ -1185,4 +1186,39 @@ test('a single connection tree keeps multiple independent session resources expa
  await page.locator('.database-context-menu').getByRole('button',{name:'新建查询',exact:true}).click()
  await expect(page.locator('.session-tab.active')).toContainText('MySQL Local')
  await expect(page.locator('.saved-query-editor:visible')).toBeVisible()
+})
+
+
+test('grid inline edits and column assignment are staged, cancellable and explicitly committed',async({page})=>{
+ await connect(page,'Mongo Local');await openUsers(page)
+ const workbench=page.locator('.workbench:visible'),grid=workbench.locator('.data-table')
+ await workbench.getByRole('button',{name:'只读 · 启用写入',exact:true}).click()
+ const cell=grid.locator('tr[data-row-index="0"] [data-grid-field="name"]')
+ await cell.dblclick()
+ const input=grid.locator('.inline-grid-input')
+ await expect(input).toHaveValue('Ada')
+ await input.fill('Ada staged');await input.press('Enter')
+ await expect(cell).toContainText('Ada staged')
+ expect(await page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mongo.replaceBatch').length)).toBe(0)
+ await workbench.getByRole('button',{name:'取消表格修改',exact:true}).click()
+ await expect(cell).toContainText('Ada')
+ await grid.locator('thead th').filter({hasText:/^name/}).dblclick()
+ await workbench.getByLabel('整列修改值',{exact:true}).fill('New name')
+ await expect(grid.locator('tr[data-row-index="1"] [data-grid-field="name"]')).toContainText('New name')
+ await workbench.getByRole('button',{name:'保存表格修改',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mongo.replaceBatch').at(-1)?.edits.map((x:any)=>JSON.parse(x.document).name))).toEqual(['New name','New name','New name'])
+ await expect(workbench.getByRole('button',{name:'保存表格修改',exact:true})).toBeDisabled()
+})
+
+test('SQL inline edits retain exact record identity and block pagination until resolved',async({page})=>{
+ await connect(page,'MySQL Local');await openUsers(page)
+ const workbench=page.locator('.workbench:visible'),grid=workbench.locator('.data-table')
+ await workbench.getByRole('button',{name:'只读 · 启用写入',exact:true}).click()
+ await grid.locator('tr[data-row-index="0"] [data-grid-field="name"]').dblclick()
+ const input=grid.locator('.inline-grid-input')
+ await input.fill('Changed');await input.press('Enter')
+ await workbench.getByRole('button',{name:'下一页',exact:true}).click()
+ await expect(workbench.getByRole('alert')).toContainText('请先保存或取消表格修改。')
+ await workbench.getByRole('button',{name:'保存表格修改',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.updateBatch').at(-1)?.edits[0])).toMatchObject({key:{id:'1'},original:{name:'Ada'},changes:{name:'Changed'}})
 })

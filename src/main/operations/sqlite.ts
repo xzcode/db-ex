@@ -96,10 +96,29 @@ export class SqliteOperations {
     const result=this.statement('INSERT INTO '+target(database,entity)+' ('+names.map(quote).join(',')+') VALUES ('+names.map(()=>'?').join(',')+')').run(...names.map(n=>bind(row[n]!)))
     return Number(result.changes)
   }
+  private change(op:Extract<MysqlOperation,{action:'mysql.update'|'mysql.delete'}>,knownFields?:Field[]):OperationResult{
+    const fields=knownFields||this.writableFields(op.database,op.entity),keys=this.keys(fields),original=sqlRow(op.original,'原始记录'),key=sqlRow(op.key,'主键')
+    if(!keys.length||keys.some(k=>key[k]===null||key[k]===undefined||key[k]!==original[k])||Object.keys(key).length!==keys.length)throw new Error('NO_PRIMARY_KEY: 该表没有主键，不能安全进行单行修改或删除')
+    const names=fields.filter(f=>f.hidden!==1n).map(f=>f.name)
+    if(names.some(n=>!Object.hasOwn(original,n))||Object.keys(original).some(n=>!names.includes(n)))throw new Error('INCOMPLETE_ROW: 编辑前请获取包含全部字段的原始记录')
+    const where=names.map(n=>quote(n)+' COLLATE BINARY IS ?').join(' AND ')
+    const params=names.map(n=>bind(original[n]!))
+    const changes=op.action==='mysql.update'?sqlRow(op.changes,'修改记录'):undefined
+    const changed=changes?Object.keys(changes):[]
+    if(changes&&changed.some(n=>!fields.some(f=>f.name===n&&f.hidden===0n)))throw new Error('INVALID_INPUT: 数据包含不属于该表的字段')
+    if(changes&&!changed.length)return emptyResult('语句已执行',0)
+    const n=this.atomic(()=>{
+      const stmt=changes?'UPDATE '+target(op.database,op.entity)+' SET '+changed.map(n=>quote(n)+'=?').join(',')+' WHERE '+where:'DELETE FROM '+target(op.database,op.entity)+' WHERE '+where
+      const res=this.statement(stmt).run(...(changes?changed.map(n=>bind(changes[n]!)):[]),...params)
+      if(res.changes!==1n&&res.changes!==1)throw new Error('ROW_CONFLICT: 原始记录已变化，请刷新后重试')
+      return 1
+    })
+    return {...emptyResult('语句已执行',n),transaction:this.transaction}
+  }
   execute(op:MysqlOperation,ctx:OperationContext):OperationResult{
     checkAborted(ctx.signal)
     const policy=op.action==='mysql.query'?inspectSqliteSql(op.sql):undefined
-    const writing=policy?.mode==='write'||['mysql.begin','mysql.commit','mysql.insert','mysql.update','mysql.delete','mysql.import'].includes(op.action)
+    const writing=policy?.mode==='write'||['mysql.begin','mysql.commit','mysql.insert','mysql.update','mysql.updateBatch','mysql.delete','mysql.import'].includes(op.action)
     if(writing){requireWrite(ctx);this.writable();this.db.exec('PRAGMA query_only=OFF')}
     try{
       switch(op.action){
@@ -153,24 +172,23 @@ export class SqliteOperations {
           const fields=this.writableFields(op.database,op.entity),n=this.atomic(()=>op.rows.reduce((sum,row)=>sum+this.insert(op.database,op.entity,row,fields),0))
           return {...emptyResult('导入完成',n),transaction:this.transaction}
         }
-        case 'mysql.update':case 'mysql.delete':{
-          const fields=this.writableFields(op.database,op.entity),keys=this.keys(fields),original=sqlRow(op.original,'原始记录'),key=sqlRow(op.key,'主键')
-          if(!keys.length||keys.some(k=>key[k]===null||key[k]===undefined||key[k]!==original[k])||Object.keys(key).length!==keys.length)throw new Error('NO_PRIMARY_KEY: 该表没有主键，不能安全进行单行修改或删除')
-          const names=fields.filter(f=>f.hidden!==1n).map(f=>f.name)
-          if(names.some(n=>!Object.hasOwn(original,n))||Object.keys(original).some(n=>!names.includes(n)))throw new Error('INCOMPLETE_ROW: 编辑前请获取包含全部字段的原始记录')
-          const where=names.map(n=>quote(n)+' COLLATE BINARY IS ?').join(' AND ')
-          const params=names.map(n=>bind(original[n]!))
-          const changes=op.action==='mysql.update'?sqlRow(op.changes,'修改记录'):undefined
-          const changed=changes?Object.keys(changes):[]
-          if(changes&&changed.some(n=>!fields.some(f=>f.name===n&&f.hidden===0n)))throw new Error('INVALID_INPUT: 数据包含不属于该表的字段')
-          if(changes&&!changed.length)return emptyResult('语句已执行',0)
-          const n=this.atomic(()=>{
-            const stmt=changes?'UPDATE '+target(op.database,op.entity)+' SET '+changed.map(n=>quote(n)+'=?').join(',')+' WHERE '+where:'DELETE FROM '+target(op.database,op.entity)+' WHERE '+where
-            const res=this.statement(stmt).run(...(changes?changed.map(n=>bind(changes[n]!)):[]),...params)
-            if(res.changes!==1n&&res.changes!==1)throw new Error('ROW_CONFLICT: 原始记录已变化，请刷新后重试')
-            return 1
+        case 'mysql.update':case 'mysql.delete':return this.change(op)
+        case 'mysql.updateBatch':{
+          if(!Array.isArray(op.edits)||!op.edits.length||op.edits.length>500||Buffer.byteLength(JSON.stringify(op.edits))>MAX_BYTES)throw new Error('LIMIT_EXCEEDED: 单批编辑最多 500 行和 2 MiB')
+          const fields=this.writableFields(op.database,op.entity),keys=this.keys(fields),seen=new Set<string>()
+          const edits=op.edits.map(item=>{
+            const key=sqlRow(item.key,'主键'),original=sqlRow(item.original,'原始记录'),changes=sqlRow(item.changes,'修改记录')
+            if(!Object.keys(changes).length||Object.keys(changes).some(k=>keys.includes(k)))throw new Error('INVALID_INPUT: 批量编辑不能修改主键')
+            const identity=JSON.stringify(keys.map(k=>key[k]))
+            if(seen.has(identity))throw new Error('INVALID_INPUT: 重复记录')
+            seen.add(identity);return {key,original,changes}
           })
-          return {...emptyResult('语句已执行',n),transaction:this.transaction}
+          this.db.exec('SAVEPOINT dbex_grid_batch')
+          try{
+            for(const item of edits){checkAborted(ctx.signal);this.change({action:'mysql.update',database:op.database,entity:op.entity,...item,confirmed:true},fields)}
+            this.db.exec('RELEASE dbex_grid_batch')
+            return {...emptyResult('操作已完成',edits.length),transaction:this.transaction,gridBatch:{total:edits.length,completed:edits.length,atomic:true}}
+          }catch(error){this.db.exec('ROLLBACK TO dbex_grid_batch; RELEASE dbex_grid_batch');throw error}
         }
         default:throw new Error('INVALID_OPERATION: 不支持的操作')
       }

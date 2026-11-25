@@ -1,3 +1,4 @@
+import { gridEditCatalogs } from './catalog-grid-edit'
 import { queryEditorCatalogs } from './catalog-query-editor'
 import { navigationCatalogs } from './catalog-navigation'
 import { indexHelpCatalogs } from './catalog-index-help'
@@ -1062,4 +1063,5 @@ export const en: Readonly<Record<string, string>> = {
   ...indexHelpCatalogs.en,
   ...navigationCatalogs.en,
   ...queryEditorCatalogs.en,
+  ...gridEditCatalogs.en,
 }
