@@ -526,3 +526,21 @@ html[dir=rtl] .tree-chevron:not(.expanded) { transform: rotate(180deg); }
 .browse-record-view { flex:1; min-height:0; min-width:0; display:flex; flex-direction:column; overflow:hidden; }
 .record-view-toolbar { display:flex; align-items:center; gap:7px; flex-wrap:wrap; padding:5px 9px; border-bottom:1px solid var(--border); }
 .record-view-toolbar select { max-width:100px; }
+
+/* Compact per-condition controls and independent, searchable value picker. */
+.builder-rule { grid-template-columns:18px minmax(80px,1fr) minmax(64px,.7fr) minmax(62px,.65fr) minmax(78px,1fr) 28px 55px 25px; gap:5px; padding:3px; border:1px solid transparent; }
+.builder-rule > input[type=checkbox] { width:16px; height:16px; padding:0; accent-color:var(--accent); }
+.builder-rule.rule-selected { background:var(--selected); border-color:var(--border); }
+.builder-rule.rule-disabled > :not([type=checkbox]) { opacity:.52; }
+.filter-value-backdrop { z-index:90; }
+.filter-value-dialog { width:520px; max-width:calc(100vw - 36px); }
+.filter-value-body { display:flex; flex-direction:column; padding:16px; gap:10px; }
+.filter-value-body .field { width:100%; }
+.filter-suggestion-header { display:flex; align-items:center; gap:8px; justify-content:space-between; font-size:12px; }
+.filter-suggestion-header small,.filter-suggestion small { color:var(--muted); font-size:10px; }
+.filter-suggestions { min-height:100px; max-height:min(240px,35vh); overflow:auto; border:1px solid var(--border); }
+.filter-suggestion { display:flex; align-items:center; gap:8px; padding:6px 8px; font-size:12px; }
+.filter-suggestion:nth-child(even) { background:var(--panel-raised); }
+.filter-suggestion > span { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.filter-value-dialog input[type=radio],.filter-value-dialog input[type=checkbox] { accent-color:var(--accent); }
+@media(max-width:1050px) { .builder-rule { grid-template-columns:18px minmax(64px,1fr) minmax(58px,.8fr) minmax(58px,.7fr) minmax(65px,1fr) 24px 50px 24px; gap:3px; } }

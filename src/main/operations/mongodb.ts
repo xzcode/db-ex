@@ -163,9 +163,13 @@ export class MongoOperations {
         } catch { checkAborted(signal) }
         if (inspection.kind !== 'view') {
           try {
-            const stats = await db.command({ collStats: entity, scale: 1, indexDetails: false }, options)
+            const stats = await db.command({ collStats: entity, scale: 1 }, { signal, timeoutMS: TIMEOUT_MS, raw: false, promoteValues: true, promoteLongs: false })
             inspection.metrics = metrics(metric('文档数', stats.count), metric('已固定', stats.capped ?? (collectionInfo ? collectionInfo.options?.capped === true : undefined), 'boolean'), metric('数据大小', stats.size, 'bytes'), metric('对象的平均大小', stats.avgObjSize, 'bytes'), metric('存储大小', stats.storageSize, 'bytes'), metric('索引数', stats.nindexes), metric('索引的总大小', stats.totalIndexSize))
-          } catch { checkAborted(signal); inspection.infoNote = '部分元数据不可用或无读取权限。' }
+          } catch {
+            checkAborted(signal)
+            inspection.infoNote = '部分元数据不可用或无读取权限。'
+            try { inspection.metrics.push(...metrics(metric('文档数', await collection.estimatedDocumentCount({ timeoutMS: TIMEOUT_MS })))) } catch { checkAborted(signal) }
+          }
         }
         if (!collectionInfo) inspection.definitionNote = 'DDL 不可用或超出读取上限。'
         else {
@@ -176,6 +180,7 @@ export class MongoOperations {
               const data = await this.readCursor(collection.listIndexes({ ...options, batchSize: 50, raw: true }), MAX_ROWS, signal)
               indexes = (data.documents || []).map(value => BSON.EJSON.parse(value, { relaxed: false }) as Document)
               limited = Boolean(data.truncated)
+              if (!limited && !inspection.metrics.some(item => item.label === '索引数')) inspection.metrics.push(...metrics(metric('索引数', indexes.length)))
             }
             const generated = mongoDefinition(database, entity, collectionInfo, indexes)
             if (Buffer.byteLength(generated.definition, 'utf8') > MAX_BYTES) inspection.definitionNote = 'DDL 不可用或超出读取上限。'
