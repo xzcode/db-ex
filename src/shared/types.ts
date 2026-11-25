@@ -94,8 +94,11 @@ import type { MongoCategory } from './mongo-catalog'
 export interface ExplorerNode {
   id: string
   label: string
-  kind: 'database' | 'table' | 'collection' | 'keyspace' | 'view' | 'mongo-category' | 'mongo-function' | 'mongo-indexes' | 'gridfs-bucket' | 'database-query'
+  kind: 'database' | 'table' | 'collection' | 'keyspace' | 'view' | 'mongo-category' | 'mongo-function' | 'mongo-indexes' | 'gridfs-bucket' | 'database-query' | 'query-folder' | 'saved-query'
   category?: MongoCategory
+  queryId?:string
+  queryRevision?:string
+  queryMode?:import('./saved-query').QueryMode
   readOnly?: boolean
   objectType?: 'sequence' | 'system-versioned'
   metrics?: import('./object-inspection').ObjectMetric[]
@@ -172,6 +175,7 @@ export type DatabaseOperation = MysqlOperation | MongoOperation | RedisOperation
 export interface QuerySnippet {
   /** Optional fields keep existing encrypted history files compatible. */
   mongoKind?: 'query' | 'aggregation'
+  parameters?:string
   entity?: string
   connectionId?: string
   id: string
@@ -222,6 +226,13 @@ export interface DbExAPI {
   copyText(value: string): Promise<void>
   cancel(sessionId: string): Promise<void>
   setWriteAccess(sessionId: string, enabled: boolean): Promise<SessionInfo>
+  listSavedQueries(sessionId:string,database:string,mode:import('./saved-query').QueryMode):Promise<import('./saved-query').QuerySummary[]>
+  getSavedQuery(sessionId:string,database:string,id:string):Promise<import('./saved-query').SavedQuery>
+  saveQueryObject(sessionId:string,database:string,input:import('./saved-query').QuerySave):Promise<import('./saved-query').SavedQuery>
+  copySavedQuery(sessionId:string,database:string,id:string):Promise<import('./saved-query').SavedQuery>
+  deleteSavedQuery(sessionId:string,database:string,id:string,revision:string):Promise<void>
+  importSavedQuery(sessionId:string,database:string,mode:import('./saved-query').QueryMode):Promise<import('./saved-query').SavedQuery|null>
+  exportSavedQuery(sessionId:string,database:string,id:string,format:'json'|'sql'):Promise<boolean>
   listSnippets(): Promise<QuerySnippet[]>
   saveSnippet(snippet: Omit<QuerySnippet, 'id' | 'updatedAt'> & { id?: string }): Promise<QuerySnippet>
   deleteSnippet(id: string): Promise<void>

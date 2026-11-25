@@ -17,6 +17,7 @@ export const tableColumns:CatalogColumn[]=[
  {key:'数据大小',label:'数据大小',kind:'number'},
  {key:'索引的总大小',label:'索引的总大小',kind:'number'}
 ]
+export const queryColumns:CatalogColumn[]=[{key:'name',label:'名称',kind:'name'},{key:'文件大小',label:'文件大小',kind:'number'},{key:'创建日期',label:'创建日期',kind:'text'},{key:'修改日期',label:'修改日期',kind:'text'}]
 export const nameColumn:CatalogColumn={key:'name',label:'名称',kind:'name'}
 export function objectMetric(node:ExplorerNode,key:string):ObjectMetric|undefined{return node.metrics?.find(metric=>metric.label===key)}
 function numeric(a:string,b:string){

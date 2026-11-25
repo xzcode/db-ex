@@ -9,6 +9,9 @@ import { ConnectionStore } from './connections/store'
 import { SessionManager } from './connections/manager'
 import { validateId } from './connections/validation'
 import { SnippetStore } from './storage/snippets'
+import { SavedQueryStore } from './storage/saved-queries'
+import { decrypt,encrypt,readJson,writeJson } from './storage/secure-json'
+import { normalizeQueryScope,queryModeFor,portableQuery,readPortableQuery,type QueryMode,type SavedQuery,type QuerySave } from '../shared/saved-query'
 import { initNativePreferences, getNativePreferences, saveNativePreferences, checkTool, diagnosticDirectory, diagnostic, saveRecovery, loadRecovery, clearRecovery, deleteRecovery } from './storage/preferences'
 import { nativeTasks,runNativeTool,toolVersion } from './operations/native-tools'
 import { nativeToolTasks,toolNames, type ToolName,type NativeToolTask } from '../shared/preferences'
@@ -25,6 +28,19 @@ const sessions = new SessionManager(modulePath=>{
   return {send:message=>child.postMessage(message),onMessage:callback=>{child.on('message',callback)},onExit:callback=>{child.once('exit',callback)},onError:callback=>{child.on('error',callback)},kill:()=>{child.kill()}}
 },app.isPackaged?join(process.resourcesPath,'app.asar.unpacked','dist-electron','sqlite-worker.cjs'):join(__dirname,'sqlite-worker.cjs'))
 const snippets = new SnippetStore()
+const savedQueries=new SavedQueryStore({
+  async read(){
+    const file=await readJson<{version:number;encrypted:string}>('saved-queries.secure.json')
+    if(!file)return []
+    if(file.version!==1||typeof file.encrypted!=='string')throw new Error('查询记录格式不兼容')
+    return decrypt<SavedQuery[]>(file.encrypted)
+  },
+  write:values=>writeJson('saved-queries.secure.json',{version:1,encrypted:encrypt(values)})
+})
+function savedQueryScope(id:string,database:string){
+  const info=sessions.info(id)
+  return normalizeQueryScope({connectionId:info.connectionId,kind:info.kind,database})
+}
 let quitting = false
 const development = !app.isPackaged && process.argv.includes('--dev')
 const rendererUrl = development ? 'http://127.0.0.1:5173/' : pathToFileURL(join(__dirname, '../dist/index.html')).href
@@ -201,6 +217,31 @@ function registerIpc(): void {
     return true
   }))
   ipcMain.handle('sessions:cancel', handler((_win, id: string) => sessions.cancel(id)))
+  ipcMain.handle('query-objects:list',handler((_win,id:string,database:string,mode:QueryMode)=>savedQueries.list(savedQueryScope(id,database),mode)))
+  ipcMain.handle('query-objects:get',handler((_win,id:string,database:string,queryId:string)=>savedQueries.get(savedQueryScope(id,database),queryId)))
+  ipcMain.handle('query-objects:save',handler((_win,id:string,database:string,input:QuerySave)=>savedQueries.save(savedQueryScope(id,database),input)))
+  ipcMain.handle('query-objects:copy',handler((_win,id:string,database:string,queryId:string)=>savedQueries.copy(savedQueryScope(id,database),queryId)))
+  ipcMain.handle('query-objects:delete',handler(async(win,id:string,database:string,queryId:string,revision:string)=>{
+    const scope=savedQueryScope(id,database),item=await savedQueries.get(scope,queryId)
+    await confirm(win,'删除已保存的查询？',item.name+' @ '+database,'删除')
+    await savedQueries.remove(scope,queryId,revision)
+  }))
+  ipcMain.handle('query-objects:import',handler(async(win,id:string,database:string,mode:QueryMode)=>{
+    const scope=savedQueryScope(id,database);queryModeFor(scope.kind,mode)
+    const file=await openText(win,'导入查询',512*1024)
+    if(!file)return null
+    const isSql=extname(file.name).toLowerCase()==='.sql'
+    const draft=readPortableQuery(scope.kind,mode,file.text,basename(file.name,extname(file.name)).slice(0,100)||tr('未命名查询'),isSql)
+    return savedQueries.import(scope,draft)
+  }))
+  ipcMain.handle('query-objects:export',handler(async(win,id:string,database:string,queryId:string,format:'json'|'sql')=>{
+    const item=await savedQueries.get(savedQueryScope(id,database),queryId)
+    if(format!=='json'&&format!=='sql'||format==='sql'&&item.mode!=='sql')throw new Error('查询记录参数错误')
+    // Query files are intentionally portable plaintext; never include profile credentials.
+    await confirm(win,'导出查询文件（明文）？',tr(format==='sql'?'SQL 文件仅包含语句，不包含绑定参数。':'JSON 文件包含查询内容和参数，不包含连接凭据。'),'导出')
+    const name=item.name.replace(/[<>:"/\\|?*\u0000-\u001f]/g,'_').slice(0,100)||'query'
+    return saveText(win,name+(format==='sql'?'.sql':'.dbex-query.json'),format==='sql'?item.text:JSON.stringify(portableQuery(item),null,2),format==='sql'?'text':'json','导出查询')
+  }))
   ipcMain.handle('snippets:list', handler(() => snippets.list()))
   ipcMain.handle('snippets:save', handler((_win, value: Omit<QuerySnippet, 'id' | 'updatedAt'> & { id?: string }) => snippets.save(value)))
   ipcMain.handle('snippets:delete', handler((_win, id: string) => snippets.delete(id)))

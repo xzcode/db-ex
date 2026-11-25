@@ -7,6 +7,8 @@ import ConnectionSidebar from './components/ConnectionSidebar.vue'
 import { colorStyle } from '../shared/connection-appearance'
 import DatabaseWorkbench from './DatabaseWorkbench.vue'
 import ObjectList from './components/ObjectList.vue'
+import SavedQueryEditor from './components/SavedQueryEditor.vue'
+import {queryFolder,isQueryFolder,folderQueryMode,savedQueryNode,querySummary,type QueryMode,type QuerySummary} from '../shared/saved-query'
 import { mongoCategory, mongoCategoryNodes } from '../shared/mongo-catalog'
 import { protectedDatabase } from '../shared/database-admin'
 import PreferencesDialog from './components/PreferencesDialog.vue'
@@ -26,8 +28,10 @@ const explorers = reactive<Record<string, ExplorerState>>({})
 const current = ref<string | null>(null)
 const activeSession = computed(() => sessions.value.find(item => item.id === current.value))
 const currentExplorer = computed(() => current.value ? explorers[current.value] : undefined)
-function expandable(node:ExplorerNode) { return node.kind==='database' || node.kind==='mongo-category' && !!mongoCategory(node.category)?.expandable }
+function expandable(node:ExplorerNode) { return isQueryFolder(node)||node.kind==='database' || node.kind==='mongo-category' && !!mongoCategory(node.category)?.expandable }
 function nodeIcon(node:ExplorerNode) {
+  if(node.kind==='saved-query')return '▤'
+  if(node.kind==='query-folder')return '▤'
   if(node.kind==='mongo-category')return mongoCategory(node.category)?.icon||'▦'
   return node.kind==='database'?'▤':node.kind==='view'?'◉':node.kind==='mongo-indexes'?'A–Z':node.kind==='mongo-function'?'ƒ':node.kind==='gridfs-bucket'?'▣':node.kind==='keyspace'?'⬡':'▦'
 }
@@ -98,23 +102,23 @@ function showCatalog(state:ExplorerState,node=state.catalog){
  state.catalog=node;state.catalogVisible=true;state.activeObject=undefined;state.selected=node;state.tab='data'
 }
 function openObject(state:ExplorerState,node:ExplorerNode,tab?:WorkbenchTab){
- let item=state.tabs.find(x=>x.node.id===node.id)
+ let item=state.tabs.find(x=>x.node.id===node.id||!!node.queryId&&x.node.queryId===node.queryId)
  if(!item){
    if(state.tabs.length>=12){error.value='最多打开 12 个对象标签页，请先关闭不使用的标签页。';return}
    state.tabs.push({node,tab});item=state.tabs[state.tabs.length-1]!
  }
- state.activeObject=node.id;state.catalogVisible=false;state.selected=item.node;state.tab=item.tab||'data'
+ state.activeObject=item.node.id;state.catalogVisible=false;state.selected=item.node;state.tab=item.tab||'data'
 }
 function activateObject(id:string,node:ExplorerNode){const state=explorers[id];if(!state||sessionBusy(state))return;openObject(state,node)}
 function activateCatalog(id:string){const state=explorers[id];if(!state||sessionBusy(state))return;showCatalog(state);if(state.catalog)void loadCatalog(id,state.catalog)}
-function catalogNodes(state?:ExplorerState):ExplorerNode[]{return !state?[]:state.catalog?state.children[state.catalog.id]||[]:state.roots}
-function objectTabTitle(node:ExplorerNode){return node.kind==='mongo-category'||node.kind==='database-query'?t(node.label):node.label}
+function catalogNodes(state?:ExplorerState):ExplorerNode[]{return !state?[]:state.catalog?(state.children[state.catalog.id]||[]).filter(node=>state.catalog?.kind!=='database'||node.kind!=='query-folder'):state.roots}
+function objectTabTitle(node:ExplorerNode){return node.kind==='mongo-category'||node.kind==='database-query'||node.kind==='query-folder'||node.kind==='saved-query'&&!node.queryId?t(node.label):node.label}
 function objectTabTooltip(node:ExplorerNode,session:SessionInfo){return objectTabTitle(node)+(node.database?'@'+node.database:'')+' ('+session.name+')'}
 async function closeObject(id:string,objectId:string){
  const state=explorers[id];if(!state||sessionBusy(state))return
  const index=state.tabs.findIndex(x=>x.node.id===objectId);if(index<0)return
  const item=state.tabs[index]!
- if(item.dirty&&!await confirm({title:t('关闭'),message:t('关闭标签页将丢弃未保存的记录编辑。'),danger:false,confirmLabel:t('关闭')}))return
+ if(item.dirty&&!await confirm({title:t('关闭'),message:t('关闭标签页将丢弃未保存的修改。'),danger:false,confirmLabel:t('关闭')}))return
  if(explorers[id]!==state||sessionBusy(state))return
  state.tabs=state.tabs.filter(x=>x.node.id!==objectId)
  if(state.activeObject===objectId){
@@ -127,7 +131,15 @@ async function loadCatalog(id:string,node:ExplorerNode,force=false){
  const state=explorers[id];if(!state||state.loading.has(node.id)||(!force&&state.children[node.id]))return
  state.loading.add(node.id)
  try{
-   const children=await window.dbex.children(id,node.database||node.label,node.category,true)
+   const session=sessions.value.find(s=>s.id===id)
+   if(!session)return
+   const database=node.database||node.label
+   let children:ExplorerNode[]
+   if(isQueryFolder(node))children=session.connectionId?(await window.dbex.listSavedQueries(id,database,folderQueryMode(node))).map(savedQueryNode):[]
+   else{
+     children=await window.dbex.children(id,database,node.category,true)
+     if(node.kind==='database'&&session.kind!=='mongodb'&&session.kind!=='redis')children=[...children,queryFolder(database,session.kind)]
+   }
    if(explorers[id]===state)state.children[node.id]=children
  }catch(reason){if(explorers[id]===state)error.value=messageOf(reason)}
  finally{if(explorers[id]===state)state.loading.delete(node.id)}
@@ -147,11 +159,20 @@ async function restorePosition(session:SessionInfo,position:WorkspacePosition|un
   if(!root)return
   if(desired.kind==='database'){showCatalog(state,root);state.expanded=[root.id];await loadCatalog(session.id,root);return}
   if(desired.kind==='keyspace'){state.selected=root;state.baseTab=state.tab;return}
-  if(desired.kind==='database-query'&&databaseCapabilities(session.kind).editor==='query'){
-    state.catalog=root;openObject(state,{id:JSON.stringify(['database-query',desired.database]),kind:'database-query',label:'新建查询',database:desired.database},position.tab);return
+  if(desired.kind==='saved-query'&&desired.queryId&&session.connectionId&&session.kind!=='redis'){
+    const item=await window.dbex.getSavedQuery(session.id,desired.database,desired.queryId)
+    state.catalog=queryFolder(desired.database,session.kind,item.mode)
+    openObject(state,savedQueryNode(querySummary(item)),position.tab);return
   }
-  const children=await window.dbex.children(session.id,root.database||root.label,undefined,true)
-  state.children[root.id]=children;state.expanded=[root.id]
+  if((desired.kind==='query-folder'||desired.kind==='mongo-category'&&(desired.category==='queries'||desired.category==='pipelines'))&&session.kind!=='redis'){
+    const folder=queryFolder(desired.database,session.kind,desired.queryMode||(session.kind==='mongodb'?(desired.category==='pipelines'?'mongo-aggregation':'mongo-find'):'sql'))
+    showCatalog(state,folder);await loadCatalog(session.id,root);state.expanded=[root.id,folder.id];await loadCatalog(session.id,folder);return
+  }
+  if(desired.kind==='database-query'&&databaseCapabilities(session.kind).editor==='query'){openQuery(session.id,desired.database);return}
+  if(desired.kind==='saved-query'){showCatalog(state,root);return}
+
+  await loadCatalog(session.id,root)
+  const children=state.children[root.id]||[];state.expanded=[root.id]
   let found=matchWorkspaceNode(children,desired)
   if(session.kind==='mongodb'&&!found){
     const category=categoryForNode(desired)
@@ -234,6 +255,7 @@ function removeSession(id: string) {
 async function disconnect(id: string) {
   const session = sessions.value.find(item => item.id === id)
   if (!session) return
+  if(explorers[id]?.tabs.some(tab=>tab.dirty)&&!await confirm({title:t('关闭'),message:t('关闭标签页将丢弃未保存的修改。'),danger:false,confirmLabel:t('关闭')}))return
   if (session.transaction && !await confirm({ title: t('断开并回滚事务'), message: t('“{0}”仍有打开的事务。断开连接会回滚尚未提交的修改。', [session.name]), danger: true, confirmLabel: t('回滚并断开') })) return
   await task(async () => { await window.dbex.disconnect(id); removeSession(id) })
 }
@@ -265,14 +287,49 @@ function clearDatabase(state:ExplorerState,database:string){
   if(state.selected?.database===database||state.activeObject&&!state.tabs.some(tab=>tab.node.id===state.activeObject))showCatalog(state)
 
 }
-function openQuery(id:string,database?:string){
+let querySerial=0
+function openQuery(id:string,database?:string,explicitMode?:QueryMode){
  const state=explorers[id],session=sessions.value.find(item=>item.id===id)
  if(!state||!session||!database||sessionBusy(state)||session.kind==='redis')return
- if(state.catalog?.database!==database)state.catalog=state.roots.find(root=>root.database===database)
- const node:ExplorerNode=session.kind==='mongodb'?mongoCategoryNodes(database).find(item=>item.category==='queries')!:{id:JSON.stringify(['database-query',database]),label:'新建查询',database,kind:'database-query'}
- openObject(state,node,session.kind==='mongodb'?'data':'query')
+ const mode=explicitMode||(session.kind==='mongodb'?(state.catalog?.database===database&&isQueryFolder(state.catalog)?folderQueryMode(state.catalog!):'mongo-find'):'sql')
+ state.catalog=queryFolder(database,session.kind,mode)
+ const node:ExplorerNode={id:JSON.stringify(['query-draft',database,mode,++querySerial]),kind:'saved-query',label:'未命名查询',database,queryMode:mode}
+ openObject(state,node,mode==='sql'?'query':'data')
 }
-function dbMenuAction(action:DatabaseMode|'close'|'query'|'refresh'|'native'|'sqlite-backup'){
+function querySaved(id:string,tabId:string,value:QuerySummary){
+ const state=explorers[id],item=state?.tabs.find(t=>t.node.id===tabId)
+ if(!state||!item)return
+ item.node={...savedQueryNode(value),id:tabId}
+ if(state.activeObject===tabId)state.selected=item.node
+ const folder=queryFolder(value.database,value.kind,value.mode)
+ void loadCatalog(id,folder,true)
+}
+async function catalogQueryAction(id:string,action:'copy'|'delete'|'export'|'export-sql'|'import'|'rename',node?:ExplorerNode,newName?:string){
+ const state=explorers[id],session=sessions.value.find(x=>x.id===id),folder=state?.catalog
+ if(!state||!session?.connectionId||!folder?.database||!isQueryFolder(folder)||sessionBusy(state))return
+ const database=folder.database,mode=folderQueryMode(folder)
+ const opened=node?.queryId?state.tabs.find(tab=>tab.node.queryId===node.queryId):undefined
+ if((action==='delete'||action==='rename')&&opened?.dirty){error.value='请先保存或关闭已修改的查询。';return}
+ if(action==='rename'&&opened){error.value='请在已打开的查询编辑器内修改名称并保存。';return}
+ const ok=await task(async()=>{
+   if(action==='import')await window.dbex.importSavedQuery(id,database,mode)
+   else if(node?.queryId){
+     if(action==='copy')await window.dbex.copySavedQuery(id,database,node.queryId)
+     if(action==='delete'){
+       await window.dbex.deleteSavedQuery(id,database,node.queryId,node.queryRevision||'')
+       state.tabs=state.tabs.filter(tab=>tab.node.queryId!==node.queryId)
+     }
+     if(action==='rename'){
+       const item=await window.dbex.getSavedQuery(id,database,node.queryId)
+       await window.dbex.saveQueryObject(id,database,{id:item.id,revision:node.queryRevision,draft:{...item,name:newName||''}})
+     }
+     if(action==='export'||action==='export-sql')await window.dbex.exportSavedQuery(id,database,node.queryId,action==='export-sql'?'sql':'json')
+   }
+   return true
+ })
+ if(ok)await loadCatalog(id,folder,true)
+}
+async function dbMenuAction(action:DatabaseMode|'close'|'query'|'refresh'|'native'|'sqlite-backup'){
   const menu=dbMenu.value, session=dbMenuSession.value
   closeDbMenu()
   if(!menu||!session||current.value!==session.id)return
@@ -281,7 +338,7 @@ function dbMenuAction(action:DatabaseMode|'close'|'query'|'refresh'|'native'|'sq
   if(action==='sqlite-backup'){if(databaseCapabilities(session.kind).backup==='file')void task(async()=>{if(await window.dbex.backupSqlite(session.id))notice.value='操作已完成'});return}
   if(action==='native'){if(database&&databaseCapabilities(session.kind).backup==='native-tools')nativeDialog.value={sessionId:session.id,database};return}
   if(action==='refresh'){void refreshRoots(session.id);return}
-  if(action==='close'){clearDatabase(state,database);return}
+  if(action==='close'){if(state.tabs.some(tab=>tab.node.database===database&&tab.dirty)&&!await confirm({title:t('关闭'),message:t('关闭标签页将丢弃未保存的修改。'),danger:false,confirmLabel:t('关闭')}))return;clearDatabase(state,database);return}
   if(action==='query'){
     if(!database)return
     openQuery(session.id,database)
@@ -314,6 +371,7 @@ async function toggleRoot(node: ExplorerNode,fromList=false) {
   if(!id||!state||sessionBusy(state))return
   if(!expandable(node)){
     if(node.kind==='keyspace'){state.selected=node;state.catalogVisible=false;return}
+    if(node.kind==='saved-query'&&node.database&&node.queryMode&&activeSession.value?.kind&&activeSession.value.kind!=='redis')state.catalog=queryFolder(node.database,activeSession.value.kind,node.queryMode)
     openObject(state,node);return
   }
   showCatalog(state,node)
@@ -381,7 +439,7 @@ onBeforeUnmount(() => { stopResize?.(); window.removeEventListener('pointerdown'
       <div class="resize-handle" role="separator" :aria-label="t('调整连接列表宽度')" aria-orientation="vertical" :aria-valuenow="sidebarWidth" :aria-valuemin="170" :aria-valuemax="400" tabindex="0" @pointerdown="resize($event, 'sidebar')" @keydown="resizeKey($event, 'sidebar')"></div>
       <section class="main-panel"><div v-show="preferences.alwaysShowTabs || sessions.length > 1" class="tabbar"><div v-if="!sessions.length" class="tab active">{{ t('欢迎') }}</div><div v-for="session in sessions" :key="session.id" :class="['session-tab', { active: current === session.id, 'has-color': !!sessionColor(session) }]" :style="colorStyle(sessionColor(session))" :data-color="sessionColor(session) || ''"><button class="tab" @click="current = session.id"><span :class="['db-small-icon', session.kind]">{{ kindIcon(session.kind) }}</span>{{ session.name }}</button><button class="tab-close" :title="t('断开 {0}', [session.name])" :disabled="busy" @click="disconnect(session.id)">×</button></div><div class="tab-filler"></div><span v-if="busy" class="tab-trailing">{{ t('正在连接 / 处理…') }}</span></div><div v-if="error" class="inline-message error" role="alert">{{ localize(error) }}<button class="ghost-icon" :aria-label="t('关闭错误')" @click="error = ''">×</button></div><div v-if="notice" class="inline-message notice">{{ localize(notice) }}</div>
         <div v-if="!current" class="welcome-body"><div class="welcome-mark">▦</div><span class="eyebrow">YOUR DATA, YOUR WORKSPACE</span><h1>{{ t('一个工作空间，') }}<br /><span>{{ t('连接你的数据库。') }}</span></h1><p>{{ t('MySQL 查询与事务、MongoDB 文档、Redis 数据管理。') }}<br />{{ t('SSH 多跳、代理与 TLS，按你的网络方式连接。') }}</p><button class="btn primary large" @click="newConnection">{{ t('＋ 创建数据库连接') }}</button><div class="welcome-features"><span>MySQL</span><span>MariaDB</span><span>MongoDB</span><span>Redis</span><span>SQLite</span></div></div>
-        <div v-else class="data-area"><aside :class="['explorer-pane', { 'has-color': !!sessionColor(activeSession) }]" :style="colorStyle(sessionColor(activeSession))"><div class="panel-heading"><span>{{ t('资源浏览器') }}</span><button v-if="activeSession?.kind !== 'redis'" class="ghost-icon" :title="t('数据库菜单')" :aria-label="t('数据库菜单')" :disabled="sessionBusy(currentExplorer)" @click="showDbMenu($event)">···</button><button class="ghost-icon" :title="t('刷新资源树')" :disabled="sessionBusy(currentExplorer)" @click="current && refreshRoots(current)">↻</button></div><div v-if="currentExplorer?.busy" class="compact-help">{{ t('正在加载资源…') }}</div><div class="resource-list" @scroll="closeDbMenu" @contextmenu.self="showDbMenu($event)"><template v-for="item in visibleTree" :key="item.node.id + (item.empty ? ':empty' : '')"><span v-if="item.empty" class="empty-tree" :style="{ paddingInlineStart: (10 + item.depth * 17) + 'px' }">{{ t('无可见对象') }}</span><button v-else :class="['resource-node', { 'child-node': item.depth > 0, 'mongo-folder': item.node.kind === 'mongo-category', active: currentExplorer?.selected?.id === item.node.id }]" :style="{ paddingInlineStart: (10 + item.depth * 17) + 'px' }" :data-object-kind="item.node.kind" :data-object-type="item.node.objectType" :data-object-category="item.node.category" :aria-expanded="expandable(item.node) ? currentExplorer?.expanded.includes(item.node.id) : undefined" :disabled="sessionBusy(currentExplorer)" @click="toggleRoot(item.node)" @contextmenu="showDbMenu($event,item.node)" @keydown.shift.f10="showDbMenu($event,item.node)"><span class="arrow">{{ expandable(item.node) ? currentExplorer?.expanded.includes(item.node.id) ? '⌄' : '›' : '' }}</span><span :class="['object-tree-icon', item.node.kind]">{{ nodeIcon(item.node) }}</span><span class="ellipsis">{{ item.node.kind === 'mongo-category' ? t(item.node.label) : item.node.label }}</span><small v-if="item.node.objectType" class="muted-text" :title="item.node.objectType">{{ item.node.objectType==='sequence'?'SEQ':'SV' }}</small><span v-if="currentExplorer?.loading.has(item.node.id)">…</span></button></template></div></aside><div class="resize-handle" role="separator" :aria-label="t('调整资源树宽度')" aria-orientation="vertical" :aria-valuenow="explorerWidth" :aria-valuemin="170" :aria-valuemax="400" tabindex="0" @pointerdown="resize($event, 'explorer')" @keydown="resizeKey($event, 'explorer')"></div><div class="content-pane"><template v-if="workspaceReady">
+        <div v-else class="data-area"><aside :class="['explorer-pane', { 'has-color': !!sessionColor(activeSession) }]" :style="colorStyle(sessionColor(activeSession))"><div class="panel-heading"><span>{{ t('资源浏览器') }}</span><button v-if="activeSession?.kind !== 'redis'" class="ghost-icon" :title="t('数据库菜单')" :aria-label="t('数据库菜单')" :disabled="sessionBusy(currentExplorer)" @click="showDbMenu($event)">···</button><button class="ghost-icon" :title="t('刷新资源树')" :disabled="sessionBusy(currentExplorer)" @click="current && refreshRoots(current)">↻</button></div><div v-if="currentExplorer?.busy" class="compact-help">{{ t('正在加载资源…') }}</div><div class="resource-list" @scroll="closeDbMenu" @contextmenu.self="showDbMenu($event)"><template v-for="item in visibleTree" :key="item.node.id + (item.empty ? ':empty' : '')"><span v-if="item.empty" class="empty-tree" :style="{ paddingInlineStart: (10 + item.depth * 17) + 'px' }">{{ t('无可见对象') }}</span><button v-else :class="['resource-node', { 'child-node': item.depth > 0, 'mongo-folder': item.node.kind === 'mongo-category', active: currentExplorer?.selected?.id === item.node.id || !!item.node.queryId&&currentExplorer?.selected?.queryId===item.node.queryId }]" :style="{ paddingInlineStart: (10 + item.depth * 17) + 'px' }" :data-object-kind="item.node.kind" :data-object-type="item.node.objectType" :data-object-category="item.node.category" :aria-expanded="expandable(item.node) ? currentExplorer?.expanded.includes(item.node.id) : undefined" :disabled="sessionBusy(currentExplorer)" @click="toggleRoot(item.node)" @contextmenu="showDbMenu($event,item.node)" @keydown.shift.f10="showDbMenu($event,item.node)"><span class="arrow">{{ expandable(item.node) ? currentExplorer?.expanded.includes(item.node.id) ? '⌄' : '›' : '' }}</span><span :class="['object-tree-icon', item.node.kind]">{{ nodeIcon(item.node) }}</span><span class="ellipsis">{{ item.node.kind === 'mongo-category'||item.node.kind==='query-folder' ? t(item.node.label) : item.node.label }}</span><small v-if="item.node.objectType" class="muted-text" :title="item.node.objectType">{{ item.node.objectType==='sequence'?'SEQ':'SV' }}</small><span v-if="currentExplorer?.loading.has(item.node.id)">…</span></button></template></div></aside><div class="resize-handle" role="separator" :aria-label="t('调整资源树宽度')" aria-orientation="vertical" :aria-valuenow="explorerWidth" :aria-valuemin="170" :aria-valuemax="400" tabindex="0" @pointerdown="resize($event, 'explorer')" @keydown="resizeKey($event, 'explorer')"></div><div class="content-pane"><template v-if="workspaceReady">
   <section v-for="session in sessions" v-show="session.id===current" :key="session.id" class="object-workspace">
     <nav v-if="session.kind!=='redis'" class="object-tabbar" :aria-label="t('对象')">
       <button class="object-list-tab" type="button" :class="{active:explorers[session.id]?.catalogVisible}" :disabled="sessionBusy(explorers[session.id])" @click="activateCatalog(session.id)">{{ t('对象') }}</button>
@@ -390,9 +448,12 @@ onBeforeUnmount(() => { stopResize?.(); window.removeEventListener('pointerdown'
         <button class="tab-close" type="button" :title="t('关闭')+' '+objectTabTitle(item.node)" :aria-label="t('关闭')+' '+objectTabTitle(item.node)" :disabled="sessionBusy(explorers[session.id])" @click="closeObject(session.id,item.node.id)">×</button>
       </div>
     </nav>
-    <ObjectList v-if="explorers[session.id]?.catalogVisible" :kind="session.kind" :node="explorers[session.id]?.catalog" :nodes="catalogNodes(explorers[session.id])" :busy="sessionBusy(explorers[session.id])" @open="toggleRoot($event,true)" @query="openQuery(session.id,explorers[session.id]?.catalog?.database)" @refresh="refreshCatalog(session.id)" />
+    <ObjectList v-if="explorers[session.id]?.catalogVisible" :kind="session.kind" :node="explorers[session.id]?.catalog" :nodes="catalogNodes(explorers[session.id])" :busy="busy||sessionBusy(explorers[session.id])" :can-save-queries="!!session.connectionId" @query-action="(action,node,name)=>catalogQueryAction(session.id,action,node,name)" @open="toggleRoot($event,true)" @query="openQuery(session.id,explorers[session.id]?.catalog?.database)" @refresh="refreshCatalog(session.id)" />
     <DatabaseWorkbench v-show="!explorers[session.id]?.catalogVisible&&!explorers[session.id]?.activeObject" :session="session" :node="session.kind==='redis'?explorers[session.id]?.selected:undefined" :initial-tab="explorers[session.id]?.baseTab" :active="session.id===current&&!explorers[session.id]?.catalogVisible&&!explorers[session.id]?.activeObject" @tab-change="workbenchTabChanged(session.id,$event)" @busy-change="workbenchBusyChanged(session.id,$event)" @update-session="updateSession" @disconnect="removeSession(session.id)" @refresh-tree="refreshRoots(session.id)" />
-    <DatabaseWorkbench v-for="item in explorers[session.id]?.tabs||[]" v-show="explorers[session.id]?.activeObject===item.node.id" :key="item.node.id" :session="session" :node="item.node" :initial-tab="item.tab" :active="session.id===current&&explorers[session.id]?.activeObject===item.node.id" :table-suggestions="Object.values(explorers[session.id]?.children || {}).flat().filter(n=>n.kind==='table'||n.kind==='view').map(n=>n.label)" @tab-change="workbenchTabChanged(session.id,$event,item.node.id)" @busy-change="workbenchBusyChanged(session.id,$event,item.node.id)" @dirty-change="workbenchDirtyChanged(session.id,$event,item.node.id)" @update-session="updateSession" @disconnect="removeSession(session.id)" @refresh-tree="refreshRoots(session.id)" />
+    <template v-for="item in explorers[session.id]?.tabs||[]" :key="item.node.id">
+      <SavedQueryEditor v-if="item.node.kind==='saved-query'" v-show="explorers[session.id]?.activeObject===item.node.id" :session="session" :node="item.node" :active="session.id===current&&explorers[session.id]?.activeObject===item.node.id" :table-suggestions="Object.values(explorers[session.id]?.children||{}).flat().filter(n=>n.kind==='table'||n.kind==='view').map(n=>n.label)" @saved="querySaved(session.id,item.node.id,$event)" @busy-change="workbenchBusyChanged(session.id,$event,item.node.id)" @dirty-change="workbenchDirtyChanged(session.id,$event,item.node.id)" @update-session="updateSession" @disconnect="removeSession(session.id)" />
+    <DatabaseWorkbench v-else v-show="explorers[session.id]?.activeObject===item.node.id"  :session="session" :node="item.node" :initial-tab="item.tab" :active="session.id===current&&explorers[session.id]?.activeObject===item.node.id" :table-suggestions="Object.values(explorers[session.id]?.children || {}).flat().filter(n=>n.kind==='table'||n.kind==='view').map(n=>n.label)" @tab-change="workbenchTabChanged(session.id,$event,item.node.id)" @busy-change="workbenchBusyChanged(session.id,$event,item.node.id)" @dirty-change="workbenchDirtyChanged(session.id,$event,item.node.id)" @update-session="updateSession" @disconnect="removeSession(session.id)" @refresh-tree="refreshRoots(session.id)" />
+    </template>
   </section>
 </template></div></div>
       </section>

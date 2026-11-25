@@ -197,10 +197,10 @@ async function cancel() {
   try { await window.dbex.cancel(props.session.id); emit('disconnect') }
   catch (reason) { setError(reason) }
 }
-async function remember(text: string) {
+async function remember(text: string,params?:string) {
   if(!preferences.value.records.recordHistory)return
   try {
-    await window.dbex.saveSnippet({ name: text.trim().split('\n')[0].slice(0, 80), text, database: entity.value.database, kind: props.session.kind, ...(isMongo.value ? { mongoKind: 'aggregation' as const, entity: entity.value.entity, connectionId: props.session.connectionId } : {}), favorite: false })
+    await window.dbex.saveSnippet({ name: text.trim().split('\n')[0].slice(0, 80), text, parameters:params, database: entity.value.database, kind: props.session.kind, ...(isMongo.value ? { mongoKind: 'aggregation' as const, entity: entity.value.entity, connectionId: props.session.connectionId } : {}), favorite: false })
   } catch { notice.value += ' · 查询已执行，但历史记录保存失败' }
 }
 async function loadData(nextOffset = 0, proposedMongo = appliedMongo.value, proposedMysql = appliedMysql.value, size = browsePageSize.value): Promise<boolean> {
@@ -343,7 +343,7 @@ async function runQuery(nextOffset = 0) {
     editableRows.value = false
     lastQuery = { sql: text, parameters: parsed as SqlValue[], database: nextOffset && lastQuery ? lastQuery.database : entity.value.database || undefined }
     const next = await execute({ action: 'mysql.query', sql: text, database: lastQuery.database, parameters: parsed as SqlValue[], limit: limit.value, offset: nextOffset, confirmed: props.session.writable })
-    if (next) await remember(text)
+    if (next) await remember(text,JSON.stringify(parsed))
   } catch (reason) { setError(reason) }
 }
 async function runAggregation() {
@@ -542,7 +542,7 @@ async function openHistory() {
 }
 async function favorite(item?: QuerySnippet) {
   try {
-    const saved = await window.dbex.saveSnippet(item ? { ...item, favorite: !item.favorite } : { name: snippetName.value.trim() || t('未命名查询'), kind: props.session.kind, database: entity.value.database, text: isMysql.value ? sql.value : pipeline.value, ...(isMongo.value ? { mongoKind: 'aggregation' as const, entity: entity.value.entity, connectionId: props.session.connectionId } : {}), favorite: true })
+    const saved = await window.dbex.saveSnippet(item ? { ...item, favorite: !item.favorite } : { name: snippetName.value.trim() || t('未命名查询'), kind: props.session.kind, database: entity.value.database, text: isMysql.value ? sql.value : pipeline.value, ...(isMysql.value?{parameters:parameters.value}:{}), ...(isMongo.value ? { mongoKind: 'aggregation' as const, entity: entity.value.entity, connectionId: props.session.connectionId } : {}), favorite: true })
     snippets.value = [saved, ...snippets.value.filter(value => value.id !== saved.id)]
     snippetName.value = ''
   } catch (reason) { historyError.value = messageOf(reason) }
@@ -553,7 +553,7 @@ async function removeSnippet(item: QuerySnippet) {
 }
 function useSnippet(item: QuerySnippet) {
   if (isMongo.value && item.entity && item.entity!==entity.value.entity) { historyError.value='请选择目标集合或视图。'; return }
-  if (isMysql.value) { sql.value = item.text; tab.value = 'query' } else { pipeline.value = item.text; tab.value = 'aggregation' }
+  if (isMysql.value) { sql.value = item.text; parameters.value=item.parameters||'[]'; tab.value = 'query' } else { pipeline.value = item.text; tab.value = 'aggregation' }
   historyOpen.value = false
 }
 async function scanRedis(cursor = '0', navigation: 'reset' | 'next' | 'previous' | 'first' = 'reset') {

@@ -1,6 +1,6 @@
 import { _electron as electron } from 'playwright'
 import assert from 'node:assert/strict'
-import { access, readdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { access, readdir, mkdtemp, rm, writeFile, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve, join } from 'node:path'
 async function packagedExecutable() {
@@ -67,6 +67,29 @@ application = await electron.launch({
   assert.equal(sqlite.data.rows[0].value,'7')
   assert.deepEqual(sqlite.data.sqliteTypes[0],['INTEGER','TEXT'])
   assert.equal(sqlite.readOnly,true)
+  // Exercise the actual packaged preload, scoped saved-query IPC and on-disk encryption.
+  const queryFixture=await page.evaluate(async filePath=>{
+    const profile=await window.dbex.saveConnection({name:'Saved query smoke',kind:'sqlite',host:'',port:0,filePath,ssh:{enabled:false},tls:{enabled:false}})
+    const session=await window.dbex.connectSaved(profile.id)
+    try{
+      const saved=await window.dbex.saveQueryObject(session.id,'main',{draft:{name:'Saved smoke',mode:'sql',text:'SELECT ? AS value',parameters:'["exact query fixture"]'}})
+      return {profileId:profile.id,queryId:saved.id}
+    }finally{await window.dbex.disconnect(session.id)}
+  },sqlitePath)
+  await page.reload()
+  const restored=await page.evaluate(async fixture=>{
+    const session=await window.dbex.connectSaved(fixture.profileId)
+    try{
+      const list=await window.dbex.listSavedQueries(session.id,'main','sql')
+      const saved=await window.dbex.getSavedQuery(session.id,'main',fixture.queryId)
+      const result=await window.dbex.execute(session.id,{action:'mysql.query',database:'main',sql:saved.text,parameters:JSON.parse(saved.parameters)})
+      return {list,saved,result}
+    }finally{await window.dbex.disconnect(session.id);await window.dbex.deleteConnection(fixture.profileId)}
+  },queryFixture)
+  assert.equal(restored.list[0].name,'Saved smoke')
+  assert.equal(restored.saved.parameters,'["exact query fixture"]')
+  assert.equal(restored.result.rows[0].value,'exact query fixture')
+  assert(!(await readFile(join(userData,'saved-queries.secure.json'),'utf8')).includes('exact query fixture'))
   const pageErrors = []
   page.on('pageerror', error => pageErrors.push(error.message))
   // Only test handlers are replaced, in this smoke process. Shipped application code has no mocks.

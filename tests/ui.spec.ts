@@ -87,6 +87,36 @@ async function installBridge(page: Page) {
       async copyText(value: string) { calls.push({ action: 'copyText', value }) },
       async validateMongoDocument(document: string, original?: string) { calls.push({ action: 'validateMongoDocument', document, original }) },
       async setWriteAccess(id: string, writable: boolean) { sessions[id] = { ...sessions[id], writable }; calls.push({ action: 'writeAccess', id, writable }); return sessions[id] },
+      async listSavedQueries(id:string,database:string,mode:string) {
+        return JSON.parse(localStorage.getItem('mock.query-objects')||'[]').filter((x:any)=>x.connectionId===id&&x.database===database&&x.mode===mode).map((x:any)=>({...x,bytes:new TextEncoder().encode(x.text+(x.parameters||'')).length}))
+      },
+      async getSavedQuery(id:string,database:string,queryId:string){
+        const item=JSON.parse(localStorage.getItem('mock.query-objects')||'[]').find((x:any)=>x.id===queryId&&x.connectionId===id&&x.database===database)
+        if(!item)throw new Error('missing query');return item
+      },
+      async saveQueryObject(id:string,database:string,input:any){
+        const all=JSON.parse(localStorage.getItem('mock.query-objects')||'[]')
+        const old=all.find((x:any)=>x.id===input.id&&x.connectionId===id&&x.database===database)
+        if(input.id&&(!old||old.revision!==input.revision))throw new Error('stale query')
+        const now=new Date().toISOString(),item={...input.draft,id:old?.id||crypto.randomUUID(),connectionId:id,kind:sessions[id].kind,database,createdAt:old?.createdAt||now,updatedAt:now,revision:crypto.randomUUID()}
+        localStorage.setItem('mock.query-objects',JSON.stringify([item,...all.filter((x:any)=>x.id!==item.id)]))
+        calls.push({action:'saveQueryObject',item});return item
+      },
+      async copySavedQuery(id:string,database:string,queryId:string){
+        const item=await (window as any).dbex.getSavedQuery(id,database,queryId)
+        const {name,mode,text,parameters,entity}=item
+        return (window as any).dbex.saveQueryObject(id,database,{draft:{name:name+' (2)',mode,text,parameters,entity}})
+      },
+      async deleteSavedQuery(id:string,database:string,queryId:string,revision:string){
+        const item=await (window as any).dbex.getSavedQuery(id,database,queryId)
+        if(item.revision!==revision)throw new Error('stale query')
+        const all=JSON.parse(localStorage.getItem('mock.query-objects')||'[]')
+        localStorage.setItem('mock.query-objects',JSON.stringify(all.filter((x:any)=>x.id!==queryId)))
+      },
+      async importSavedQuery(id:string,database:string,mode:string){
+        return (window as any).dbex.saveQueryObject(id,database,{draft:{name:'Imported query',mode,text:mode==='sql'?'SELECT ?':mode==='mongo-find'?JSON.stringify({filter:'{}',projection:'{}',sort:'{}'}):'[]',parameters:'[42]'}})
+      },
+      async exportSavedQuery(id:string,database:string,queryId:string,format:string){const item=await (window as any).dbex.getSavedQuery(id,database,queryId);calls.push({action:'exportSavedQuery',item,format});return true},
       async listSnippets() { return [...savedObjects] }, async saveSnippet(value: any) { const item={...value,id:value.id||String(savedObjects.length+1),updatedAt:new Date().toISOString()}; const index=savedObjects.findIndex(x=>x.id===item.id); if(index>=0)savedObjects[index]=item;else savedObjects.push(item);return item }, async deleteSnippet(id:string) { const index=savedObjects.findIndex(x=>x.id===id);if(index>=0)savedObjects.splice(index,1) },
       async importFile() { return { name: 'data.csv', format: 'csv', text: 'name,email\nEve,eve@example.test' } }, async exportFile(name: string, content: string, format: string) { calls.push({ action: 'export', name, content, format }); return true },
       async importConnections() { calls.push({ action: 'importConnections' }); return 2 }, async exportConnections(id?: string) { calls.push({ action: 'exportConnections', id }); return true },
@@ -685,6 +715,8 @@ test('MongoDB classified explorer and saved query library',async({page})=>{
   await page.locator('[data-object-kind="gridfs-bucket"]').click()
   await expect(page.locator('.workbench:visible')).toContainText('GridFS 文件元数据浏览')
   await page.locator('[data-object-category="queries"]').click()
+  const catalog=page.locator('.object-list-panel:visible')
+  await catalog.getByRole('button',{name:/新建查询/}).click()
   const library=page.locator('.mongo-library:visible')
   await library.getByLabel('目标集合或视图',{exact:true}).selectOption('users')
   await library.getByLabel('名称',{exact:true}).fill('My saved query')
@@ -694,6 +726,7 @@ test('MongoDB classified explorer and saved query library',async({page})=>{
   await library.getByRole('button',{name:'查询',exact:true}).click()
   await expect(library.locator('.data-table')).toContainText('Ada')
   await page.locator('[data-object-category="pipelines"]').click()
+  await catalog.getByRole('button',{name:/新建查询/}).click()
   await library.getByLabel('目标集合或视图',{exact:true}).selectOption('users')
   await library.getByLabel('名称',{exact:true}).fill('My pipeline')
   await library.getByRole('button',{name:'保存',exact:true}).click()
@@ -701,8 +734,8 @@ test('MongoDB classified explorer and saved query library',async({page})=>{
   await library.getByRole('button',{name:'运行 Aggregation',exact:true}).click()
   await expect(library.locator('.data-table')).toContainText('Ada')
   await page.locator('[data-object-category="queries"]').click()
-  await expect(library.getByLabel('已保存对象').locator('option')).toHaveText(['未选择对象','My saved query'])
-  await library.getByLabel('已保存对象').selectOption({label:'My saved query'})
+  await expect(catalog.locator('tbody')).toContainText('My saved query')
+  await catalog.locator('tbody tr').filter({hasText:'My saved query'}).dblclick()
   await expect(library.getByLabel('Filter',{exact:true})).toHaveValue('{"score":{"$numberInt":"7"}}')
   await page.locator('[data-object-category="mapReduce"]').click()
   await expect(page.locator('.workbench:visible')).toContainText('MapReduce 已弃用')
@@ -922,4 +955,54 @@ test('column menu sorts the complete database query, retains filters and support
  await page.getByRole('menuitem',{name:'添加筛选',exact:true}).click()
  await expect(panel.locator('textarea').nth(0)).toHaveValue('{"$and":[{"score":{"$gte":7}},{"name":{"$eq":""}}]}')
  expect(await page.evaluate(()=> (window as any).__dbexCalls.filter((c:any)=>c.action==='mongo.find').length)).toBe(count)
+})
+
+
+test('named SQL query objects persist parameters, multiple editor tabs and catalog actions',async({page})=>{
+ await connect(page,'MySQL Local')
+ await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ await page.locator('[data-object-kind="query-folder"]').click()
+ const catalog=page.locator('.object-list-panel:visible')
+ await catalog.getByRole('button',{name:/新建查询/}).click()
+ const editor=page.locator('.saved-query-editor:visible')
+ await editor.getByLabel('名称',{exact:true}).fill('Find users')
+ await replaceEditor(page,'.saved-query-editor:visible .query-editor .monaco-editor','SELECT * FROM users WHERE id = ?')
+ await editor.getByLabel('SQL 参数 JSON 数组').fill('["9223372036854775807"]')
+ await editor.getByLabel('SQL 参数 JSON 数组').press('ControlOrMeta+s')
+ await expect(editor.getByRole('status')).toHaveText('保存成功')
+ await editor.getByRole('button',{name:'运行选中 / 全部',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((c:any)=>c.action==='mysql.query').at(-1))).toMatchObject({sql:'SELECT * FROM users WHERE id = ?',parameters:['9223372036854775807'],database:'app'})
+ const tabs=page.locator('.object-tabbar:visible')
+ await tabs.getByRole('button',{name:'对象',exact:true}).click()
+ await expect(catalog.locator('tbody')).toContainText('Find users')
+ await catalog.getByRole('button',{name:/新建查询/}).click()
+ await editor.getByLabel('名称',{exact:true}).fill('Second query')
+ await editor.getByRole('button',{name:'保存',exact:true}).click()
+ await expect(editor.getByRole('status')).toHaveText('保存成功')
+ await expect(tabs.locator('.object-tab')).toHaveCount(2)
+ await tabs.getByRole('button',{name:'对象',exact:true}).click()
+ await catalog.locator('tbody tr').filter({hasText:'Find users'}).click()
+ await catalog.getByRole('button',{name:'复制',exact:true}).click()
+ await expect(catalog.locator('tbody')).toContainText('Find users (2)')
+ await catalog.locator('tbody tr').filter({hasText:'Find users (2)'}).click()
+ await catalog.getByRole('button',{name:'重命名',exact:true}).click()
+ const rename=page.getByRole('dialog',{name:'重命名'})
+ await rename.getByLabel('名称',{exact:true}).fill('Renamed copy')
+ await rename.getByRole('button',{name:'确认',exact:true}).click()
+ await expect(catalog.locator('tbody')).toContainText('Renamed copy')
+ await catalog.locator('tbody tr').filter({hasText:'Renamed copy'}).click()
+ await catalog.getByRole('button',{name:'导出查询',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((c:any)=>c.action==='exportSavedQuery').at(-1)?.item.parameters)).toBe('["9223372036854775807"]')
+ await catalog.getByRole('button',{name:'删除',exact:true}).click()
+ await expect(catalog.locator('tbody')).not.toContainText('Renamed copy')
+ await catalog.getByRole('button',{name:'导入查询',exact:true}).click()
+ await expect(catalog.locator('tbody')).toContainText('Imported query')
+ await page.reload()
+ await connect(page,'MySQL Local')
+ await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ await page.locator('[data-object-kind="query-folder"]').click()
+ await catalog.locator('tbody tr').filter({hasText:'Find users'}).dblclick()
+ await expect(editor.getByLabel('SQL 参数 JSON 数组')).toHaveValue('["9223372036854775807"]')
+ await expect(editor.locator('.view-lines')).toContainText('SELECT')
+ expect(await page.evaluate(()=> (window as any).__dbexCalls.filter((c:any)=>c.action==='mysql.query').length)).toBe(0)
 })

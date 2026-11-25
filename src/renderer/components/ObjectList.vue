@@ -3,11 +3,14 @@ import {computed,ref,watch} from 'vue'
 import {t,locale} from '../i18n'
 import type {DatabaseKind,ExplorerNode} from '../../shared/types'
 import {formatBytes} from '../../shared/object-inspection'
-import {collectionColumns,tableColumns,nameColumn,objectMetric,sortedObjects,type CatalogColumn} from '../../shared/object-list'
-const props=defineProps<{kind:DatabaseKind;node?:ExplorerNode;nodes:ExplorerNode[];busy?:boolean}>()
-const emit=defineEmits<{open:[node:ExplorerNode];refresh:[];query:[]}>()
+import {isQueryFolder,folderQueryMode} from '../../shared/saved-query'
+import {collectionColumns,tableColumns,queryColumns,nameColumn,objectMetric,sortedObjects,type CatalogColumn} from '../../shared/object-list'
+const props=defineProps<{kind:DatabaseKind;node?:ExplorerNode;nodes:ExplorerNode[];busy?:boolean;canSaveQueries?:boolean}>()
+const emit=defineEmits<{open:[node:ExplorerNode];refresh:[];query:[];queryAction:[action:'copy'|'delete'|'export'|'export-sql'|'import'|'rename',node?:ExplorerNode,name?:string]}>()
 const query=ref(''),selected=ref(''),sortKey=ref('name'),direction=ref<1|-1>(1)
-const columns=computed(()=>props.node?.category==='collections'?collectionColumns:props.node?.kind==='database'&&(props.kind==='mysql'||props.kind==='mariadb')?tableColumns:[nameColumn])
+const queryCatalog=computed(()=>isQueryFolder(props.node))
+const renameOpen=ref(false),renameValue=ref('')
+const columns=computed(()=>queryCatalog.value?queryColumns:props.node?.category==='collections'?collectionColumns:props.node?.kind==='database'&&(props.kind==='mysql'||props.kind==='mariadb')?tableColumns:[nameColumn])
 const activeColumn=computed(()=>columns.value.find(c=>c.key===sortKey.value)||nameColumn)
 const rows=computed(()=>sortedObjects(props.nodes,activeColumn.value,direction.value,query.value))
 const selectedNode=computed(()=>rows.value.find(n=>n.id===selected.value))
@@ -19,16 +22,27 @@ function value(node:ExplorerNode,column:CatalogColumn){
  if(!item)return '—'
  if(item.format==='bytes')return formatBytes(item.value,locale.value).split(' (')[0]
  if(item.format==='boolean')return t(item.value==='true'?'是':'否')
+ if(column.key==='创建日期'||column.key==='修改日期'){const date=new Date(item.value);return Number.isNaN(date.getTime())?item.value:date.toLocaleString(locale.value)}
  return item.value
 }
 function open(node?:ExplorerNode){if(node&&!props.busy)emit('open',node)}
-function title(node:ExplorerNode){return node.kind==='mongo-category'?t(node.label):node.label}
+function title(node:ExplorerNode){return node.kind==='mongo-category'||node.kind==='query-folder'?t(node.label):node.label}
+function rename(){if(!selectedNode.value)return;renameValue.value=selectedNode.value.label;renameOpen.value=true}
+function applyRename(){if(!selectedNode.value||!renameValue.value.trim())return;emit('queryAction','rename',selectedNode.value,renameValue.value);renameOpen.value=false}
 </script>
 <template>
  <section class="object-list-panel">
   <div class="object-list-toolbar">
    <button class="btn secondary small" type="button" :disabled="busy||!selectedNode" @click="open(selectedNode)"><span aria-hidden="true">▱</span>{{ t('打开') }}</button>
    <button v-if="node?.database" class="btn secondary small" type="button" :disabled="busy" @click="emit('query')"><span aria-hidden="true">＋</span>{{ t('新建查询') }}</button>
+   <template v-if="queryCatalog">
+    <button class="btn secondary small" type="button" :disabled="busy||!selectedNode||!canSaveQueries" @click="rename">{{ t('重命名') }}</button>
+    <button class="btn secondary small" type="button" :disabled="busy||!selectedNode||!canSaveQueries" @click="emit('queryAction','copy',selectedNode)">{{ t('复制') }}</button>
+    <button class="btn danger-text small" type="button" :disabled="busy||!selectedNode||!canSaveQueries" @click="emit('queryAction','delete',selectedNode)">{{ t('删除') }}</button>
+    <button class="btn secondary small" type="button" :disabled="busy||!canSaveQueries" @click="emit('queryAction','import')">{{ t('导入查询') }}</button>
+    <button class="btn secondary small" type="button" :disabled="busy||!selectedNode||!canSaveQueries" @click="emit('queryAction','export',selectedNode)">{{ t('导出查询') }}</button>
+    <button v-if="node&&folderQueryMode(node)==='sql'" class="btn secondary small" type="button" :disabled="busy||!selectedNode||!canSaveQueries" @click="emit('queryAction','export-sql',selectedNode)">{{ t('导出 SQL') }}</button>
+   </template>
    <button class="btn secondary small" type="button" :disabled="busy" @click="emit('refresh')"><span aria-hidden="true">↻</span>{{ t('刷新') }}</button>
    <span class="toolbar-spacer"></span>
    <label class="object-list-search"><span aria-hidden="true">⌕</span><input v-model="query" :placeholder="t('查找数据库对象')" :aria-label="t('查找数据库对象')" /></label>
@@ -47,11 +61,12 @@ function title(node:ExplorerNode){return node.kind==='mongo-category'?t(node.lab
    </table>
   </div>
   <footer class="object-list-footer"><span>{{ rows.length }} / {{ nodes.length }}</span><span v-if="incomplete">{{ t('统计信息仅对已读取的对象可用。') }}</span></footer>
+  <div v-if="renameOpen" class="modal-backdrop"><section class="dialog" role="dialog" :aria-label="t('重命名')"><header class="dialog-header"><h2>{{ t('重命名') }}</h2></header><div class="dialog-body"><label class="field field-wide">{{ t('名称') }}<input v-model="renameValue" :aria-label="t('名称')" maxlength="100" @keydown.enter.prevent="applyRename" /></label></div><footer class="dialog-footer"><button class="btn secondary" @click="renameOpen=false">{{ t('取消') }}</button><button class="btn primary" :disabled="!renameValue.trim()" @click="applyRename">{{ t('确认') }}</button></footer></section></div>
  </section>
 </template>
 <style scoped>
 .object-list-panel{flex:1;min-height:0;min-width:0;display:flex;flex-direction:column;background:var(--panel)}
-.object-list-toolbar{display:flex;gap:8px;align-items:center;padding:7px 10px;border-bottom:1px solid var(--border-soft);flex:none}
+.object-list-toolbar{display:flex;gap:8px;align-items:center;padding:7px 10px;flex-wrap:wrap;border-bottom:1px solid var(--border-soft);flex:none}
 .object-list-search{display:flex;align-items:center;gap:6px;border:1px solid var(--border);border-radius:4px;padding-inline-start:8px;max-width:240px;min-width:100px}
 .object-list-search input{border:0;background:transparent;min-width:0;width:100%}
 .object-list-scroll{min-height:0;overflow:auto;flex:1}
