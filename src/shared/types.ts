@@ -87,10 +87,14 @@ export interface SessionInfo {
   writable: boolean
   transaction: boolean
 }
+import type { MongoCategory } from './mongo-catalog'
+
 export interface ExplorerNode {
   id: string
   label: string
-  kind: 'database' | 'table' | 'collection' | 'keyspace'
+  kind: 'database' | 'table' | 'collection' | 'keyspace' | 'view' | 'mongo-category' | 'mongo-function' | 'mongo-indexes' | 'gridfs-bucket'
+  category?: MongoCategory
+  readOnly?: boolean
   database?: string
   entity?: string
 }
@@ -157,6 +161,10 @@ export type RedisOperation =
   | { action: 'redis.nodes' }
 export type DatabaseOperation = MysqlOperation | MongoOperation | RedisOperation
 export interface QuerySnippet {
+  /** Optional fields keep existing encrypted history files compatible. */
+  mongoKind?: 'query' | 'aggregation'
+  entity?: string
+  connectionId?: string
   id: string
   name: string
   kind: DatabaseKind
@@ -183,7 +191,7 @@ export interface DbExAPI {
   testConnection(config: ConnectionConfig, clearSecrets?: string[]): Promise<string>
   disconnect(sessionId: string): Promise<void>
   roots(sessionId: string): Promise<ExplorerNode[]>
-  children(sessionId: string, database: string): Promise<ExplorerNode[]>
+  children(sessionId: string, database: string, category?: MongoCategory): Promise<ExplorerNode[]>
   preview(sessionId: string, database: string, entity: string, offset?: number): Promise<DataPreview>
   redisKeys(sessionId: string, cursor?: string, pattern?: string): Promise<DataPreview>
   redisValue(sessionId: string, key: string): Promise<DataPreview>

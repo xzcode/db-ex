@@ -116,7 +116,7 @@ function registerIpc(): void {
   }))
   ipcMain.handle('connections:ssh-config', handler(async win => { const file = await openText(win, '选择 SSH config 文件', 1024 * 1024); return file ? parseSshConfig(file.text) : null }))
   ipcMain.handle('explorer:roots', handler((_win, id: string) => sessions.roots(id)))
-  ipcMain.handle('explorer:children', handler((_win, id: string, database: string) => sessions.children(id, database)))
+  ipcMain.handle('explorer:children', handler((_win, id: string, database: string, category?: import('../shared/mongo-catalog').MongoCategory) => sessions.children(id, database, category)))
   ipcMain.handle('explorer:preview', handler((_win, id: string, database: string, entity: string, offset?: number) => sessions.preview(id, database, entity, offset)))
   ipcMain.handle('explorer:redis-keys', handler((_win, id: string, cursor?: string, pattern?: string) => sessions.redisKeys(id, cursor, pattern)))
   ipcMain.handle('explorer:redis-value', handler((_win, id: string, key: string) => sessions.redisValue(id, key)))

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { mongoCategory, mongoCategoryNodes, mongoCatalogNodes, type MongoCategory, type MongoCatalogEntry } from '../../shared/mongo-catalog'
 import { connectionDisplayEndpoint } from '../../shared/connection-form'
 import { readFile, stat } from 'node:fs/promises'
 import { MongoClient, type MongoClientOptions } from 'mongodb'
@@ -228,7 +229,7 @@ export class SessionManager {
       return [{ id: `db:${config.redisDb || 0}`, label: config.redisMode === 'cluster' ? 'Cluster · DB 0' : `DB ${config.redisDb || 0}`, kind: 'keyspace', database: String(config.redisDb || 0) }]
     })
   }
-  async children(id: string, database: string): Promise<ExplorerNode[]> {
+  async children(id: string, database: string, category?: MongoCategory): Promise<ExplorerNode[]> {
     resourceName(database, '数据库')
     return this.guard(id, async ({ driver }, context) => {
       if (driver.kind === 'mysql') {
@@ -236,11 +237,16 @@ export class SessionManager {
         return data.rows.map(row => { const entity = Object.values(row)[0]; return { id: `table:${database}:${entity}`, label: entity, kind: 'table', database, entity } })
       }
       if (driver.kind === 'mongodb') {
-        const cursor = driver.client.db(database).listCollections({}, { nameOnly: true, authorizedCollections: true, batchSize: 100, maxTimeMS: 10000 })
-        const nodes: ExplorerNode[] = []
-        try { for await (const item of cursor) { nodes.push({ id: `collection:${database}:${item.name}`, label: item.name, kind: 'collection', database, entity: item.name }); if (nodes.length >= 500 || context.signal?.aborted) break } }
+        if (category === undefined) return mongoCategoryNodes(database)
+        const group = mongoCategory(category)
+        if (!group) throw new Error('INVALID_OPERATION: 不支持的操作')
+        if (!group.expandable) return []
+        const filter = category === 'functions' ? { name: 'system.js' } : category === 'views' ? { type: 'view' } : category === 'gridfs' ? { name: /\.(files|chunks)$/ } : {}
+        const cursor = driver.client.db(database).listCollections(filter, { nameOnly: true, authorizedCollections: true, batchSize: 100, maxTimeMS: 10000 })
+        const entries: MongoCatalogEntry[] = []
+        try { for await (const item of cursor) { entries.push({ name:item.name, type:item.type }); if (entries.length >= 500 || context.signal?.aborted) break } }
         finally { await cursor.close() }
-        return nodes
+        return mongoCatalogNodes(database, entries, category)
       }
       return []
     })

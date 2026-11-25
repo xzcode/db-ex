@@ -5,6 +5,7 @@ import ConnectionDialog from './ConnectionDialog.vue'
 import ConnectionSidebar from './components/ConnectionSidebar.vue'
 import { colorStyle } from '../shared/connection-appearance'
 import DatabaseWorkbench from './DatabaseWorkbench.vue'
+import { mongoCategory } from '../shared/mongo-catalog'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import { useConfirmation } from './composables/useConfirmation'
 import type { ConnectionAppearancePatch, ConnectionDraft, ExplorerNode, SavedConnection, SessionInfo } from '../shared/types'
@@ -16,6 +17,27 @@ const explorers = reactive<Record<string, ExplorerState>>({})
 const current = ref<string | null>(null)
 const activeSession = computed(() => sessions.value.find(item => item.id === current.value))
 const currentExplorer = computed(() => current.value ? explorers[current.value] : undefined)
+function expandable(node:ExplorerNode) { return node.kind==='database' || node.kind==='mongo-category' && !!mongoCategory(node.category)?.expandable }
+function nodeIcon(node:ExplorerNode) {
+  if(node.kind==='mongo-category')return mongoCategory(node.category)?.icon||'▦'
+  return node.kind==='database'?'▤':node.kind==='view'?'◉':node.kind==='mongo-indexes'?'A–Z':node.kind==='mongo-function'?'ƒ':node.kind==='gridfs-bucket'?'▣':node.kind==='keyspace'?'⬡':'▦'
+}
+const visibleTree = computed(() => {
+  const state=currentExplorer.value
+  const rows:{node:ExplorerNode;depth:number;empty?:boolean}[]=[]
+  if(!state)return rows
+  function visit(node:ExplorerNode,depth:number) {
+    rows.push({node,depth})
+    if(!state!.expanded.includes(node.id))return
+    const children=state!.children[node.id]
+    if(children) {
+      if(!children.length&&!state!.loading.has(node.id)) rows.push({node,depth:depth+1,empty:true})
+      else for(const child of children)visit(child,depth+1)
+    }
+  }
+  for(const node of state.roots)visit(node,0)
+  return rows
+})
 const busy = ref(false)
 const error = ref('')
 const notice = ref('')
@@ -96,18 +118,17 @@ async function toggleRoot(node: ExplorerNode) {
   const state = id ? explorers[id] : undefined
   if (!id || !state || state.loading.has(node.id)) return
   state.selected = node
-  if (node.kind === 'keyspace') return
+  if (!expandable(node)) return
   if (state.expanded.includes(node.id)) { state.expanded = state.expanded.filter(value => value !== node.id); return }
   state.expanded.push(node.id)
   if (state.children[node.id]) return
   state.loading.add(node.id)
   try {
-    const children = await window.dbex.children(id, node.database || node.label)
+    const children = await window.dbex.children(id, node.database || node.label, node.category)
     if (explorers[id] === state) state.children[node.id] = children
-  } catch (reason) { if (explorers[id] === state) error.value = messageOf(reason) }
+  } catch (reason) { if (explorers[id] === state) { error.value = messageOf(reason); state.expanded=state.expanded.filter(value=>value!==node.id) } }
   finally { if (explorers[id] === state) state.loading.delete(node.id) }
 }
-function selectEntity(node: ExplorerNode) { if (currentExplorer.value) currentExplorer.value.selected = node }
 async function importConnections() {
   await task(async () => { const count = await window.dbex.importConnections(); await refreshConnections(); notice.value = `已导入 ${count} 个连接配置` })
 }
@@ -157,7 +178,7 @@ onBeforeUnmount(() => stopResize?.())
       <div class="resize-handle" role="separator" :aria-label="t('调整连接列表宽度')" aria-orientation="vertical" :aria-valuenow="sidebarWidth" :aria-valuemin="170" :aria-valuemax="400" tabindex="0" @pointerdown="resize($event, 'sidebar')" @keydown="resizeKey($event, 'sidebar')"></div>
       <section class="main-panel"><div class="tabbar"><div v-if="!sessions.length" class="tab active">{{ t('欢迎') }}</div><div v-for="session in sessions" :key="session.id" :class="['session-tab', { active: current === session.id, 'has-color': !!sessionColor(session) }]" :style="colorStyle(sessionColor(session))" :data-color="sessionColor(session) || ''"><button class="tab" @click="current = session.id"><span :class="['db-small-icon', session.kind]">{{ kindIcon(session.kind) }}</span>{{ session.name }}</button><button class="tab-close" :title="t('断开 {0}', [session.name])" :disabled="busy" @click="disconnect(session.id)">×</button></div><div class="tab-filler"></div><span v-if="busy" class="tab-trailing">{{ t('正在连接 / 处理…') }}</span></div><div v-if="error" class="inline-message error" role="alert">{{ localize(error) }}<button class="ghost-icon" :aria-label="t('关闭错误')" @click="error = ''">×</button></div><div v-if="notice" class="inline-message notice">{{ localize(notice) }}</div>
         <div v-if="!current" class="welcome-body"><div class="welcome-mark">▦</div><span class="eyebrow">YOUR DATA, YOUR WORKSPACE</span><h1>{{ t('一个工作空间，') }}<br /><span>{{ t('连接你的数据库。') }}</span></h1><p>{{ t('MySQL 查询与事务、MongoDB 文档、Redis 数据管理。') }}<br />{{ t('SSH 多跳、代理与 TLS，按你的网络方式连接。') }}</p><button class="btn primary large" @click="newConnection">{{ t('＋ 创建数据库连接') }}</button><div class="welcome-features"><span>MySQL</span><span>MongoDB</span><span>Redis</span></div></div>
-        <div v-else class="data-area"><aside :class="['explorer-pane', { 'has-color': !!sessionColor(activeSession) }]" :style="colorStyle(sessionColor(activeSession))"><div class="panel-heading"><span>{{ t('资源浏览器') }}</span><button class="ghost-icon" :title="t('刷新资源树')" :disabled="currentExplorer?.busy" @click="current && refreshRoots(current)">↻</button></div><div v-if="currentExplorer?.busy" class="compact-help">{{ t('正在加载资源…') }}</div><div class="resource-list"><template v-for="node in currentExplorer?.roots || []" :key="node.id"><button :class="['resource-node', { active: currentExplorer?.selected?.id === node.id }]" @click="toggleRoot(node)"><span class="arrow">{{ node.kind === 'keyspace' ? '⬡' : currentExplorer?.expanded.includes(node.id) ? '⌄' : '›' }}</span><span>▤</span><span class="ellipsis">{{ node.label }}</span><span v-if="currentExplorer?.loading.has(node.id)">…</span></button><template v-if="currentExplorer?.expanded.includes(node.id)"><button v-for="child in currentExplorer.children[node.id] || []" :key="child.id" :class="['resource-node', 'child-node', { active: currentExplorer.selected?.id === child.id }]" @click="selectEntity(child)"><span>▦</span><span class="ellipsis">{{ child.label }}</span></button><span v-if="!currentExplorer.loading.has(node.id) && !currentExplorer.children[node.id]?.length" class="empty-tree">{{ t('无可见对象') }}</span></template></template></div></aside><div class="resize-handle" role="separator" :aria-label="t('调整资源树宽度')" aria-orientation="vertical" :aria-valuenow="explorerWidth" :aria-valuemin="170" :aria-valuemax="400" tabindex="0" @pointerdown="resize($event, 'explorer')" @keydown="resizeKey($event, 'explorer')"></div><div class="content-pane"><DatabaseWorkbench v-for="session in sessions" v-show="session.id === current" :key="session.id" :session="session" :node="explorers[session.id]?.selected" @update-session="updateSession" @disconnect="removeSession(session.id)" @refresh-tree="refreshRoots(session.id)" /></div></div>
+        <div v-else class="data-area"><aside :class="['explorer-pane', { 'has-color': !!sessionColor(activeSession) }]" :style="colorStyle(sessionColor(activeSession))"><div class="panel-heading"><span>{{ t('资源浏览器') }}</span><button class="ghost-icon" :title="t('刷新资源树')" :disabled="currentExplorer?.busy" @click="current && refreshRoots(current)">↻</button></div><div v-if="currentExplorer?.busy" class="compact-help">{{ t('正在加载资源…') }}</div><div class="resource-list"><template v-for="item in visibleTree" :key="item.node.id + (item.empty ? ':empty' : '')"><span v-if="item.empty" class="empty-tree" :style="{ paddingInlineStart: (10 + item.depth * 17) + 'px' }">{{ t('无可见对象') }}</span><button v-else :class="['resource-node', { 'child-node': item.depth > 0, 'mongo-folder': item.node.kind === 'mongo-category', active: currentExplorer?.selected?.id === item.node.id }]" :style="{ paddingInlineStart: (10 + item.depth * 17) + 'px' }" :data-object-kind="item.node.kind" :data-object-category="item.node.category" :aria-expanded="expandable(item.node) ? currentExplorer?.expanded.includes(item.node.id) : undefined" @click="toggleRoot(item.node)"><span class="arrow">{{ expandable(item.node) ? currentExplorer?.expanded.includes(item.node.id) ? '⌄' : '›' : '' }}</span><span :class="['object-tree-icon', item.node.kind]">{{ nodeIcon(item.node) }}</span><span class="ellipsis">{{ item.node.kind === 'mongo-category' ? t(item.node.label) : item.node.label }}</span><span v-if="currentExplorer?.loading.has(item.node.id)">…</span></button></template></div></aside><div class="resize-handle" role="separator" :aria-label="t('调整资源树宽度')" aria-orientation="vertical" :aria-valuenow="explorerWidth" :aria-valuemin="170" :aria-valuemax="400" tabindex="0" @pointerdown="resize($event, 'explorer')" @keydown="resizeKey($event, 'explorer')"></div><div class="content-pane"><DatabaseWorkbench v-for="session in sessions" v-show="session.id === current" :key="session.id" :session="session" :node="explorers[session.id]?.selected" @update-session="updateSession" @disconnect="removeSession(session.id)" @refresh-tree="refreshRoots(session.id)" /></div></div>
       </section>
     </div>
     <footer class="statusbar"><span class="status-dot"></span>{{ activeSession ? activeSession.displayHost : 'Ready' }}<span class="separator">|</span>{{ activeSession?.name || t('未连接数据库') }}<span v-if="activeSession?.transaction" class="transaction-text">{{ t('事务尚未提交') }}</span><span class="status-right">DB EX · Core Preview</span></footer>

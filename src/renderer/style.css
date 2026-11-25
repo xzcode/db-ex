@@ -547,3 +547,18 @@ html[dir=rtl] .tree-chevron:not(.expanded) { transform: rotate(180deg); }
 
 .filter-value-body .filter-category-field { width: min(200px, 100%); align-self: flex-end; }
 .filter-value-body .filter-value-input input { min-height: 36px; }
+
+/* Nested database object navigation; labels of real database objects are never translated. */
+.resource-node .arrow { width: 12px; flex: none; }
+.resource-node .object-tree-icon { display: inline-flex; justify-content: center; align-items:center; min-width:19px; flex:none; color:var(--accent); font-size:14px; }
+.resource-node[data-object-category=functions] .object-tree-icon { font-style:italic; font-size:17px; }
+.resource-node[data-object-category=pipelines] .object-tree-icon { color:#4da96b; }
+.resource-node[data-object-category=gridfs] .object-tree-icon { color:#32a8aa; }
+.resource-node .object-tree-icon.mongo-indexes,.resource-node[data-object-category=indexes] .object-tree-icon {font-size:10px;font-weight:600;}
+.resource-node.mongo-folder { font-weight:500; }
+.mongo-library { flex:1; min-width:0; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
+.mongo-library .library-fields { padding:10px; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+.mongo-library .library-fields input,.mongo-library .library-fields select { min-width:0; width:100%; }
+.mongo-library .query-editor { min-height:120px; flex:0 0 34%; }
+.mongo-library .library-query-parts {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:10px;}
+.mongo-library .library-query-parts textarea {width:100%;min-height:65px;}
