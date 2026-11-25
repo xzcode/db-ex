@@ -9,7 +9,9 @@ export const mongoFieldTypes = ['double','string','object','array','binData','un
 export const mongoOnlyOperators: readonly FilterOperator[] = ['exists','missing','isType','notType','custom']
 export const stringOperators: readonly FilterOperator[] = ['contains','notContains','starts','notStarts','ends','notEnds']
 export const listOperators: readonly FilterOperator[] = ['in','notIn']
-export interface FilterRule { field: string; operator: FilterOperator; type: FilterType; value: string; enabled?: boolean; join?: 'and' | 'or' }
+/** Presentation-only preference; the compiler still uses the explicit BSON type. */
+export type FilterValueTypeMode = 'manual' | 'suggested' | 'auto-object-id'
+export interface FilterRule { field: string; operator: FilterOperator; type: FilterType; value: string; enabled?: boolean; join?: 'and' | 'or'; valueTypeMode?: FilterValueTypeMode }
 export interface FilterGroup { join: 'and' | 'or'; rules: FilterRule[]; joinNext?: 'and' | 'or'; enabled?: boolean }
 export interface SortRule { field: string; direction: 1 | -1 }
 export interface BrowseFilter { join: 'and' | 'or'; groups: FilterGroup[]; sort: SortRule[] }

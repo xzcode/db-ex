@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { t, localize } from '../i18n'
-import { listOperators, listValues, stringOperators, compileMongoFilter, compileMysqlFilter, type FilterRule, type FilterType } from '../../shared/browse-filter'
-import { mongoValueCategories, valueCategory, categoryType, manualValueType } from '../../shared/filter-value-category'
+import { listOperators, listValues, stringOperators, compileMongoFilter, compileMysqlFilter, type FilterRule, type FilterType, type FilterValueTypeMode } from '../../shared/browse-filter'
+import { mongoValueCategories, valueCategory, categoryType, detectMongoInputType } from '../../shared/filter-value-category'
 import type { FilterSuggestion } from '../../shared/filter-suggestions'
 const props=defineProps<{ rule:FilterRule; kind:'mysql'|'mongodb'; types:readonly FilterType[]; suggestions:FilterSuggestion[] }>()
-const emit=defineEmits<{ close:[]; save:[value:string,type:FilterType] }>()
+const emit=defineEmits<{ close:[]; save:[value:string,type:FilterType,mode?:FilterValueTypeMode] }>()
 const type=ref(props.rule.type)
+const mode=ref<FilterValueTypeMode|undefined>(props.rule.valueTypeMode)
 const text=ref(props.rule.value)
 const search=ref('')
 const error=ref('')
@@ -20,9 +21,15 @@ const options=computed(()=>props.suggestions.filter(item=>
 function changeCategory(event:Event){
   const next=categoryType((event.target as HTMLSelectElement).value)
   if(valueCategory(next)===category.value)return
-  type.value=next;text.value=list?'[]':'';error.value=''
+  type.value=next;mode.value='manual';if(list)text.value='[]';error.value=''
 }
-function manualInput(){if(props.kind==='mongodb' && !list)type.value=manualValueType(type.value);error.value=''}
+function manualInput(event:Event){
+  if(props.kind==='mongodb'&&!list&&!stringOnly){
+    const detected=detectMongoInputType(type.value,(event.target as HTMLInputElement).value,mode.value)
+    type.value=detected.type;mode.value=detected.valueTypeMode
+  }
+  error.value=''
+}
 const selected=computed(()=>{if(!list)return [text.value];try{return listValues(text.value)}catch{return []}})
 function choose(item:FilterSuggestion){
   if(list){
@@ -31,7 +38,7 @@ function choose(item:FilterSuggestion){
     const value=item.value
     const next=current.includes(value)?current.filter(v=>v!==value):[...current,value];text.value=JSON.stringify(next)
   }
-  else {type.value=item.type;text.value=item.value}
+  else {type.value=item.type;mode.value='suggested';text.value=item.value}
 }
 function save(){
   error.value=''
@@ -39,7 +46,7 @@ function save(){
     const rule={...props.rule,enabled:true,type:type.value,value:text.value}
     const draft={join:'and' as const,groups:[{join:'and' as const,rules:[rule]}],sort:[]}
     if(props.kind==='mongodb')compileMongoFilter(draft);else compileMysqlFilter('db','table',draft)
-    emit('save',text.value,type.value)
+    emit('save',text.value,type.value,mode.value)
   }catch(reason){error.value=reason instanceof Error?reason.message:String(reason)}
 }
 </script>

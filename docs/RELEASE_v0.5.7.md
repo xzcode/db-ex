@@ -12,3 +12,5 @@
 - Complete visual filter comparison menu, condition checkboxes, mixed AND/OR per rule, reorder controls, list matching, MongoDB type predicates and safe custom predicates. Searchable typed suggested-value picker uses the current result page only, up to 100 unique typed values. MySQL supports applicable operators through bound parameters. Fix MongoDB metadata command options and provide partial statistics fallback.
 
 - Simplify MongoDB filter value types to Text, Number, Date and time, Object ID and Custom. Numeric suggestions preserve their BSON type, manual numbers choose bounded numeric representations automatically, and Custom supports explicit BSON constructors. Fix a previous TypeScript error caused by calling the filter field handler on a sort rule.
+
+- MongoDB filter inputs automatically recognize valid 24-character hexadecimal ObjectId text, preserve explicit type choices and actual suggested String values, and revert automatic detection when a value ceases to match. Detection works inline and in the value dialog without database access.

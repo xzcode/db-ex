@@ -65,3 +65,24 @@ test('friendly Number and Custom preserve BSON numeric semantics without evaluat
   assert.throws(()=>compile('Number','9000abc'),/INVALID_FILTER/)
   assert.throws(()=>compileMysqlFilter('app','users',{join:'and',groups:[{join:'and',rules:[rule('id','1','Number')]}],sort:[]}),/INVALID_FILTER/)
 })
+
+test('ObjectId auto-detection requires exactly 24 hexadecimal characters and honors manual choices', async()=>{
+  const {isObjectIdText,detectMongoInputType}=await import('../src/shared/filter-value-category')
+  const id='507f1f77bcf86cd799439011'
+  for(const value of [id,id.toUpperCase(),'012345678901234567890123']){
+    assert.equal(isObjectIdText(value),true)
+    assert.deepEqual(detectMongoInputType('String',value),{type:'ObjectId',valueTypeMode:'auto-object-id'})
+  }
+  for(const value of [id.slice(1),id+'0',id.slice(0,23)+'g',id+'\n',' '+id,id+' ']){
+    assert.equal(isObjectIdText(value),false)
+    assert.equal(detectMongoInputType('String',value).type,'String')
+  }
+  assert.equal(detectMongoInputType('ObjectId',id.slice(1),'auto-object-id').type,'String')
+  assert.equal(detectMongoInputType('ObjectId',id.slice(1),'manual').type,'ObjectId')
+  assert.equal(detectMongoInputType('String',id,'manual').type,'String')
+  assert.equal(detectMongoInputType('String',id,'suggested').type,'String')
+  assert.equal(detectMongoInputType('Number','012345678901234567890123','manual').type,'Number')
+  const compile=(type:FilterRule['type'])=>JSON.parse(compileMongoFilter({join:'and',groups:[{join:'and',rules:[rule('id',id,type)]}],sort:[]}).filter)
+  assert.deepEqual(compile(detectMongoInputType('String',id).type),{id:{$eq:{$oid:id}}})
+  assert.deepEqual(compile(detectMongoInputType('String',id,'manual').type),{id:{$eq:id}})
+})

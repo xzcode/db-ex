@@ -2,9 +2,9 @@
 import { computed, ref, useId, watch } from 'vue'
 import { t } from '../i18n'
 import FilterValueDialog from './FilterValueDialog.vue'
-import { mongoValueCategories, valueCategory, categoryType, manualValueType } from '../../shared/filter-value-category'
+import { mongoValueCategories, valueCategory, categoryType, detectMongoInputType } from '../../shared/filter-value-category'
 import type { FilterSuggestion } from '../../shared/filter-suggestions'
-import { filterOperators, filterTypes, noValue, mongoOnlyOperators, mongoFieldTypes, stringOperators, listOperators, type BrowseFilter, type FilterRule, type FilterOperator } from '../../shared/browse-filter'
+import { filterOperators, filterTypes, noValue, mongoOnlyOperators, mongoFieldTypes, stringOperators, listOperators, type BrowseFilter, type FilterRule, type FilterOperator, type FilterValueTypeMode } from '../../shared/browse-filter'
 const props = defineProps<{ kind: 'mysql' | 'mongodb'; fields: string[]; disabled?: boolean; suggestions?: (field:string)=>FilterSuggestion[] }>()
 const model = defineModel<BrowseFilter>({ required: true })
 const emit = defineEmits<{ apply: []; reset: [] }>()
@@ -17,7 +17,10 @@ const editingRule=computed(()=>editing.value?model.value.groups[editing.value.gr
 const selected=ref<{group:number;row:number}>()
 const canMove=(delta:number)=>!!selected.value&&selected.value.row+delta>=0&&selected.value.row+delta<(model.value.groups[selected.value.group]?.rules.length||0)
 function move(delta:number){if(!selected.value||!canMove(delta))return;const {group,row}=selected.value;const rules=model.value.groups[group]!.rules;const next=row+delta;[rules[row],rules[next]]=[rules[next]!,rules[row]!];selected.value={group,row:next}}
-function saveValue(value:string,type:FilterRule['type']){if(editingRule.value){editingRule.value.value=value;editingRule.value.type=type}editing.value=undefined}
+function saveValue(value:string,type:FilterRule['type'],mode?:FilterValueTypeMode){
+  if(editingRule.value){editingRule.value.value=value;editingRule.value.type=type;editingRule.value.valueTypeMode=mode}
+  editing.value=undefined
+}
 watch(()=>props.disabled,value=>{if(value)editing.value=undefined})
 const ruleCount = computed(() => model.value.groups.reduce((sum, group) => sum + group.rules.length, 0))
 function rule(): FilterRule { return { field: props.fields[0] || '', operator:'eq', type:'String', value:'', enabled:true } }
@@ -33,7 +36,7 @@ function addSort() {
   model.value.sort.push({ field: props.fields.find(field => !model.value.sort.some(item => item.field === field)) || '', direction:1 })
 }
 function operatorChanged(rule: FilterRule) {
-  if (stringOperators.includes(rule.operator)) rule.type='String'
+  if (stringOperators.includes(rule.operator)) { rule.type='String'; if(rule.valueTypeMode==='auto-object-id')rule.valueTypeMode=undefined }
   if (rule.operator==='isType'||rule.operator==='notType') rule.value='string'
   else if (listOperators.includes(rule.operator)) rule.value='[]'
   else if(rule.operator==='custom')rule.value='{"$eq":null}'
@@ -41,10 +44,18 @@ function operatorChanged(rule: FilterRule) {
 function removeGroup(index:number){model.value.groups.splice(index,1);selected.value=undefined}
 function changeCategory(rule:FilterRule,event:Event){
   const type=categoryType((event.target as HTMLSelectElement).value)
-  if (valueCategory(rule.type)!==valueCategory(type)) { rule.type=type; rule.value=listOperators.includes(rule.operator)?'[]':'' }
+  if (valueCategory(rule.type)!==valueCategory(type)) {
+    rule.type=type; rule.valueTypeMode='manual'
+    if(listOperators.includes(rule.operator))rule.value='[]'
+  }
 }
-function manualInput(rule:FilterRule){if(props.kind==='mongodb' && !listOperators.includes(rule.operator))rule.type=manualValueType(rule.type)}
-function setField(rule:FilterRule){if(noValue(rule.operator)||stringOperators.includes(rule.operator)||rule.operator==='custom'||rule.operator==='isType'||rule.operator==='notType')return;const values=props.suggestions?.(rule.field)||[];if(values.length&&values.every(item=>item.type===values[0]!.type))rule.type=values[0]!.type}
+function manualInput(rule:FilterRule,event:Event){
+  if(props.kind!=='mongodb'||listOperators.includes(rule.operator)||noValue(rule.operator)||stringOperators.includes(rule.operator))return
+  // Read the current input directly so detection also works for paste and
+  // does not depend on the order of Vue's v-model/input listeners.
+  Object.assign(rule,detectMongoInputType(rule.type,(event.target as HTMLInputElement).value,rule.valueTypeMode))
+}
+function setField(rule:FilterRule){if(noValue(rule.operator)||stringOperators.includes(rule.operator)||rule.operator==='custom'||rule.operator==='isType'||rule.operator==='notType')return;const values=props.suggestions?.(rule.field)||[];if(rule.valueTypeMode==='manual'||rule.valueTypeMode==='suggested')return;if(rule.valueTypeMode==='auto-object-id')return;if(values.length&&values.every(item=>item.type===values[0]!.type))rule.type=values[0]!.type}
 
 </script>
 <template>
@@ -65,7 +76,7 @@ function setField(rule:FilterRule){if(noValue(rule.operator)||stringOperators.in
           <select v-if="kind==='mongodb'" :value="valueCategory(rule.type)" :aria-label="t('类型')" :disabled="disabled || noValue(rule.operator) || stringOperators.includes(rule.operator)" @change="changeCategory(rule,$event)"><option v-for="item in mongoValueCategories" :key="item.value" :value="item.value">{{ t(item.label) }}</option></select>
           <select v-else v-model="rule.type" :aria-label="t('类型')" :disabled="disabled || noValue(rule.operator) || stringOperators.includes(rule.operator)"><option v-for="type in types" :key="type">{{ type }}</option></select>
           <select v-if="kind==='mysql' && rule.type === 'Boolean' && !noValue(rule.operator) && !listOperators.includes(rule.operator)" v-model="rule.value" :aria-label="t('字段值')" :disabled="disabled"><option value="" disabled>—</option><option>true</option><option>false</option></select>
-          <input v-else v-model="rule.value" @input="manualInput(rule)" :aria-label="t('字段值')" :placeholder="listOperators.includes(rule.operator)?'[]':rule.type==='ObjectId'?'24 hex':rule.type==='ISODate'?'2026-01-01T00:00:00Z':t('字段值')" :disabled="disabled || noValue(rule.operator)" spellcheck="false" />
+          <input v-else v-model="rule.value" @input="manualInput(rule,$event)" :aria-label="t('字段值')" :placeholder="listOperators.includes(rule.operator)?'[]':rule.type==='ObjectId'?'24 hex':rule.type==='ISODate'?'2026-01-01T00:00:00Z':t('字段值')" :disabled="disabled || noValue(rule.operator)" spellcheck="false" />
           <button type="button" class="btn secondary small" :aria-label="t('编辑筛选值') + ' ' + (ri+1)" :title="t('建议值')" :disabled="disabled || noValue(rule.operator) || !rule.field" @click="editing={group:gi,row:ri}">…</button>
         </template>
         <select v-if="ri < group.rules.length-1" :value="rule.join || group.join" :aria-label="t('下一条件关系') + ' ' + (ri+1)" :disabled="disabled" @change="rule.join=($event.target as HTMLSelectElement).value as 'and'|'or'"><option value="and">AND</option><option value="or">OR</option></select><span v-else></span>
