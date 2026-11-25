@@ -187,6 +187,10 @@ export class MongoOperations {
         }
         return { columns: [], rows: [], inspection }
       }
+      case 'mongo.count': {
+        const count = await collection.countDocuments(objectEjson(operation.filter, 'Filter'), { ...options, limit: 1000001 })
+        return { columns: [], rows: [], totalRows: String(count), countLimited: count >= 1000001 }
+      }
       case 'mongo.find': {
         const { limit, offset } = page(operation)
         const cursor = collection.find(objectEjson(operation.filter, 'Filter'), {

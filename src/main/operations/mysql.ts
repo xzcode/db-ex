@@ -2,6 +2,7 @@ import type { Connection } from 'mysql2/promise'
 import type { Connection as CoreConnection, FieldPacket, ResultSetHeader } from 'mysql2'
 import type { MysqlOperation, OperationResult, SqlRow, SqlValue } from '../../shared/types'
 import { checkAborted, databaseError, displayCell, emptyResult, MAX_BYTES, MAX_ROWS, MAX_VALUE_BYTES, page, requireWrite, resourceName, sqlRow, TIMEOUT_MS, type OperationContext } from './common'
+import { compileMysqlFilter } from '../../shared/browse-filter'
 import { metric, metrics, mysqlFieldType, type ObjectInspection } from '../../shared/object-inspection'
 import { inspectSql, quoteIdentifier } from './sql-policy'
 
@@ -78,6 +79,7 @@ export class MysqlOperations {
   private async run(operation: MysqlOperation, context: OperationContext, signal: AbortSignal): Promise<OperationResult> {
     switch (operation.action) {
       case 'mysql.query': return this.executeSql(operation, context, signal)
+      case 'mysql.browse': return this.browse(operation, signal)
       case 'mysql.inspect': return this.inspectObject(operation.database, operation.entity, signal)
       case 'mysql.structure': {
         const structure = await this.structure(operation.database, operation.entity, signal)
@@ -113,6 +115,32 @@ export class MysqlOperations {
       case 'mysql.delete': return this.change(operation, context, signal)
       case 'mysql.import': return this.importRows(operation, context, signal)
       default: throw new Error('INVALID_OPERATION: 不支持的 MySQL 操作')
+    }
+  }
+
+  private async browse(operation: Extract<MysqlOperation, { action: 'mysql.browse' }>, signal: AbortSignal): Promise<OperationResult> {
+    const { limit, offset } = page(operation)
+    const compiled = compileMysqlFilter(operation.database, operation.entity, operation.filter)
+    const temporary = !this.transaction
+    if (temporary) await this.query('START TRANSACTION READ ONLY', [], signal, 1, false)
+    try {
+      if (operation.countOnly === true) {
+        const data = await this.query(compiled.countSql, compiled.parameters, signal, 1)
+        const count = String(data.values[0]?.[0] ?? '')
+        if (!/^\d+$/.test(count)) throw new Error('INVALID_FILTER: 筛选或排序条件无效')
+        return { columns: [], rows: [], totalRows: count, countLimited: BigInt(count) >= 1000001n }
+      }
+      // Direct ORDER BY + LIMIT ensures the selected ordering isn't discarded
+      // by a derived-table pagination wrapper.
+      const data = await this.query(compiled.sql + ' LIMIT ' + (limit + 1) + ' OFFSET ' + offset, compiled.parameters, signal, limit + 1)
+      const more = data.values.length > limit
+      if (more) data.values.pop()
+      const result = this.result(data)
+      result.nextOffset = more ? offset + limit : undefined
+      result.truncated = result.truncated || more
+      return result
+    } finally {
+      if (temporary && !this.closed) await this.query('ROLLBACK', [], signal, 1, false)
     }
   }
 

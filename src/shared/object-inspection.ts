@@ -26,8 +26,9 @@ export function formatBytes(text: string, locale: string): string {
 /** MySQL wire column type codes, not JavaScript value inference. */
 export const mysqlTypes = ['TINYINT','SMALLINT','MEDIUMINT','INT','BIGINT','DECIMAL','FLOAT','DOUBLE','BIT','YEAR','DATE','TIME','DATETIME','TIMESTAMP','CHAR','VARCHAR','TEXT','BINARY','VARBINARY','BLOB','JSON','ENUM','SET','GEOMETRY','NULL','UNKNOWN'] as const
 export const redisTypes = ['string','hash','list','set','zset','stream','none','unknown'] as const
-export function mysqlFieldType(field: { columnType?: number; characterSet?: number; flags?: number }): string {
+export function mysqlFieldType(field: { columnType?: number; characterSet?: number; flags?: number | string[] }): string {
   const binary = field.characterSet === 63
+  const flag = (mask: number, name: string) => Array.isArray(field.flags) ? field.flags.includes(name) : Boolean((field.flags || 0) & mask)
   switch (field.columnType) {
     case 0: case 246: return 'DECIMAL'
     case 1: return 'TINYINT'
@@ -49,7 +50,7 @@ export function mysqlFieldType(field: { columnType?: number; characterSet?: numb
     case 247: return 'ENUM'
     case 248: return 'SET'
     case 249: case 250: case 251: case 252: return binary ? 'BLOB' : 'TEXT'
-    case 254: return (field.flags || 0) & 256 ? 'ENUM' : (field.flags || 0) & 2048 ? 'SET' : binary ? 'BINARY' : 'CHAR'
+    case 254: return flag(256, 'ENUM') ? 'ENUM' : flag(2048, 'SET') ? 'SET' : binary ? 'BINARY' : 'CHAR'
     case 255: return 'GEOMETRY'
     default: return 'UNKNOWN'
   }

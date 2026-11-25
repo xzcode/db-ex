@@ -1,4 +1,5 @@
 import type { BsonTypeBranch } from './bson-types'
+import type { BrowseFilter } from './browse-filter'
 import type { ObjectInspection } from './object-inspection'
 
 export type DatabaseKind = 'mysql' | 'mongodb' | 'redis'
@@ -102,6 +103,8 @@ export interface DataPreview {
 }
 export interface OperationResult extends DataPreview {
   inspection?: ObjectInspection
+  totalRows?: string
+  countLimited?: boolean
   columnTypes?: string[]
   nullCells?: number[][]
   redisRowTypes?: string[]
@@ -125,6 +128,7 @@ interface Entity { database: string; entity: string }
 export type MysqlOperation =
   | ({ action: 'mysql.query'; database?: string; sql: string; parameters?: SqlValue[]; limit?: number; offset?: number } & Confirmed)
   | ({ action: 'mysql.structure' | 'mysql.inspect' } & Entity)
+  | ({ action: 'mysql.browse'; filter: BrowseFilter; countOnly?: boolean; limit?: number; offset?: number } & Entity)
   | ({ action: 'mysql.insert'; values: SqlRow } & Entity & Confirmed)
   | ({ action: 'mysql.update'; key: SqlRow; original: SqlRow; changes: SqlRow } & Entity & Confirmed)
   | ({ action: 'mysql.delete'; key: SqlRow; original: SqlRow } & Entity & Confirmed)
@@ -132,6 +136,7 @@ export type MysqlOperation =
   | ({ action: 'mysql.begin' | 'mysql.commit' | 'mysql.rollback' } & Confirmed)
 export type MongoOperation =
   | ({ action: 'mongo.find'; filter?: string; projection?: string; sort?: string; offset?: number; limit?: number } & Entity)
+  | ({ action: 'mongo.count'; filter?: string } & Entity)
   | ({ action: 'mongo.aggregate'; pipeline: string; limit?: number } & Entity)
   | ({ action: 'mongo.insert'; documents: string[] } & Entity & Confirmed)
   | ({ action: 'mongo.replace'; original: string; document: string } & Entity & Confirmed)
