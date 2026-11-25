@@ -1,8 +1,8 @@
 # DB EX
 
-本地优先的桌面数据库工具，统一管理 **MySQL、MariaDB、MongoDB、Redis、SQLite**。基于 Electron、Vue 3、TypeScript 与 Monaco，不依赖账号、云端服务或遥测。
+本地优先的桌面数据库工具，统一管理 **MySQL、MariaDB、MongoDB、Redis、SQLite、ClickHouse**。基于 Electron、Vue 3、TypeScript 与 Monaco，不依赖账号、云端服务或遥测。
 
-当前版本：**0.6.0 预览版**。M2–M5 的功能实现已接入；完整范围、验收证据和限制见 [路线图](docs/ROADMAP.md)。预览安装包与最终发行签名是不同的交付项。
+当前版本：**0.7.0 预览版**。M2–M5 的功能实现已接入；完整范围、验收证据和限制见 [路线图](docs/ROADMAP.md)。预览安装包与最终发行签名是不同的交付项。
 
 ## 功能
 
@@ -10,7 +10,7 @@
 | --- | --- |
 | 连接与工作区 | 保存/编辑连接、临时连接、测试连接、多会话、资源树、可调整布局、深浅主题 |
 | MySQL | Monaco SQL、选中执行、参数绑定、结果分页、结构与索引查看、主键定位 CRUD、原值冲突检测、显式事务、CSV/JSON 批量导入与当前页导出 |
-| MongoDB | Canonical EJSON/BSON 文档、Filter/Projection/Sort、单文档 CRUD、Aggregation、索引管理、EJSON 导入导出 |
+| MongoDB | 原生语句编辑器（受控单语句）、智能补全与美化、Canonical EJSON/BSON、集合浏览筛选、文档 CRUD、索引及语法帮助、批量单格/列修改 |\n| MariaDB / SQLite | SQL 查询对象、参数绑定、主键编辑、事务、单格/列修改及引擎专属元数据 |\n| ClickHouse | HTTP/HTTPS 适配器、表/视图浏览、精确类型、参数化查询、受控 DDL、批量插入和当前页导出 |
 | Redis | SCAN、String/Hash/List/Set/ZSet/Stream 浏览与编辑、TTL、String CAS 更新、明确选择 Key 的批量删除、受限命令台 |
 | 高级连接 | 直连、SOCKS5、HTTP CONNECT、SSH 密码/私钥/Agent、最多三个前置跳板、逐级指纹、SSH config 安全导入、TLS/mTLS |
 | 拓扑 | MongoDB URI/副本集/原生节点发现；Redis Standalone、Sentinel、Cluster；发现的新节点沿用代理/SSH 路由 |
@@ -157,3 +157,13 @@ See [SQLite and preferences continuation](docs/SQLITE_AND_PREFERENCES.md) for th
 - Named SQL and MongoDB query objects with encrypted local persistence, parameter retention, Save As, rename, copy, delete and portable import/export.
 - Settings-only top toolbar and integrated macOS native window controls; Windows/Linux retain their native window chrome.
 - See [v0.6.0 release notes](docs/RELEASE_v0.6.0.md) for supported features and known limitations.
+
+
+## v0.7.0 Preview
+
+- ClickHouse joins the existing five database engines, with an independent analytical adapter and typed SQL workspace.
+- Unified connection/resource navigation, local engine-specific icons and a clean empty workspace; runtime window/Dock icons reuse the approved application artwork.
+- Native MongoDB statement editor (a supported shell syntax subset), SQL/MongoDB formatting, contextual suggestions, and encrypted named query objects.
+- Inline cell editing and current-page column assignment, staged changes, explicit save/discard, original-value conflict checks, atomic SQL batches where supported, and explicit nontransactional partial outcomes.
+- MongoDB index syntax help and removal of the deprecated MapReduce entry.
+- See [v0.7.0 release notes](docs/RELEASE_v0.7.0.md).

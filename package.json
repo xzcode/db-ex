@@ -1,9 +1,9 @@
 {
   "name": "db-ex",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
-  "description": "DB EX — local-first database explorer for MySQL, MariaDB, MongoDB, Redis and SQLite",
+  "description": "DB EX — local-first database explorer for MySQL, MariaDB, MongoDB, Redis, SQLite and ClickHouse",
   "main": "dist-electron/main.cjs",
   "scripts": {
     "predev": "npm run icons",

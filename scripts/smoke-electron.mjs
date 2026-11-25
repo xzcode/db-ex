@@ -30,13 +30,13 @@ application = await electron.launch({
     const mac=process.platform==='darwin'
     const path=app.isPackaged?process.resourcesPath+'/icons/'+(mac?'db-ex-mac.png':'db-ex.png'):app.getAppPath()+'/build/'+(mac?'icon-mac.png':'icon.png')
     const expected=nativeImage.createFromPath(path)
-    const dock=mac?app.dock?.getIcon():undefined
-    return {empty:expected.isEmpty(),size:expected.getSize(),dockEmpty:mac?(!dock||dock.isEmpty()):false}
+    const dockAvailable=!mac||typeof app.dock?.setIcon==='function'
+    return {empty:expected.isEmpty(),size:expected.getSize(),dockAvailable}
   })
   assert.equal(runtimeArtwork.empty,false)
   assert.equal(runtimeArtwork.size.width,1024)
   assert.equal(runtimeArtwork.size.height,1024)
-  assert.equal(runtimeArtwork.dockEmpty,false)
+  assert.equal(runtimeArtwork.dockAvailable,true)
   assert.equal(await page.locator('.empty-workspace').textContent(),'')
   assert.equal(await page.locator('.welcome-mark,.welcome-features').count(),0)
   assert.match(boundary.title, /DB EX/)

@@ -231,7 +231,7 @@ test('MongoDB right-click document editor uses typed syntax, validates locally a
   await page.getByRole('button', { name: '查询条件', exact: true }).click()
   await page.getByRole('button', { name: '文本', exact: true }).click()
   await page.getByLabel('Projection', { exact: true }).fill('{"name":1}')
-  await page.getByRole('button', { name: '查询', exact: true }).click()
+  await page.locator('.workbench:visible').getByRole('button', { name: '查询', exact: true }).click()
   await row.click({ button: 'right' })
   await expect(page.locator('.mongo-row-menu').getByRole('button', { name: '编辑文档…' })).toBeDisabled()
   await page.keyboard.press('Escape')
