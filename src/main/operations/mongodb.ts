@@ -3,6 +3,7 @@ import type { MongoOperation, OperationResult } from '../../shared/types'
 import type { BsonTypeBranch } from '../../shared/bson-types'
 import { describeBsonDocument, newTypeBudget } from './bson-metadata'
 import { metric, metrics, type ObjectInspection } from '../../shared/object-inspection'
+import { validateDatabaseName, validateInitialCollection } from '../../shared/database-admin'
 import { mongoDefinition } from './mongo-definition'
 import { boundedText, checkAborted, databaseError, displayCell, emptyResult, MAX_BYTES, MAX_ROWS, MAX_VALUE_BYTES, page, plainObject, requireWrite, resourceName, TIMEOUT_MS, type OperationContext } from './common'
 
@@ -144,6 +145,18 @@ export class MongoOperations {
 
   private async run(operation: MongoOperation, context: OperationContext, signal: AbortSignal): Promise<OperationResult> {
     const database = resourceName(operation.database, '数据库')
+    if (operation.action === 'mongo.createDatabase' || operation.action === 'mongo.dropDatabase') {
+      requireWrite(context)
+      validateDatabaseName('mongodb', database)
+      const db = this.client.db(database)
+      if (operation.action === 'mongo.createDatabase') {
+        const initial = validateInitialCollection(operation.initialCollection)
+        await db.createCollection(initial, { timeoutMS: TIMEOUT_MS })
+        return emptyResult('数据库已创建')
+      }
+      await db.dropDatabase({ timeoutMS: TIMEOUT_MS })
+      return emptyResult('数据库已删除')
+    }
     const entity = resourceName(operation.entity, '集合')
     const collection = this.client.db(database).collection(entity)
     // Protocol metadata (especially error.code) must remain JavaScript numbers:

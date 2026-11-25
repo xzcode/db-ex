@@ -48,11 +48,11 @@ function writes(op: DatabaseOperation, writable: boolean): boolean {
   if (Buffer.byteLength(JSON.stringify(op)) > 4 * 1024 * 1024) throw new Error('LIMIT_EXCEEDED: 操作参数最多4 MiB')
   if (op.action === 'mysql.query') return inspectSql(op.sql, writable).mode === 'write'
   if (op.action === 'redis.command') return redisCommandWrites(validateRedisCommand(op.args))
-  return new Set(['mysql.insert', 'mysql.update', 'mysql.delete', 'mysql.import', 'mysql.begin', 'mysql.commit', 'mongo.insert', 'mongo.replace', 'mongo.delete', 'mongo.createIndex', 'mongo.dropIndex', 'redis.set', 'redis.mutate', 'redis.ttl', 'redis.delete']).has(op.action)
+  return new Set(['mysql.createDatabase', 'mysql.dropDatabase', 'mongo.createDatabase', 'mongo.dropDatabase', 'mysql.insert', 'mysql.update', 'mysql.delete', 'mysql.import', 'mysql.begin', 'mysql.commit', 'mongo.insert', 'mongo.replace', 'mongo.delete', 'mongo.createIndex', 'mongo.dropIndex', 'redis.set', 'redis.mutate', 'redis.ttl', 'redis.delete']).has(op.action)
 }
 function operationDetail(id: string, op: DatabaseOperation): string {
   const info = sessions.info(id)
-  const target = 'entity' in op ? `${op.database}.${op.entity}` : 'key' in op ? op.key : 'keys' in op ? tr('{0} 个已选择的Key', [op.keys.length]) : ''
+  const target = 'entity' in op ? `${op.database}.${op.entity}` : 'initialCollection' in op ? `${op.database}.${op.initialCollection}` : 'database' in op ? op.database || '' : 'key' in op ? op.key : 'keys' in op ? tr('{0} 个已选择的Key', [op.keys.length]) : ''
   const count = 'rows' in op ? '\n' + tr('导入 {0} 行', [op.rows.length]) : 'documents' in op ? '\n' + tr('写入 {0} 个文档', [op.documents.length]) : ''
   const sql = op.action === 'mysql.query' ? `\n\n${op.sql.slice(0, 1500)}` : op.action === 'redis.command' ? '\n' + tr('命令：') + ' ' + op.args[0] : ''
   return `${tr('连接：')} ${info.name}\n${tr('地址：')} ${info.displayHost}\n${tr('操作：')} ${op.action}${target ? '\n' + tr('目标：') + ' ' + target : ''}${count}\n${tr(info.transaction ? '当前有未提交事务。' : '本操作可能立即持久化。')}${sql}`
@@ -130,7 +130,7 @@ function registerIpc(): void {
     const info = sessions.info(id)
     if (writes(operation, info.writable)) {
       if (!info.writable || !('confirmed' in operation) || operation.confirmed !== true) throw new Error('WRITE_CONFIRMATION_REQUIRED: 请先解锁会话，并主动确认写入')
-      await confirm(win, '确认执行数据库写操作？', operationDetail(id, operation))
+      await confirm(win, operation.action === 'mongo.dropDatabase' || operation.action === 'mysql.dropDatabase' ? '确认永久删除整个数据库？' : '确认执行数据库写操作？', operationDetail(id, operation))
     }
     return sessions.execute(id, operation)
   }))

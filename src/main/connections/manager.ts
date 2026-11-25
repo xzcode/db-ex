@@ -31,7 +31,7 @@ interface LiveSession {
   transport: ConnectionTransport
   controller?: AbortController
 }
-const ACTIONS = new Set(['mysql.query', 'mysql.browse', 'mysql.structure', 'mysql.inspect', 'mysql.insert', 'mysql.update', 'mysql.delete', 'mysql.import', 'mysql.begin', 'mysql.commit', 'mysql.rollback', 'mongo.find', 'mongo.count', 'mongo.aggregate', 'mongo.insert', 'mongo.replace', 'mongo.delete', 'mongo.indexes', 'mongo.inspect', 'mongo.createIndex', 'mongo.dropIndex', 'redis.scan', 'redis.get', 'redis.inspect', 'redis.set', 'redis.mutate', 'redis.ttl', 'redis.delete', 'redis.command', 'redis.nodes'])
+const ACTIONS = new Set(['mysql.query', 'mysql.createDatabase', 'mysql.dropDatabase', 'mysql.browse', 'mysql.structure', 'mysql.inspect', 'mysql.insert', 'mysql.update', 'mysql.delete', 'mysql.import', 'mysql.begin', 'mysql.commit', 'mysql.rollback', 'mongo.find', 'mongo.createDatabase', 'mongo.dropDatabase', 'mongo.count', 'mongo.aggregate', 'mongo.insert', 'mongo.replace', 'mongo.delete', 'mongo.indexes', 'mongo.inspect', 'mongo.createIndex', 'mongo.dropIndex', 'redis.scan', 'redis.get', 'redis.inspect', 'redis.set', 'redis.mutate', 'redis.ttl', 'redis.delete', 'redis.command', 'redis.nodes'])
 async function certificate(path?: string): Promise<Buffer | undefined> {
   if (!path) return undefined
   const info = await stat(path)
@@ -234,7 +234,7 @@ export class SessionManager {
     return this.guard(id, async ({ driver }, context) => {
       if (driver.kind === 'mysql') {
         const data = await driver.operations.execute({ action: 'mysql.query', sql: `SHOW FULL TABLES FROM ${quoteIdentifier(database)}` }, context)
-        return data.rows.map(row => { const entity = Object.values(row)[0]; return { id: `table:${database}:${entity}`, label: entity, kind: 'table', database, entity } })
+        return data.rows.map(row => { const [entity, type] = Object.values(row); return { id: `table:${database}:${entity}`, label: entity, kind: type === 'VIEW' ? 'view' : 'table', readOnly: type === 'VIEW', database, entity } })
       }
       if (driver.kind === 'mongodb') {
         if (category === undefined) return mongoCategoryNodes(database)

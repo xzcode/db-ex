@@ -25,7 +25,9 @@ test('MySQL real database: pagination, prepared CRUD, conflicts, transactions an
   const database = name()
   const operations = new MysqlOperations(client)
   try {
-    await client.query(`CREATE DATABASE \`${database}\``)
+    await assert.rejects(operations.execute({action:'mysql.createDatabase',database},read),/READ_ONLY/)
+    await operations.execute({action:'mysql.createDatabase',database},write)
+    await assert.rejects(operations.execute({action:'mysql.dropDatabase',database:'mysql'},write),/PROTECTED_DATABASE/)
     await client.query(`CREATE TABLE \`${database}\`.records (id BIGINT PRIMARY KEY, name VARCHAR(255) COLLATE utf8mb4_general_ci NULL, amount DECIMAL(20,5) NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
     const target = { database, entity: 'records' }
     await operations.execute({ action: 'mysql.insert', ...target, values: { id: '9007199254740993', name: 'original', amount: '123456789012345.12345' } }, write)

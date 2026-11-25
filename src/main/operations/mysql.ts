@@ -2,6 +2,7 @@ import type { Connection } from 'mysql2/promise'
 import type { Connection as CoreConnection, FieldPacket, ResultSetHeader } from 'mysql2'
 import type { MysqlOperation, OperationResult, SqlRow, SqlValue } from '../../shared/types'
 import { checkAborted, databaseError, displayCell, emptyResult, MAX_BYTES, MAX_ROWS, MAX_VALUE_BYTES, page, requireWrite, resourceName, sqlRow, TIMEOUT_MS, type OperationContext } from './common'
+import { validateDatabaseName } from '../../shared/database-admin'
 import { compileMysqlFilter } from '../../shared/browse-filter'
 import { metric, metrics, mysqlFieldType, type ObjectInspection } from '../../shared/object-inspection'
 import { inspectSql, quoteIdentifier } from './sql-policy'
@@ -78,6 +79,13 @@ export class MysqlOperations {
 
   private async run(operation: MysqlOperation, context: OperationContext, signal: AbortSignal): Promise<OperationResult> {
     switch (operation.action) {
+      case 'mysql.createDatabase': case 'mysql.dropDatabase': {
+        requireWrite(context)
+        if (this.transaction) throw new Error('TRANSACTION_ACTIVE: 当前已有未完成事务')
+        const database = quoteIdentifier(validateDatabaseName('mysql', operation.database))
+        await this.query((operation.action === 'mysql.createDatabase' ? 'CREATE DATABASE ' : 'DROP DATABASE ') + database, [], signal, 1, false)
+        return emptyResult(operation.action === 'mysql.createDatabase' ? '数据库已创建' : '数据库已删除')
+      }
       case 'mysql.query': return this.executeSql(operation, context, signal)
       case 'mysql.browse': return this.browse(operation, signal)
       case 'mysql.inspect': return this.inspectObject(operation.database, operation.entity, signal)
