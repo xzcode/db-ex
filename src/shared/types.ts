@@ -34,7 +34,9 @@ export interface TlsOptions {
   servername?: string
 }
 export interface Endpoint { host: string; port: number }
-export interface ConnectionConfig {
+export interface ConnectionAppearance { color?: string; group?: string }
+export interface ConnectionAppearancePatch { color?: string | null; group?: string | null }
+export interface ConnectionConfig extends ConnectionAppearance {
   id?: string
   name: string
   kind: DatabaseKind
@@ -62,7 +64,7 @@ export interface ConnectionConfig {
   mongoTopology?: 'auto' | 'direct' | 'discover'
   connectTimeoutMs?: number
 }
-export interface SavedConnection {
+export interface SavedConnection extends ConnectionAppearance {
   id: string
   name: string
   kind: DatabaseKind
@@ -154,10 +156,13 @@ export interface QuerySnippet {
 }
 export interface FileImport { name: string; text: string; format: 'csv' | 'json' | 'text' }
 export interface SshImportResult { hosts: { name: string; ssh: SshOptions }[]; warnings: string[] }
+export type ConnectionFileKind = 'certificate' | 'private-key'
 export interface DbExAPI {
+  pickConnectionFile(kind: ConnectionFileKind): Promise<string | null>
   getSystemLanguage(): Promise<string>
   setLocale(locale: import('./i18n').Locale): Promise<void>
   listConnections(): Promise<SavedConnection[]>
+  updateConnectionAppearance(id: string, patch: ConnectionAppearancePatch): Promise<SavedConnection>
   saveConnection(config: ConnectionConfig, clearSecrets?: string[]): Promise<SavedConnection>
   editConnection(id: string): Promise<ConnectionDraft>
   deleteConnection(id: string): Promise<void>

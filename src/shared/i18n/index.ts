@@ -1,4 +1,5 @@
 import { en } from './catalog-en'
+import { connectionCatalogs } from './catalog-connection'
 import zh_TW from './catalog-zh-TW.json'
 import ja from './catalog-ja.json'
 import ko from './catalog-ko.json'
@@ -107,7 +108,19 @@ export function resolveLocale(preference: LanguagePreference, systemLanguage: st
   return isLocale(base) ? base : 'en'
 }
 export const catalogs: Readonly<Record<Locale, Readonly<Record<string, string>>>> = {
-  'zh-CN': {}, 'zh-TW': zh_TW, en, ja, ko, de, fr, es, 'pt-BR': pt_BR, ru, it, ar, hi, id
+  'zh-CN': {}, en,
+  'zh-TW': { ...zh_TW, ...connectionCatalogs['zh-TW'] },
+  'ja': { ...ja, ...connectionCatalogs['ja'] },
+  'ko': { ...ko, ...connectionCatalogs['ko'] },
+  'de': { ...de, ...connectionCatalogs['de'] },
+  'fr': { ...fr, ...connectionCatalogs['fr'] },
+  'es': { ...es, ...connectionCatalogs['es'] },
+  'pt-BR': { ...pt_BR, ...connectionCatalogs['pt-BR'] },
+  'ru': { ...ru, ...connectionCatalogs['ru'] },
+  'it': { ...it, ...connectionCatalogs['it'] },
+  'ar': { ...ar, ...connectionCatalogs['ar'] },
+  'hi': { ...hi, ...connectionCatalogs['hi'] },
+  'id': { ...id, ...connectionCatalogs['id'] }
 }
 export function translate(locale: Locale, key: string, values: readonly unknown[] = []): string {
   const catalog = catalogs[locale]

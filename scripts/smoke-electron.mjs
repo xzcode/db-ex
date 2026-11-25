@@ -32,6 +32,20 @@ application = await electron.launch({
   assert.equal(preferences.sandbox, true)
   assert.equal(preferences.contextIsolation, true)
   assert.equal(preferences.nodeIntegration, false)
+  // Exercise the real encrypted store and metadata-only bridge before fixture handlers.
+  const profile = await page.evaluate(async () => {
+    const saved = await window.dbex.saveConnection({ name: 'Appearance smoke', kind: 'mysql', environment: 'development', host: 'localhost', port: 3306, username: 'test', password: 'synthetic-smoke-password', ssh: { enabled: false }, tls: { enabled: false } })
+    const updated = await window.dbex.updateConnectionAppearance(saved.id, { color: '#123abc', group: 'Smoke Group' })
+    const draft = await window.dbex.editConnection(saved.id)
+    return { saved, updated, draft }
+  })
+  assert.equal(profile.updated.color, '#123abc')
+  assert.equal(profile.updated.group, 'Smoke Group')
+  assert(profile.draft.secretFields.includes('password'))
+  assert.equal(profile.draft.config.password, undefined)
+  await page.reload()
+  await page.waitForFunction(() => document.querySelector('[data-color="#123abc"]'))
+  await page.evaluate(id => window.dbex.deleteConnection(id), profile.saved.id)
   const pageErrors = []
   page.on('pageerror', error => pageErrors.push(error.message))
   // Only test handlers are replaced, in this smoke process. Shipped application code has no mocks.

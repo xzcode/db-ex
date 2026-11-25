@@ -75,12 +75,21 @@ async function saveText(win: BrowserWindow, name: string, content: string, forma
   return true
 }
 function registerIpc(): void {
+  ipcMain.handle('connections:pick-file', handler(async (win, kind: unknown) => {
+    if (kind !== 'certificate' && kind !== 'private-key') throw new Error('INVALID_FILE_KIND')
+    const all = { name: tr('所有文件'), extensions: ['*'] }
+    const answer = await dialog.showOpenDialog(win, { title: tr(kind === 'certificate' ? '客户端证书 PEM 路径' : '私钥文件'),
+      properties: ['openFile'], filters: kind === 'certificate' ? [{ name: 'PEM / CRT / CER', extensions: ['pem', 'crt', 'cer'] }, all] : [all] })
+    return answer.canceled ? null : answer.filePaths[0] || null
+  }))
+
   ipcMain.handle('preferences:system-language', handler(() => getSystemLanguage()))
   ipcMain.handle('preferences:locale', handler((_win, value: unknown) => {
     if (!isLocale(value)) throw new Error('INVALID_LOCALE')
     currentLocale = value
   }))
   ipcMain.handle('connections:list', handler(() => store.list()))
+  ipcMain.handle('connections:appearance', handler((_win, id: string, patch: unknown) => store.updateAppearance(id, patch)))
   ipcMain.handle('connections:edit', handler((_win, id: string) => store.edit(id)))
   ipcMain.handle('connections:save', handler((_win, config: ConnectionConfig, clearSecrets?: string[]) => store.save(config, clearSecrets)))
   ipcMain.handle('connections:delete', handler(async (_win, id: string) => { validateId(id); await sessions.disconnectForConnection(id); await store.delete(id) }))

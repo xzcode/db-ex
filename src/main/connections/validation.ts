@@ -1,4 +1,5 @@
 import { isIP } from 'node:net'
+import { normalizeAppearance } from '../../shared/connection-appearance'
 import type { ConnectionConfig, Endpoint, ProxyOptions, SshOptions, TlsOptions } from '../../shared/types'
 
 function object(value: unknown, label: string): Record<string, unknown> {
@@ -130,7 +131,7 @@ export function validateConnection(value: unknown, allowMissingSecrets = false):
   if (!allowMissingSecrets && kind === 'mysql' && tlsOptions.enabled && isIP(tlsOptions.servername || target.host)) {
     throw new Error('TLS_IDENTITY_REQUIRED: MySQL TLS 连接请填写证书中的 DNS 名称（TLS / SSL → 证书主机名）；当前驱动不支持可靠校验仅有 IP 身份的证书')
   }
-  return { id, name, kind, environment: v.environment as ConnectionConfig['environment'], ...target,
+  return { id, name, kind, environment: v.environment as ConnectionConfig['environment'], ...target, ...normalizeAppearance(v),
     username: text(v.username, '数据库用户名', 512), password: text(v.password, '数据库密码', 8192),
     database: text(v.database, '数据库名称', 200), authSource: text(v.authSource, '认证数据库', 200), redisDb, uri,
     ssh: ssh(v.ssh, false, allowMissingSecrets), tls: tlsOptions, proxy: proxy(v.proxy), redisMode: redisMode as ConnectionConfig['redisMode'], nodes,
