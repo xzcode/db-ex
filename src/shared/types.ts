@@ -190,6 +190,7 @@ export interface FileImport { name: string; text: string; format: 'csv' | 'json'
 export interface SshImportResult { hosts: { name: string; ssh: SshOptions }[]; warnings: string[] }
 export type ConnectionFileKind = 'certificate' | 'private-key' | 'sqlite' | 'sqlite-create'
 export interface DbExAPI {
+  readonly windowChrome:import('./window-chrome').WindowChrome
   getNativePreferences():Promise<import('./preferences').NativePreferences>
   saveNativePreferences(value:import('./preferences').NativePreferences):Promise<import('./preferences').NativePreferences>
   pickTool(name:import('./preferences').ToolName):Promise<string|null>

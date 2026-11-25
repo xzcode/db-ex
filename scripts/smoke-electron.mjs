@@ -32,6 +32,24 @@ application = await electron.launch({
   assert.equal(preferences.sandbox, true)
   assert.equal(preferences.contextIsolation, true)
   assert.equal(preferences.nodeIntegration, false)
+  // Real desktop chrome contract: macOS has native traffic-light placement;
+  // Windows and Linux retain the native frame and do not reserve that space.
+  const expectedChrome=process.platform==='darwin'?'mac-native-controls':'native'
+  await page.waitForFunction(expected=>document.documentElement.dataset.windowChrome===expected,expectedChrome)
+  if(process.platform==='darwin'){
+    const nativeButtons=await application.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].getWindowButtonPosition())
+    assert.deepEqual(nativeButtons,{x:16,y:22})
+    const chrome=await page.locator('.topbar').evaluate(el=>{
+      const css=node=>{const style=getComputedStyle(node);return style.getPropertyValue('app-region')||style.getPropertyValue('-webkit-app-region')}
+      return {padding:getComputedStyle(el).paddingLeft,drag:css(el),button:css(el.querySelector('.preferences-button')),brand:el.querySelector('.brand').getBoundingClientRect().left-el.getBoundingClientRect().left}
+    })
+    assert.equal(chrome.padding,'100px')
+    assert.equal(chrome.drag,'drag')
+    assert.equal(chrome.button,'no-drag')
+    assert(chrome.brand>=100)
+  }else{
+    assert.equal(await page.locator('.topbar').evaluate(el=>getComputedStyle(el).paddingLeft),'18px')
+  }
   // Exercise the real encrypted store and metadata-only bridge before fixture handlers.
   const profile = await page.evaluate(async () => {
     const saved = await window.dbex.saveConnection({ name: 'Appearance smoke', kind: 'mysql', host: 'localhost', port: 3306, username: 'test', password: 'synthetic-smoke-password', ssh: { enabled: false }, tls: { enabled: false } })

@@ -1,7 +1,9 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { DbExAPI } from '../shared/types'
+import { windowChromeForPlatform } from '../shared/window-chrome'
 // Every bridge method is explicit. Renderer receives no filesystem, raw IPC or driver handles.
 const api: DbExAPI = {
+  windowChrome:windowChromeForPlatform(process.platform),
   getNativePreferences:()=>ipcRenderer.invoke('preferences:native-get'),
   saveNativePreferences:value=>ipcRenderer.invoke('preferences:native-save',value),
   pickTool:name=>ipcRenderer.invoke('preferences:pick-tool',name),

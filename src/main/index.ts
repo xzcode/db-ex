@@ -1,4 +1,5 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, shell, utilityProcess, session as electronSession } from 'electron'
+import { windowChromeOptions } from '../shared/window-chrome'
 import { isLocale, resolveLocale, translate, localizeMessage, type Locale } from '../shared/i18n'
 import { constants } from 'node:fs'
 import { join, basename, extname, dirname } from 'node:path'
@@ -251,6 +252,9 @@ function registerIpc(): void {
 function createWindow(): void {
   const win = new BrowserWindow({ title: 'DB EX', width: 1440, height: 900, minWidth: 1040, minHeight: 640,
     backgroundColor: '#111821', show: false,
+    // On macOS retain AppKit's real traffic-light controls and extend web content
+    // into the old title bar. Other operating systems keep their native frames.
+    ...windowChromeOptions(process.platform),
     webPreferences: { preload: join(__dirname, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, spellcheck: false },
   })
   const contentsId = win.webContents.id

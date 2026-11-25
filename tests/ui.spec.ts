@@ -27,6 +27,7 @@ async function installBridge(page: Page) {
     const grid = (values: Record<string, string>[]) => ({ columns: Object.keys(values[0] || {}), rows: values })
     ;(window as any).__dbexCalls = calls
     ;(window as any).dbex = {
+      windowChrome:localStorage.getItem('mock.window-chrome')==='mac-native-controls'?'mac-native-controls':'native',
       async getNativePreferences(){return JSON.parse(localStorage.getItem('mock.native-preferences')||'{"tools":{},"diagnostics":false}')},
       async saveNativePreferences(value:any){localStorage.setItem('mock.native-preferences',JSON.stringify(value));return value},
       async logPath(){return '/mock/logs'},async openLogs(){calls.push({action:'openLogs'})},
@@ -1005,4 +1006,38 @@ test('named SQL query objects persist parameters, multiple editor tabs and catal
  await expect(editor.getByLabel('SQL 参数 JSON 数组')).toHaveValue('["9223372036854775807"]')
  await expect(editor.locator('.view-lines')).toContainText('SELECT')
  expect(await page.evaluate(()=> (window as any).__dbexCalls.filter((c:any)=>c.action==='mysql.query').length)).toBe(0)
+})
+
+
+test('macOS integrated title bar reserves native controls and keeps preferences clickable',async({page})=>{
+ const root=page.locator('html'),bar=page.locator('.topbar'),settings=bar.getByRole('button',{name:'偏好设置',exact:true})
+ await expect(root).toHaveAttribute('data-window-chrome','native')
+ await expect(bar).toHaveCSS('padding-left','18px')
+ await page.evaluate(()=>localStorage.setItem('mock.window-chrome','mac-native-controls'))
+ await page.reload()
+ await expect(root).toHaveAttribute('data-window-chrome','mac-native-controls')
+ await expect(bar).toHaveCSS('padding-left','100px')
+ const regions=await bar.evaluate(el=>{
+   const css=(node:Element,pseudo?:string)=>{const style=getComputedStyle(node,pseudo);return style.getPropertyValue('app-region')||style.getPropertyValue('-webkit-app-region')}
+   return {bar:css(el),controls:css(el,'::before'),settings:css(el.querySelector('.preferences-button')!)}
+ })
+ expect(regions).toEqual({bar:'drag',controls:'no-drag',settings:'no-drag'})
+ await expect(bar.locator('.top-actions > *')).toHaveCount(1)
+ const layout=await bar.evaluate(el=>({brand:el.querySelector('.brand')!.getBoundingClientRect().left,bar:el.getBoundingClientRect().left}))
+ expect(layout.brand-layout.bar).toBeGreaterThanOrEqual(100)
+ await settings.click()
+ const prefs=page.getByRole('dialog',{name:'偏好设置'})
+ await prefs.locator('[data-preference="theme"]').selectOption('light')
+ await prefs.locator('[data-action="save-preferences"]').click()
+ await expect(root).toHaveAttribute('data-theme','light')
+ await expect(bar).toHaveCSS('background-color','rgb(255, 255, 255)')
+ await settings.click()
+ await prefs.locator('[data-preference="theme"]').selectOption('dark')
+ await prefs.locator('[data-action="save-preferences"]').click()
+ await expect(bar).toHaveCSS('background-color','rgb(29, 34, 43)')
+ // Physical left reservation must remain valid when locale direction is RTL.
+ await page.evaluate(()=>document.documentElement.dir='rtl')
+ await expect(bar).toHaveCSS('direction','ltr')
+ await settings.click()
+ await expect(prefs).toBeVisible()
 })
