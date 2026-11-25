@@ -889,5 +889,18 @@ export const en: Readonly<Record<string, string>> = {
   "自定义": "Custom",
   "自定义支持 BSON 构造语法，不执行 JavaScript。": "Custom values support BSON constructor syntax; JavaScript is not executed.",
   "请输入 UTC 日期时间。": "Enter the date and time in UTC.",
-  "当前实际类型": "Actual value type"
+  "当前实际类型": "Actual value type",
+  "函数": "Functions",
+  "聚合管道": "Aggregation pipelines",
+  "GridFS 存储桶": "GridFS buckets",
+  "只读对象": "Read-only object",
+  "MapReduce 已弃用": "MapReduce is deprecated",
+  "请使用聚合管道替代；DB EX 不执行服务器端 JavaScript。": "Use aggregation pipelines instead; DB EX does not execute server-side JavaScript.",
+  "GridFS 文件元数据浏览；暂不支持文件上传、下载和删除。": "Browse GridFS file metadata; file upload, download and deletion are not supported yet.",
+  "仅查看已存储的函数，不执行服务器端 JavaScript。": "View stored functions only; server-side JavaScript is not executed.",
+  "已保存对象": "Saved objects",
+  "目标集合或视图": "Target collection or view",
+  "请选择目标集合或视图。": "Select a target collection or view.",
+  "名称": "Name",
+  "保存成功": "Saved successfully"
 }

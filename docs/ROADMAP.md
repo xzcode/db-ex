@@ -123,3 +123,5 @@ MySQL/MongoDB 集成测试用 `DB_EX_INTEGRATION=1` 显式开启，连接 `MYSQL
 ## v0.5.7 对象详情侧栏
 
 统一对象信息、DDL/Key 检查命令、类型配色三页，支持真实只读元数据、复制及导出。MySQL、MongoDB、Redis 类型独立识别与配色；所有新增界面覆盖 14 种语言。
+
+- MongoDB 对象分类与本地查询/聚合管道管理：集合、视图、索引、旧函数只读查看、GridFS 文件元数据和 MapReduce 弃用说明。后续：集合/视图 DDL 管理、GridFS 文件上传下载删除、对象搜索及大量对象的游标分页。

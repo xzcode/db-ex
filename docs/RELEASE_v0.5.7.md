@@ -14,3 +14,5 @@
 - Simplify MongoDB filter value types to Text, Number, Date and time, Object ID and Custom. Numeric suggestions preserve their BSON type, manual numbers choose bounded numeric representations automatically, and Custom supports explicit BSON constructors. Fix a previous TypeScript error caused by calling the filter field handler on a sort rule.
 
 - MongoDB filter inputs automatically recognize valid 24-character hexadecimal ObjectId text, preserve explicit type choices and actual suggested String values, and revert automatic detection when a value ceases to match. Detection works inline and in the value dialog without database access.
+
+- Categorized MongoDB database explorer: collections, views, stored functions, per-collection indexes, deprecated MapReduce notice, locally saved aggregation pipelines, GridFS bucket metadata and saved queries. Existing data/index/inspection views are reused. Views and stored function/GridFS metadata are read-only; GridFS upload/download/delete and server object DDL editing are not included. Saved objects use encrypted local snippet storage and existing bounded read operations.

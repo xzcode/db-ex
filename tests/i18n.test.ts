@@ -81,3 +81,5 @@ test('advanced visual filter and suggested value controls are localized', () => 
 test('friendly MongoDB value types are localized', () => {
   for (const {locale} of languages) if(locale!=='zh-CN') for(const key of ["文本","数字","日期时间","对象 ID","自定义","自定义支持 BSON 构造语法，不执行 JavaScript。","请输入 UTC 日期时间。","当前实际类型"]) assert.ok(Object.hasOwn(catalogs[locale],key),locale+': '+key)
 })
+
+test('MongoDB object tree and saved object editors are localized', () => { for (const {locale} of languages) if (locale !== 'zh-CN') for (const key of ["函数","聚合管道","GridFS 存储桶","只读对象","MapReduce 已弃用","请使用聚合管道替代；DB EX 不执行服务器端 JavaScript。","GridFS 文件元数据浏览；暂不支持文件上传、下载和删除。","仅查看已存储的函数，不执行服务器端 JavaScript。","已保存对象","目标集合或视图","请选择目标集合或视图。","名称","保存成功","操作失败"]) assert.ok(Object.hasOwn(catalogs[locale],key),locale+': '+key) })

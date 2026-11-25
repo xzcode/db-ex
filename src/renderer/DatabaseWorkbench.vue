@@ -484,6 +484,7 @@ async function removeSnippet(item: QuerySnippet) {
   catch (reason) { historyError.value = messageOf(reason) }
 }
 function useSnippet(item: QuerySnippet) {
+  if (isMongo.value && item.entity && item.entity!==entity.value.entity) { historyError.value='请选择目标集合或视图。'; return }
   if (isMysql.value) { sql.value = item.text; tab.value = 'query' } else { pipeline.value = item.text; tab.value = 'aggregation' }
   historyOpen.value = false
 }

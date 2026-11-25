@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { t, localize } from '../i18n'
 import type { SessionInfo, QuerySnippet, MongoOperation, OperationResult, ExplorerNode } from '../../shared/types'
 import CodeEditor from './CodeEditor.vue'
@@ -97,7 +97,8 @@ async function runQuery(nextOffset=0,paging=false){
     result.value=next;applied.value=op.action==='mongo.find'?op:undefined;offset.value=op.action==='mongo.find'?op.offset||0:0
   }catch(reason){if(!disposed)fail(reason)}
 }
-onMounted(()=>{void refresh()})
+let initialized=false
+watch(()=>props.busy,value=>{if(!value&&!initialized){initialized=true;void refresh()}},{immediate:true})
 onBeforeUnmount(()=>{disposed=true})
 </script>
 <template>
