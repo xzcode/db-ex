@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { databaseCapabilities } from '../shared/database-capabilities'
 import { t, localize, languages, languagePreference, setLanguage } from './i18n'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import ConnectionDialog from './ConnectionDialog.vue'
@@ -89,7 +90,7 @@ async function restorePosition(session:SessionInfo,position:WorkspacePosition|un
   const root=state.roots.find(n=>n.database===desired.database)
   if(!root)return
   if(desired.kind==='database'||desired.kind==='keyspace'){state.selected=root;return}
-  if(desired.kind==='database-query'&&(session.kind==='mysql'||session.kind==='sqlite')){
+  if(desired.kind==='database-query'&&databaseCapabilities(session.kind).editor==='query'){
     state.selected={id:JSON.stringify(['restored-query',desired.database]),kind:'database-query',label:'新建查询',database:desired.database};return
   }
   const children=await window.dbex.children(session.id,root.database||root.label)
@@ -177,7 +178,7 @@ function closeDbMenu(){dbMenu.value=undefined}
 function outsideMenu(event:PointerEvent){if(dbMenu.value&&!dbMenuHost.value?.contains(event.target as Node))closeDbMenu()}
 function menuKey(event:KeyboardEvent){if(event.key==='Escape')closeDbMenu()}
 async function showDbMenu(event:MouseEvent|KeyboardEvent,node?:ExplorerNode){
-  if(!activeSession.value||activeSession.value.kind==='redis'||busy.value||currentExplorer.value?.busy||dbDialog.value)return
+  if(!activeSession.value||databaseCapabilities(activeSession.value.kind).browser==='keyspace'||busy.value||currentExplorer.value?.busy||dbDialog.value)return
   if(node&&node.kind!=='database')return
   event.preventDefault();event.stopPropagation()
   const rect=(event.currentTarget as HTMLElement).getBoundingClientRect()
@@ -205,8 +206,8 @@ function dbMenuAction(action:DatabaseMode|'close'|'query'|'refresh'|'native'|'sq
   if(!menu||!session||current.value!==session.id)return
   const state=explorers[session.id],database=menu.node?.database||''
   if(!state)return
-  if(action==='sqlite-backup'){if(session.kind==='sqlite')void task(async()=>{if(await window.dbex.backupSqlite(session.id))notice.value='操作已完成'});return}
-  if(action==='native'){if(database&&(session.kind==='mysql'||session.kind==='mongodb'))nativeDialog.value={sessionId:session.id,database};return}
+  if(action==='sqlite-backup'){if(databaseCapabilities(session.kind).backup==='file')void task(async()=>{if(await window.dbex.backupSqlite(session.id))notice.value='操作已完成'});return}
+  if(action==='native'){if(database&&databaseCapabilities(session.kind).backup==='native-tools')nativeDialog.value={sessionId:session.id,database};return}
   if(action==='refresh'){void refreshRoots(session.id);return}
   if(action==='close'){clearDatabase(state,database);return}
   if(action==='query'){
@@ -214,7 +215,7 @@ function dbMenuAction(action:DatabaseMode|'close'|'query'|'refresh'|'native'|'sq
     state.selected=session.kind==='mongodb'?{...mongoCategoryNodes(database).find(item=>item.category==='queries')!,id:JSON.stringify(['new-query',database,++querySerial])}:{id:JSON.stringify(['new-query',database,++querySerial]),label:'新建查询',database,kind:'database-query'}
     return
   }
-  if(session.kind==='sqlite'&&(action==='create'||action==='drop'))return
+  if(!databaseCapabilities(session.kind).databaseAdministration&&(action==='create'||action==='drop'))return
   if(action!=='create'&&!database)return
   if(action==='drop'&&(protectedDatabase(session.kind,database)||session.transaction))return
   dbDialog.value={sessionId:session.id,database,mode:action}
@@ -320,9 +321,9 @@ onBeforeUnmount(() => { stopResize?.(); window.removeEventListener('pointerdown'
     <Teleport to="body"><div v-if="dbMenu" ref="dbMenuHost" class="connection-context-menu database-context-menu" :style="{left:dbMenu.x+'px',top:dbMenu.y+'px'}" @contextmenu.prevent @pointerdown.stop>
       <div class="context-title"><strong>{{ dbMenu.node?.label || dbMenuSession?.name }}</strong></div>
       <button v-if="dbMenu.node" class="context-action" @click="dbMenuAction('close')">{{ t('关闭数据库') }}</button>
-      <button v-if="dbMenuSession?.kind!=='sqlite'" class="context-action" :disabled="dbMenuSession?.transaction" @click="dbMenuAction('create')">{{ t('新建数据库') }}…</button>
-      <button v-if="dbMenu.node && dbMenuSession?.kind!=='sqlite'" class="context-action danger" :disabled="protectedDatabase(dbMenuSession?.kind || 'mongodb',dbMenu.node.database || '') || dbMenuSession?.transaction" @click="dbMenuAction('drop')">{{ t('删除数据库') }}…</button>
-      <template v-if="dbMenu.node"><div class="context-menu-divider"></div><button class="context-action" @click="dbMenuAction('query')">{{ t('新建查询') }}</button><button class="context-action" @click="dbMenuAction('search')">{{ t('查找数据库对象') }}…</button><div class="context-menu-divider"></div><button v-if="dbMenuSession?.kind==='sqlite'" class="context-action" :disabled="dbMenuSession.transaction" @click="dbMenuAction('sqlite-backup')">{{ t('备份数据库') }}…</button><button v-if="dbMenuSession?.kind==='mysql'||dbMenuSession?.kind==='mongodb'" class="context-action" @click="dbMenuAction('native')">{{ t('外部工具') }}…</button><button class="context-action" @click="dbMenuAction('schema')">{{ t('导出结构脚本') }}…</button><button class="context-action" @click="dbMenuAction('import')">{{ t('导入数据') }}…</button><button class="context-action" @click="dbMenuAction('export')">{{ t('导出数据') }}…</button></template>
+      <button v-if="dbMenuSession && databaseCapabilities(dbMenuSession.kind).databaseAdministration" class="context-action" :disabled="dbMenuSession?.transaction" @click="dbMenuAction('create')">{{ t('新建数据库') }}…</button>
+      <button v-if="dbMenu.node && dbMenuSession && databaseCapabilities(dbMenuSession.kind).databaseAdministration" class="context-action danger" :disabled="protectedDatabase(dbMenuSession?.kind || 'mongodb',dbMenu.node.database || '') || dbMenuSession?.transaction" @click="dbMenuAction('drop')">{{ t('删除数据库') }}…</button>
+      <template v-if="dbMenu.node"><div class="context-menu-divider"></div><button class="context-action" @click="dbMenuAction('query')">{{ t('新建查询') }}</button><button class="context-action" @click="dbMenuAction('search')">{{ t('查找数据库对象') }}…</button><div class="context-menu-divider"></div><button v-if="dbMenuSession && databaseCapabilities(dbMenuSession.kind).backup==='file'" class="context-action" :disabled="dbMenuSession.transaction" @click="dbMenuAction('sqlite-backup')">{{ t('备份数据库') }}…</button><button v-if="dbMenuSession && databaseCapabilities(dbMenuSession.kind).backup==='native-tools'" class="context-action" @click="dbMenuAction('native')">{{ t('外部工具') }}…</button><button class="context-action" @click="dbMenuAction('schema')">{{ t('导出结构脚本') }}…</button><button class="context-action" @click="dbMenuAction('import')">{{ t('导入数据') }}…</button><button class="context-action" @click="dbMenuAction('export')">{{ t('导出数据') }}…</button></template>
       <div class="context-menu-divider"></div><button class="context-action" @click="dbMenuAction('refresh')">{{ t('刷新') }}</button>
     </div></Teleport>
     <NativeToolDialog v-if="nativeDialog&&nativeSession" :session="nativeSession" :database="nativeDialog.database" @close="nativeDialog=undefined" @session="updateSession" @disconnect="removeSession(nativeSession.id);nativeDialog=undefined" />

@@ -1,3 +1,4 @@
+import { databaseCapabilities } from './database-capabilities'
 import { mongoCategory, type MongoCategory } from './mongo-catalog'
 import type { DatabaseKind, ExplorerNode } from './types'
 export const workbenchTabs=['data','query','aggregation','structure','console'] as const
@@ -10,10 +11,9 @@ const isId=(v:unknown):v is string=>typeof v==='string'&&/^[a-zA-Z0-9_-]{1,128}$
 const name=(v:unknown):v is string=>typeof v==='string'&&v.length>0&&v.length<=200&&!v.includes('\0')
 function object(v:unknown):Record<string,unknown>{return v&&typeof v==='object'&&!Array.isArray(v)?v as Record<string,unknown>:{}}
 export function validWorkbenchTab(kind:DatabaseKind,tab:unknown,readOnly=false):WorkbenchTab{
-  if(tab==='query'&&(kind==='mysql'||kind==='sqlite'))return 'query'
-  if(tab==='aggregation'&&kind==='mongodb')return 'aggregation'
-  if(tab==='console'&&kind==='redis')return 'console'
-  if(tab==='structure'&&kind!=='redis'&&!readOnly)return 'structure'
+  const capabilities=databaseCapabilities(kind)
+  if(tab===capabilities.editor)return capabilities.editor
+  if(tab==='structure'&&capabilities.browser!=='keyspace'&&!readOnly)return 'structure'
   return 'data'
 }
 export function workspacePosition(node:ExplorerNode|undefined,tab:unknown):WorkspacePosition{

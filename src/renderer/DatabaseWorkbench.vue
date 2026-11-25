@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { databaseCapabilities } from '../shared/database-capabilities'
 import { t, localize, locale } from './i18n'
 import { preferences } from './preferences'
 import { validWorkbenchTab, type WorkbenchTab } from '../shared/workspace-recovery'
@@ -55,7 +56,7 @@ const sqlQuerySummary = ref('')
 const sqlQueryParameters = ref<SqlValue[]>([])
 const filterError = ref('')
 const mongoQuery = ref('')
-const filtersActive = computed(() => (props.session.kind === 'mysql'||props.session.kind==='sqlite') ? appliedMysql.value.groups.length > 0 || appliedMysql.value.sort.length > 0 : [appliedMongo.value.filter, appliedMongo.value.projection, appliedMongo.value.sort].some(value => { try { return Object.keys(JSON.parse(value || '{}')).length > 0 } catch { return true } }))
+const filtersActive = computed(() => (databaseCapabilities(props.session.kind).browser==='relational') ? appliedMysql.value.groups.length > 0 || appliedMysql.value.sort.length > 0 : [appliedMongo.value.filter, appliedMongo.value.projection, appliedMongo.value.sort].some(value => { try { return Object.keys(JSON.parse(value || '{}')).length > 0 } catch { return true } }))
 const pipeline = ref('[\n  { "$limit": 100 }\n]')
 const primaryKeys = ref<string[]>([])
 const structure = ref<OperationResult | null>(null)
@@ -101,16 +102,17 @@ const editableRows = ref(false)
 let lastQuery: { sql: string; parameters: SqlValue[]; database?: string } | undefined
 const entity = computed(() => ({ database: props.node?.database || '', entity: props.node?.entity || '' }))
 const hasEntity = computed(() => !!entity.value.database && !!entity.value.entity)
-const isMysql = computed(() => (props.session.kind === 'mysql'||props.session.kind==='sqlite'))
-const isMongo = computed(() => props.session.kind === 'mongodb')
-const isRedis = computed(() => props.session.kind === 'redis')
+const capabilities=computed(()=>databaseCapabilities(props.session.kind))
+const isMysql=computed(()=>capabilities.value.browser==='relational')
+const isMongo=computed(()=>capabilities.value.browser==='document')
+const isRedis=computed(()=>capabilities.value.browser==='keyspace')
 const libraryKind = computed(() => props.node?.category === 'queries' ? 'query' : props.node?.category === 'pipelines' ? 'aggregation' : undefined)
 const legacyMapReduce = computed(() => props.node?.category === 'mapReduce')
 const canWrite = computed(() => props.session.writable && !props.node?.readOnly && props.node?.kind !== 'mongo-category')
 const inspectorName = computed(() => isRedis.value ? (tab.value === 'data' ? result.value?.rows[selectedRow.value]?.key || (redisDetail.value ? redisKey.value : '') : '') : entity.value.entity)
 const inspectionKey = computed(() => JSON.stringify([props.session.id, props.session.kind, entity.value.database, inspectorName.value]))
 const visibleSnippets = computed(() => snippets.value.filter(item => item.kind === props.session.kind && (!historyOnlyFavorites.value || item.favorite) && (!isMongo.value || item.mongoKind !== 'query')))
-const browseFields = computed(() => (props.session.kind === 'mysql'||props.session.kind==='sqlite') ? (structure.value?.rows || []).map(row => String(row.name || row.Field || '')).filter(Boolean) : result.value?.columns || [])
+const browseFields = computed(() => (databaseCapabilities(props.session.kind).browser==='relational') ? (structure.value?.rows || []).map(row => String(row.name || row.Field || '')).filter(Boolean) : result.value?.columns || [])
 const canEditRow = computed(() => !props.node?.readOnly && editableRows.value && selectedRow.value >= 0 && (isMongo.value ? !!result.value?.documents?.[selectedRow.value] : !!result.value?.rawRows?.[selectedRow.value] && primaryKeys.value.length > 0))
 const mutationCommands: Record<RedisValueType, string[]> = {
   string: ['APPEND', 'SETRANGE', 'INCRBY'], hash: ['HSET', 'HDEL', 'HINCRBY'],
@@ -661,7 +663,7 @@ onBeforeUnmount(() => { disposed = true; generation++; if (inspectionTimer) clea
     <div v-if="busy" class="operation-progress"><span class="progress-indicator"></span> {{ t('正在执行') }} <button v-if="tab !== 'data' || isRedis || session.kind==='sqlite'" class="btn secondary small" @click="cancel">{{ t('取消并断开') }}</button></div>
 
     <template v-if="isMysql && tab === 'query'">
-      <div class="editor-toolbar"><button class="btn primary" :disabled="busy" @click="runQuery()">{{ t('运行选中 / 全部') }} <kbd>⌘ / Ctrl ↵</kbd></button><label class="inline-field">{{ t('每页') }}<select v-model.number="limit"><option :value="100">100</option><option :value="200">200</option><option :value="500">500</option></select></label><span class="toolbar-spacer"></span><button class="btn secondary" :disabled="busy || !canWrite || session.transaction" @click="transaction('mysql.begin')">{{ t('开始事务') }}</button><button class="btn secondary" :disabled="busy || !session.transaction" @click="transaction('mysql.commit')">{{ t('提交') }}</button><button class="btn secondary" :disabled="busy || !session.transaction" @click="transaction('mysql.rollback')">{{ t('回滚') }}</button></div>
+      <div class="editor-toolbar"><button class="btn primary" :disabled="busy" @click="runQuery()">{{ t('运行选中 / 全部') }} <kbd>⌘ / Ctrl ↵</kbd></button><label class="inline-field">{{ t('每页') }}<select v-model.number="limit"><option :value="100">100</option><option :value="200">200</option><option :value="500">500</option></select></label><span class="toolbar-spacer"></span><button v-if="capabilities.transactions" class="btn secondary" :disabled="busy || !canWrite || session.transaction" @click="transaction('mysql.begin')">{{ t('开始事务') }}</button><button v-if="capabilities.transactions" class="btn secondary" :disabled="busy || !session.transaction" @click="transaction('mysql.commit')">{{ t('提交') }}</button><button v-if="capabilities.transactions" class="btn secondary" :disabled="busy || !session.transaction" @click="transaction('mysql.rollback')">{{ t('回滚') }}</button></div>
       <p v-if="recovery.error.value && tab==='query'" class="compact-help">{{ t(recovery.error.value) }}</p><div v-if="recovery.available.value && tab==='query'" class="recovery-banner"><span>{{ t('发现未恢复的查询草稿') }}</span><button class="btn secondary small" @click="recovery.restore">{{ t('恢复草稿') }}</button><button class="btn secondary small" @click="recovery.dismiss">{{ t('放弃草稿') }}</button></div><div class="query-editor"><CodeEditor ref="sqlEditor" v-model="sql" language="sql" :suggestions="structure?.rows.map(row => row.Field || row.name || '') || []" :table-suggestions="tableSuggestions" @execute="runQuery()" /></div>
       <label class="parameter-line">{{ t('参数') }} <input v-model="parameters" :aria-label="t('SQL 参数 JSON 数组')" placeholder='["value", 123]' spellcheck="false" /><span>{{ t('用 ? 绑定参数；每次仅执行一条 SQL') }}</span></label>
     </template>
@@ -674,7 +676,7 @@ onBeforeUnmount(() => { disposed = true; generation++; if (inspectionTimer) clea
       <p v-if="redisRecovery.error.value" class="compact-help">{{ t(redisRecovery.error.value) }}</p><div v-if="redisRecovery.available.value" class="recovery-banner"><span>{{ t('发现未恢复的查询草稿') }}</span><button class="btn secondary small" @click="redisRecovery.restore">{{ t('恢复草稿') }}</button><button class="btn secondary small" @click="redisRecovery.dismiss">{{ t('放弃草稿') }}</button></div><div class="query-editor"><CodeEditor v-model="redisCommand" completion-kind="redis" language="json" @execute="runRedisCommand" /></div>
     </template>
     <template v-if="tab === 'structure'">
-      <div class="editor-toolbar"><button class="btn secondary" :disabled="busy || !hasEntity" @click="loadStructure">{{ t('刷新结构') }}</button><template v-if="isMongo"><button class="btn secondary" :disabled="busy || !hasEntity || !canWrite" @click="indexDialog = true">{{ t('新建索引') }}</button><button class="btn danger-text" :disabled="busy || !canWrite || selectedRow < 0" @click="dropIndex">{{ t('删除选中索引') }}</button></template><span v-if="isMysql" class="muted-text">{{ t('主键：') }}{{ primaryKeys.join(', ') || t('无（记录修改已禁用）') }}</span></div>
+      <div class="editor-toolbar"><button class="btn secondary" :disabled="busy || !hasEntity" @click="loadStructure">{{ t('刷新结构') }}</button><template v-if="capabilities.graphicalIndexes"><button class="btn secondary" :disabled="busy || !hasEntity || !canWrite" @click="indexDialog = true">{{ t('新建索引') }}</button><button class="btn danger-text" :disabled="busy || !canWrite || selectedRow < 0" @click="dropIndex">{{ t('删除选中索引') }}</button></template><span v-if="isMysql" class="muted-text">{{ t('主键：') }}{{ primaryKeys.join(', ') || t('无（记录修改已禁用）') }}</span></div>
       <ResultGrid v-if="structure" :columns="structure.columns" :rows="structure.rows" :selected="selectedRow" :bson-types="isMongo ? structure.bsonTypes : undefined" :documents="isMongo ? structure.documents : undefined" @select="selectedRow = $event" />
       <div v-else class="empty-state"><strong>{{ t('选择表或集合查看结构') }}</strong><span>{{ t('从左侧资源树选择一个对象。') }}</span></div>
     </template>
