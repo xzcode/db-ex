@@ -159,6 +159,11 @@ export class MysqlOperations {
       } else inspection.infoNote = '部分元数据不可用或无读取权限。'
     } catch (error) { checkAborted(signal); if (this.closed) throw error; inspection.infoNote = '部分元数据不可用或无读取权限。' }
     try {
+      const sizes = await this.query('SELECT (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?) AS column_count, (SELECT COUNT(DISTINCT INDEX_NAME) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?) AS index_count', [database, entity, database, entity], signal, 1)
+      const row = this.records(sizes)[0]
+      if (row) inspection.metrics.push(...metrics(metric('字段数', row.column_count), metric('索引数', row.index_count)))
+    } catch (error) { checkAborted(signal); if (this.closed) throw error; inspection.infoNote = '部分元数据不可用或无读取权限。' }
+    try {
       const ddl = await this.query('SHOW CREATE TABLE ' + target, [], signal, 1)
       const row = this.records(ddl)[0]
       const statement = row?.['Create Table'] ?? row?.['Create View']

@@ -46,6 +46,21 @@ monaco.languages.setLanguageConfiguration('dbex-bson-document', {
   autoClosingPairs: [{ open: '{', close: '}' }, { open: '[', close: ']' }, { open: '(', close: ')' }, { open: '"', close: '"' }],
   surroundingPairs: [{ open: '{', close: '}' }, { open: '[', close: ']' }, { open: '"', close: '"' }],
 })
+if (!monaco.languages.getLanguages().some(language => language.id === 'dbex-mongo-ddl')) {
+  monaco.languages.register({ id: 'dbex-mongo-ddl' })
+  monaco.languages.setMonarchTokensProvider('dbex-mongo-ddl', {
+    tokenizer: { root: [
+      [/\/\/.*$/, 'comment'],
+      [/"(?:[^"\\]|\\.)*"/, 'string'],
+      [/\b(?:db|EJSON|ObjectId|Int32|Long|Double|Decimal128|ISODate|Date|Timestamp|BinData|Regex|MinKey|MaxKey|true|false|null)\b/, 'keyword'],
+      [/\b(?:getSiblingDB|getCollection|createCollection|createIndex|deserialize)\b/, 'type.identifier'],
+      [/-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/, 'number'],
+      [/[{}\[\]()]/, '@brackets'],
+      [/[,:;.]/, 'delimiter'],
+      [/[A-Za-z_$][\w$]*/, 'identifier'],
+    ] }
+  })
+}
 function applyTheme() {
   monaco.editor.setTheme(document.documentElement.dataset.theme === 'light' ? 'vs' : 'vs-dark')
 }

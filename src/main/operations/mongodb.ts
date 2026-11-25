@@ -164,7 +164,7 @@ export class MongoOperations {
         if (inspection.kind !== 'view') {
           try {
             const stats = await db.command({ collStats: entity, scale: 1, indexDetails: false }, options)
-            inspection.metrics = metrics(metric('文档数', stats.count), metric('已固定', stats.capped, 'boolean'), metric('数据大小', stats.size, 'bytes'), metric('对象的平均大小', stats.avgObjSize, 'bytes'), metric('存储大小', stats.storageSize, 'bytes'), metric('索引数', stats.nindexes), metric('索引的总大小', stats.totalIndexSize))
+            inspection.metrics = metrics(metric('文档数', stats.count), metric('已固定', stats.capped ?? (collectionInfo ? collectionInfo.options?.capped === true : undefined), 'boolean'), metric('数据大小', stats.size, 'bytes'), metric('对象的平均大小', stats.avgObjSize, 'bytes'), metric('存储大小', stats.storageSize, 'bytes'), metric('索引数', stats.nindexes), metric('索引的总大小', stats.totalIndexSize))
           } catch { checkAborted(signal); inspection.infoNote = '部分元数据不可用或无读取权限。' }
         }
         if (!collectionInfo) inspection.definitionNote = 'DDL 不可用或超出读取上限。'

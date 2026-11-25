@@ -32,6 +32,13 @@ test('MySQL real database: pagination, prepared CRUD, conflicts, transactions an
     const result = await operations.execute({ action: 'mysql.query', database, sql: 'SELECT * FROM records' }, read)
     assert.equal(result.rawRows?.[0].id, '9007199254740993')
     assert.equal(result.rawRows?.[0].amount, '123456789012345.12345')
+    assert.equal(result.columnTypes?.[result.columns.indexOf('id')], 'BIGINT')
+    assert.equal(result.columnTypes?.[result.columns.indexOf('amount')], 'DECIMAL')
+    const inspected = (await operations.execute({ action: 'mysql.inspect', ...target }, read)).inspection!
+    assert.equal(inspected.kind, 'table')
+    assert.equal(inspected.metrics.find(item => item.label === '存储引擎')?.value, 'InnoDB')
+    assert.equal(inspected.metrics.find(item => item.label === '字段数')?.value, '3')
+    assert.match(inspected.definition || '', /CREATE TABLE.*records/s)
     const original = result.rawRows![0]
     const schema = await operations.execute({ action: 'mysql.structure', ...target }, read)
     assert.deepEqual(schema.primaryKeys, ['id'])
@@ -113,6 +120,14 @@ test('MongoDB real database: BSON exactness, filter, aggregation, indexes and op
     await operations.execute({ action: 'mongo.createIndex', ...target, keys: '{"score":1}', options: '{"name":"score_index","unique":true}' }, write)
     const indexes = await operations.execute({ action: 'mongo.indexes', ...target }, read)
     assert.equal(indexes.documents!.some(text => BSON.EJSON.parse(text).name === 'score_index'), true)
+    const inspected = (await operations.execute({ action: 'mongo.inspect', ...target }, read)).inspection!
+    assert.equal(inspected.kind, 'collection')
+    assert.equal(inspected.metrics.find(item => item.label === '文档数')?.value, '1')
+    assert.equal(inspected.metrics.find(item => item.label === '索引数')?.value, '2')
+    assert.match(inspected.definition || '', /createCollection\("records"/)
+    assert.match(inspected.definition || '', /createIndex/)
+    assert.match(inspected.definition || '', /score_index/)
+    assert.match(inspected.definition || '', /unique/)
     await operations.execute({ action: 'mongo.dropIndex', ...target, name: 'score_index' }, write)
     const latest = await operations.execute({ action: 'mongo.find', ...target, filter: '{}' }, read)
     const projected = await operations.execute({ action: 'mongo.find', ...target, projection: '{"_id":1}' }, read)

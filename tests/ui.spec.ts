@@ -46,14 +46,17 @@ async function installBridge(page: Page) {
         if (op.action === 'mysql.query') {
           if (op.sql.includes('slow_query')) await new Promise(resolve => setTimeout(resolve, 400))
           const values = (window as any).__dbexLargeGrid ? Array.from({ length: 500 }, (_, index) => ({ id: String(index + 1), name: 'User ' + (index + 1), email: 'user' + (index + 1) + '@example.test' })) : id === 'sql2' ? [{ id: '2', name: 'Grace', email: 'grace@example.test' }] : rows
-          return { ...grid(values), rawRows: values, durationMs: 4, transaction: false }
+          return { ...grid(values), rawRows: values, columnTypes: ['BIGINT','VARCHAR','VARCHAR'], nullCells: values.map(() => []), durationMs: 4, transaction: false }
         }
         if (op.action === 'mysql.begin') return { columns: [], rows: [], transaction: true }
         if (op.action === 'mysql.commit' || op.action === 'mysql.rollback') return { columns: [], rows: [], transaction: false }
         if (op.action === 'mongo.find' || op.action === 'mongo.aggregate') return { columns: ['_id', 'name', 'createdAt', 'score', 'nullable', 'nested'], rows: [{ _id: '64b000000000000000000001', name: 'Ada', createdAt: 'date', score: '7', nullable: 'NULL', nested: '{...}' }, { _id: '64b000000000000000000002', name: 'Grace', score: '7', nullable: 'NULL' }, { _id: '64b000000000000000000003', name: 'Lin', score: '7' }], documents: [document, secondDocument, thirdDocument], bsonTypes: mongoMetadata, durationMs: 3 }
+        if (op.action === 'mysql.inspect') return { columns: [], rows: [], inspection: { kind: 'table', metrics: [{ label: '存储引擎', value: 'InnoDB' }, { label: '记录数（估算）', value: '1234', format: 'estimate' }, { label: '数据大小', value: '32768', format: 'bytes' }], definition: 'CREATE TABLE users (id BIGINT PRIMARY KEY, name VARCHAR(255));' } }
+        if (op.action === 'mongo.inspect') return { columns: [], rows: [], inspection: { kind: 'collection', metrics: [{ label: '文档数', value: '3' }, { label: '已固定', value: 'false', format: 'boolean' }, { label: '存储大小', value: '32768', format: 'bytes' }], definition: 'db.getSiblingDB("app").createCollection("users");\n\ndb.getSiblingDB("app").getCollection("users").createIndex({ "score": Int32("1") }, { "name": "score_1" });' } }
+        if (op.action === 'redis.inspect') return { columns: [], rows: [], inspection: { kind: 'key', metrics: [{ label: '类型', value: 'string' }, { label: 'TTL（秒）', value: '-1' }, { label: '内存占用', value: '72', format: 'bytes' }], definition: JSON.stringify(['TYPE', op.key]) + '\n' + JSON.stringify(['TTL', op.key]), definitionNote: 'Redis 没有 DDL；以下是只读 Key 检查命令，不是数据备份。' } }
         if (op.action === 'mongo.indexes') return grid([{ name: '_id_', key: '{"_id":1}' }])
         if (op.action === 'redis.nodes') return grid([{ id: '127.0.0.1:6379', host: '127.0.0.1', port: '6379', role: 'master' }, { id: '127.0.0.2:6379', host: '127.0.0.2', port: '6379', role: 'master' }])
-        if (op.action === 'redis.scan') return { ...grid([{ key: 'profile:1', type: 'string', ttl: '-1' }]), nextCursor: undefined }
+        if (op.action === 'redis.scan') return { ...grid([{ key: 'profile:1', type: 'string', ttl: '-1' }]), redisRowTypes: ['string'], nextCursor: undefined }
         if (op.action === 'redis.get') return { ...grid([{ value: 'hello' }]), value: 'hello', redisType: 'string', ttl: -1, length: 5, truncated: false }
         return { columns: [], rows: [], affectedRows: 1, message: '操作已完成' }
       },
@@ -409,7 +412,7 @@ test('MongoDB uses per-value BSON colors, nested document types and saved custom
   await expect(viewer.locator('.bson-raw-document')).toContainText('$numberLong')
   await viewer.getByRole('button', { name: '关闭', exact: true }).click()
   await page.getByRole('button', { name: 'BSON 类型配色', exact: true }).click()
-  const settings = page.getByRole('dialog', { name: 'BSON 类型配色' })
+  const settings = page.locator('.object-inspector:visible')
   await settings.locator('.bson-type-option').filter({ hasText: 'Int32' }).click()
   await settings.getByLabel('HEX', { exact: true }).fill('#123abc')
   await settings.getByRole('button', { name: '应用', exact: true }).click()
@@ -419,8 +422,8 @@ test('MongoDB uses per-value BSON colors, nested document types and saved custom
   await connect(page, 'Mongo Local'); await openUsers(page)
   await expect(page.locator('.workbench:visible [data-bson-type="Int32"]')).toHaveAttribute('data-bson-color', '#123abc')
   await page.getByRole('button', { name: 'BSON 类型配色', exact: true }).click()
-  await page.getByRole('dialog', { name: 'BSON 类型配色' }).getByRole('button', { name: '恢复全部默认颜色' }).click()
-  await page.getByRole('dialog', { name: 'BSON 类型配色' }).getByRole('button', { name: '保存', exact: true }).click()
+  await page.locator('.object-inspector:visible').getByRole('button', { name: '恢复全部默认颜色' }).click()
+  await page.locator('.object-inspector:visible').getByRole('button', { name: '保存', exact: true }).click()
   await expect(page.locator('.workbench:visible [data-bson-type="Int32"]')).toHaveAttribute('data-bson-color', '#4da96b')
 })
 
@@ -470,4 +473,48 @@ test('MongoDB row and cell menu copies exact values, prepares duplicate and fiel
   await cell.click({ button: 'right' })
   await menu.getByRole('button', { name: '按此值筛选', exact: true }).click()
   await expect(page.getByLabel('Filter', { exact: true })).toHaveValue('{"score":{"$eq":{"$numberInt":"7"}}}')
+})
+
+test('object inspector shows real-engine metadata, DDL, copy and independent colors for MySQL', async ({ page }) => {
+  await connect(page, 'MySQL Local'); await openUsers(page)
+  await page.locator('.workbench:visible').getByRole('button', { name: '对象信息', exact: true }).click()
+  const panel = page.locator('.object-inspector:visible')
+  await expect(panel.locator('.object-metrics')).toContainText('InnoDB')
+  await expect(panel.locator('.object-metrics')).toContainText('32 KiB')
+  await panel.getByRole('button', { name: 'DDL', exact: true }).click()
+  await expect(panel.locator('.inspector-definition')).toContainText('CREATE TABLE')
+  await panel.getByRole('button', { name: '复制语句', exact: true }).click()
+  await expect.poll(() => page.evaluate(() => (window as any).__dbexCalls.find((c: any) => c.action === 'copyText')?.value)).toContain('CREATE TABLE')
+  await panel.getByRole('button', { name: '数据类型配色', exact: true }).click()
+  await panel.locator('.bson-type-option').filter({ hasText: /^BIGINT/ }).click()
+  await panel.getByLabel('HEX', { exact: true }).fill('#123abc')
+  await panel.getByRole('button', { name: '应用', exact: true }).click()
+  await panel.getByRole('button', { name: '保存', exact: true }).click()
+  await expect(page.locator('.workbench:visible td[data-value-type="BIGINT"]').first()).toHaveAttribute('data-type-color', '#123abc')
+  await panel.getByRole('button', { name: '关闭', exact: true }).click()
+  await expect(panel).toHaveCount(0)
+})
+test('MongoDB object inspection contains collection DDL and Redis inspection identifies keys without fake DDL', async ({ page }) => {
+  await connect(page, 'Mongo Local'); await openUsers(page)
+  await page.locator('.workbench:visible').getByRole('button', { name: '对象信息', exact: true }).click()
+  const panel = page.locator('.object-inspector:visible')
+  await expect(panel.locator('.object-metrics')).toContainText('文档数')
+  await panel.getByRole('button', { name: 'DDL', exact: true }).click()
+  await expect(panel.locator('.inspector-definition')).toContainText('createCollection')
+  await expect(panel.locator('.inspector-definition')).toContainText('createIndex')
+  await panel.getByRole('button', { name: '关闭', exact: true }).click()
+  await connect(page, 'Redis Local')
+  await page.locator('.resource-node').filter({ hasText: 'DB 0' }).first().click()
+  const row = page.locator('.workbench:visible .redis-key-list tr[data-row-index="0"]')
+  await expect(row).toContainText('profile:1')
+  await row.click()
+  await page.locator('.workbench:visible').getByRole('button', { name: '对象信息', exact: true }).click()
+  await expect(panel.locator('.object-metrics')).toContainText('72 B')
+  await panel.getByRole('button', { name: '检查命令', exact: true }).click()
+  await expect(panel).toContainText('Redis 没有 DDL')
+  await expect(panel.locator('.inspector-definition')).toContainText('TYPE')
+  await panel.getByRole('button', { name: '数据类型配色', exact: true }).click()
+  await panel.getByRole('checkbox', { name: '按类型着色' }).uncheck()
+  await panel.getByRole('button', { name: '保存', exact: true }).click()
+  await expect(row.locator('td[data-value-type="string"]').first()).not.toHaveAttribute('data-type-color', /.+/)
 })

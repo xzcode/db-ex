@@ -26,6 +26,14 @@ async function copy() {
   try { await window.dbex.copyText(ddl.value); copyNotice.value = '已复制到剪贴板' }
   catch (error) { copyNotice.value = error instanceof Error ? error.message : String(error) }
 }
+async function exportDefinition() {
+  copyNotice.value = ''
+  if (!ddl.value) return
+  const suffix = props.kind === 'mysql' ? '.sql' : props.kind === 'mongodb' ? '.js' : '.txt'
+  const safe = props.name.replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 80) || 'object'
+  try { if (await window.dbex.exportFile(safe + suffix, ddl.value, 'text')) copyNotice.value = '语句已导出' }
+  catch (error) { copyNotice.value = error instanceof Error ? error.message : String(error) }
+}
 watch(() => props.name, () => { copyNotice.value = '' })
 </script>
 <template>
@@ -51,10 +59,10 @@ watch(() => props.name, () => { copyNotice.value = '' })
         </div>
       </template>
       <template v-else>
-        <div class="inspector-definition-toolbar"><button class="btn secondary small" type="button" :disabled="!ddl" @click="copy">{{ t('复制语句') }}</button></div>
+        <div class="inspector-definition-toolbar"><button class="btn secondary small" type="button" :disabled="!ddl" @click="copy">{{ t('复制语句') }}</button><button class="btn secondary small" type="button" :disabled="!ddl" @click="exportDefinition">{{ t('导出语句') }}</button></div>
         <div v-if="copyNotice" class="compact-help">{{ localize(copyNotice) }}</div>
         <p v-if="inspection?.definitionNote" class="compact-help">{{ t(inspection.definitionNote) }}</p>
-        <div v-if="ddl" class="inspector-definition"><CodeEditor :model-value="ddl" :language="kind === 'mysql' ? 'sql' : 'dbex-bson-document'" readonly /></div>
+        <div v-if="ddl" class="inspector-definition"><CodeEditor :model-value="ddl" :language="kind === 'mysql' ? 'sql' : kind === 'mongodb' ? 'dbex-mongo-ddl' : 'plaintext'" readonly /></div>
       </template>
     </template>
   </aside>
