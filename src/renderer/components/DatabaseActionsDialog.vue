@@ -5,7 +5,7 @@ import type { DatabaseOperation, ExplorerNode, OperationResult, SessionInfo, Sql
 import { validateDatabaseName, validateInitialCollection } from '../../shared/database-admin'
 import { newBrowseFilter } from '../../shared/browse-filter'
 import { sqlRowsFromFile, csvFromRows } from '../data-format'
-export type DatabaseActionMode = 'create'|'drop'|'search'|'import'|'export'|'schema'
+type DatabaseActionMode = 'create'|'drop'|'search'|'import'|'export'|'schema'
 const props=defineProps<{session:SessionInfo;database:string;mode:DatabaseActionMode;existing:string[]}>()
 const emit=defineEmits<{close:[];changed:[database:string];select:[node:ExplorerNode];session:[session:SessionInfo]}>()
 const mongo=computed(()=>props.session.kind==='mongodb')
@@ -102,7 +102,7 @@ async function submit(){
    }else if(props.mode==='export'){
      const response=await execute(mongo.value?{action:'mongo.find',...targetEntity,limit:500,sort:'{"_id":1}'}:{action:'mysql.browse',...targetEntity,filter:newBrowseFilter(),limit:500})
      if(disposed)return
-     if(response.truncated||response.nextOffset!==undefined)throw new Error('对象数据超出完整导出上限，请使用分页导出或专用数据库工具。')
+     if(response.truncated||response.nextOffset!==undefined||(mongo.value&&response.documents?.length!==response.rows.length))throw new Error('对象数据超出完整导出上限，请使用分页导出或专用数据库工具。')
      const content=format.value==='json'?(mongo.value?'['+(response.documents||[]).join(',\n')+']':JSON.stringify(response.rawRows||response.rows,null,2)):csvFromRows(response.columns,response.rawRows||response.rows)
      if(await window.dbex.exportFile(cleanFile(database)+'-'+cleanFile(object.entity!)+'.'+format.value,content,format.value))notice.value='导出完成'
    }else if(props.mode==='schema'){
@@ -144,7 +144,7 @@ onBeforeUnmount(()=>{disposed=true})
           <div class="database-object-results"><button v-for="item in visibleObjects" :key="item.id" type="button" class="resource-node" :disabled="busy" @click="emit('select',item)"><span>{{ item.kind==='view'?'◉':'▦' }}</span><span class="ellipsis">{{ item.label }}</span><span class="toolbar-spacer"></span><small>{{ t(item.kind==='view'?'视图':mongo?'集合':'表') }}</small></button><p v-if="!visibleObjects.length&&!busy" class="helper">{{ t('无可见对象') }}</p></div>
         </template>
         <template v-else>
-          <label class="field">{{ t('目标集合或视图') }}<select v-model="entity" :aria-label="t('目标集合或视图')" :disabled="busy"><option value="">{{ t('未选择对象') }}</option><option v-for="item in objects" :key="item.id" :value="item.id">{{ item.label }}</option></select></label>
+          <label class="field">{{ t(mongo?'目标集合或视图':'目标表或视图') }}<select v-model="entity" :aria-label="t(mongo?'目标集合或视图':'目标表或视图')" :disabled="busy"><option value="">{{ t('未选择对象') }}</option><option v-for="item in objects" :key="item.id" :value="item.id">{{ item.label }}</option></select></label>
           <template v-if="mode==='import'"><div class="row-between"><button class="btn secondary" :disabled="busy" @click="chooseFile">{{ t('选择数据文件') }}</button><span class="ellipsis">{{ fileName }}</span></div><p class="helper">{{ t(mongo?'每批导入 1–500 条 EJSON 文档':'每批导入需要 1–500 条记录') }}</p><p v-if="importCount">{{ importCount }} {{ t('条记录') }}</p></template>
           <template v-else-if="mode==='export'"><label class="field">{{ t('格式') }}<select v-model="format" :disabled="busy"><option value="json">{{ mongo?'Extended JSON':'JSON' }}</option><option value="csv">CSV</option></select></label><p class="helper">{{ t('完整导出限单个对象 500 条及现有读取大小上限，超限时不会保存不完整文件。') }}</p></template>
           <p v-else class="helper">{{ t('导出选中对象的结构语句，不包含数据，也不会执行语句。') }}</p>

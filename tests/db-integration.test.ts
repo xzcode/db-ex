@@ -111,6 +111,10 @@ test('MongoDB real database: BSON exactness, filter, aggregation, indexes and op
   const operations = new MongoOperations(client)
   const canonical = (value: unknown) => BSON.EJSON.stringify(value, { relaxed: false })
   try {
+    await assert.rejects(operations.execute({action:'mongo.createDatabase',database,initialCollection:'records'},read),/READ_ONLY/)
+    await assert.rejects(operations.execute({action:'mongo.dropDatabase',database:'admin'},write),/PROTECTED_DATABASE/)
+    await operations.execute({action:'mongo.createDatabase',database,initialCollection:'records'},write)
+    assert((await client.db(database).listCollections({name:'records'}).toArray()).length===1)
     const document = { _id: new BSON.ObjectId(), score: new BSON.Int32(5), big: BSON.Long.fromString('9223372036854775807'), money: BSON.Decimal128.fromString('123456789.123456789'), date: new Date('2025-01-01T00:00:00.000Z') }
     await operations.execute({ action: 'mongo.insert', ...target, documents: [canonical(document)] }, write)
     const first = await operations.execute({ action: 'mongo.find', ...target, filter: '{"score":{"$gte":5}}', sort: '{"score":-1}' }, read)
@@ -144,6 +148,8 @@ test('MongoDB real database: BSON exactness, filter, aggregation, indexes and op
     await assert.rejects(operations.execute({ action: 'mongo.insert', ...target, documents: ['{}'] }, read), /READ_ONLY/)
     await assert.rejects(operations.execute({ action: 'mongo.insert', database, entity: 'bulk', documents: ['{"_id":"same","value":1}', '{"_id":"same","value":2}'] }, write), /PARTIAL_WRITE:.*1/)
     assert.equal(await client.db(database).collection('bulk').countDocuments(), 1)
+    await operations.execute({action:'mongo.dropDatabase',database},write)
+    assert.equal((await client.db(database).listCollections().toArray()).length,0)
   } finally {
     await operations.close()
     await client.db(database).dropDatabase()

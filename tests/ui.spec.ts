@@ -8,6 +8,7 @@ async function installBridge(page: Page) {
     const calls: Record<string, unknown>[] = []
     const sessions: Record<string, any> = {}
     const savedObjects: any[] = []
+    const additionalDbs: Record<string,string[]> = {}
     const rows = [{ id: '1', name: 'Ada', email: 'ada@example.test' }]
     const document = '{"_id":{"$oid":"64b000000000000000000001"},"name":"Ada","createdAt":{"$date":{"$numberLong":"1700000000000"}},"score":{"$numberInt":"7"},"nullable":null,"nested":{"values":[{"$numberLong":"99"},"99"]}}'
     const secondDocument = '{"_id":{"$oid":"64b000000000000000000002"},"name":"Grace","score":"7","nullable":"NULL"}'
@@ -39,7 +40,7 @@ async function installBridge(page: Page) {
       async testConnection(config: any, clearSecrets: string[]) { calls.push({ action: 'testConnection', config, clearSecrets }); return '连接成功' },
       async pickConnectionFile(kind: string) { calls.push({ action: 'pickConnectionFile', kind }); return '/test/client.pem' },
       async disconnect(id: string) { calls.push({ action: 'disconnect', id }) },
-      async roots(id: string) { return [{ id: id + '-db', label: id === 'redis' ? 'DB 0' : id === 'sql2' ? 'other' : 'app', kind: id === 'redis' ? 'keyspace' : 'database', database: id === 'sql2' ? 'other' : 'app' }] },
+      async roots(id: string) { return [{ id: id + '-db', label: id === 'redis' ? 'DB 0' : id === 'sql2' ? 'other' : 'app', kind: id === 'redis' ? 'keyspace' : 'database', database: id === 'sql2' ? 'other' : 'app' },...(additionalDbs[id]||[]).map(database=>({id:id+'-'+database,label:database,kind:'database',database}))] },
       async children(id: string, database: string, category?: string) {
         if(id!=='mongo')return [{ id: database + '-users', label: 'users', database, entity: 'users', kind: 'table' }]
         if(!category)return [['collections','集合'],['views','视图'],['functions','函数'],['indexes','索引'],['mapReduce','MapReduce'],['pipelines','聚合管道'],['gridfs','GridFS 存储桶'],['queries','查询']].map(([key,label])=>({id:database+'-'+key,label,database,kind:'mongo-category',category:key}))
@@ -52,6 +53,8 @@ async function installBridge(page: Page) {
       },
       async execute(id: string, op: any) {
         calls.push({ sessionId: id, ...op })
+        if(op.action==='mongo.createDatabase'||op.action==='mysql.createDatabase'){additionalDbs[id]=[...(additionalDbs[id]||[]),op.database];return {columns:[],rows:[],message:'数据库已创建'}}
+        if(op.action==='mongo.dropDatabase'||op.action==='mysql.dropDatabase'){additionalDbs[id]=(additionalDbs[id]||[]).filter(name=>name!==op.database);return {columns:[],rows:[],message:'数据库已删除'}}
         if (op.action === 'mysql.structure') return { ...grid([{ name: 'id', type: 'int', key: 'PRI' }, { name: 'name', type: 'varchar', key: '' }]), primaryKeys: ['id'] }
         if (op.action === 'mysql.browse' && op.countOnly) return { columns: [], rows: [], totalRows: '501', countLimited: false }
         if (op.action === 'mongo.count') return { columns: [], rows: [], totalRows: '401', countLimited: false }
@@ -695,4 +698,43 @@ test('MongoDB classified explorer and saved query library',async({page})=>{
   await expect(library.getByLabel('Filter',{exact:true})).toHaveValue('{"score":{"$numberInt":"7"}}')
   await page.locator('[data-object-category="mapReduce"]').click()
   await expect(page.locator('.workbench:visible')).toContainText('MapReduce 已弃用')
+})
+
+test('database menu creates and drops a named MongoDB database, with typed confirmation',async({page})=>{
+  await connect(page,'Mongo Local')
+  const menu=page.locator('.database-context-menu')
+  await page.locator('.resource-node[data-object-kind="database"]').first().click({button:'right'})
+  await menu.getByRole('button',{name:'新建数据库…',exact:true}).click()
+  const create=page.getByRole('dialog',{name:'新建数据库'})
+  await create.getByRole('button',{name:'解锁此会话',exact:true}).click()
+  await create.getByLabel('数据库名称',{exact:true}).fill('db_test_created')
+  await create.getByLabel('初始集合',{exact:true}).fill('items')
+  await create.getByRole('button',{name:'新建',exact:true}).click()
+  const root=page.locator('.resource-node[data-object-kind="database"]').filter({hasText:'db_test_created'})
+  await expect(root).toBeVisible()
+  await root.click({button:'right'})
+  await menu.getByRole('button',{name:'删除数据库…',exact:true}).click()
+  const drop=page.getByRole('dialog',{name:'删除数据库'})
+  await expect(drop.getByRole('button',{name:'删除',exact:true})).toBeDisabled()
+  await drop.getByLabel('输入数据库名称以确认删除').fill('db_test_created')
+  await drop.getByRole('button',{name:'删除',exact:true}).click()
+  await expect(root).toHaveCount(0)
+  await expect.poll(()=>page.evaluate(()=>(window as any).__dbexCalls.filter((op:any)=>op.action==='mongo.dropDatabase').at(-1)?.database)).toBe('db_test_created')
+})
+test('database menu opens query and finds objects without scanning data',async({page})=>{
+  await connect(page,'MySQL Local')
+  const root=page.locator('.resource-node[data-object-kind="database"]').first()
+  const menu=page.locator('.database-context-menu')
+  await root.click({button:'right'})
+  await menu.getByRole('button',{name:'新建查询',exact:true}).click()
+  await expect(page.locator('.workbench:visible .query-editor')).toBeVisible()
+  await root.click({button:'right'})
+  await menu.getByRole('button',{name:'查找数据库对象…',exact:true}).click()
+  const search=page.getByRole('dialog',{name:'查找数据库对象'})
+  await search.getByLabel('查找数据库对象',{exact:true}).fill('users')
+  await search.getByRole('button',{name:/users/}).click()
+  await expect(page.locator('.workbench:visible .data-table')).toContainText('Ada')
+  await root.click({button:'right'})
+  await menu.getByRole('button',{name:'关闭数据库',exact:true}).click()
+  await expect(page.locator('.workbench:visible .data-table')).toHaveCount(0)
 })
