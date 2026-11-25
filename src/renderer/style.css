@@ -459,3 +459,33 @@ html[dir=rtl] .tree-chevron:not(.expanded) { transform: rotate(180deg); }
 .mongo-row-menu { width: 248px; max-height: calc(100dvh - 8px); overflow-y: auto; }
 .mongo-row-menu .context-action { padding: 6px 9px; }
 .context-menu-divider { height: 1px; background: var(--border-soft); margin: 3px 2px; }
+
+/* Object inspector is a sibling of the data browser so it never obscures the grid. */
+.workbench-shell { flex: 1; display: flex; min-width: 0; min-height: 0; overflow: hidden; }
+.object-inspector { display: flex; flex-direction: column; flex: 0 0 clamp(235px, 30%, 360px); min-height: 0; min-width: 0; border-inline-start: 1px solid var(--border); background: var(--panel); overflow: hidden; }
+.object-inspector.inspector-expanded { flex-basis: 58%; }
+.inspector-tabs { display: flex; align-items: center; gap: 4px; padding: 4px 8px; border-bottom: 1px solid var(--border); flex: none; }
+.inspector-tabs > button { display: grid; place-items: center; padding: 3px; width: 29px; height: 29px; background: transparent; border: none; color: var(--muted); font-size: 19px; }
+.inspector-tabs > button svg { width: 21px; height: 21px; }
+.inspector-tabs > button.active { color: var(--accent); background: var(--accent-bg); }
+.ddl-glyph { border: 1px solid currentColor; font-size: 9px; font-weight: 700; padding: 3px 2px; border-radius: 2px; }
+.inspector-object-header { display: flex; align-items: center; gap: 10px; padding: 16px 12px 9px; }
+.inspector-object-icon { width: 39px; height: 39px; flex: none; display: grid; place-items: center; background: var(--accent-bg); color: var(--accent); border: 1px solid var(--border); border-radius: 5px; font-size: 25px; }
+.inspector-object-header > div { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 4px; }
+.inspector-object-header strong { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inspector-object-header > div > span { color: var(--muted); font-size: 11px; }
+.inspector-source { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 4px; border-bottom: 1px solid var(--border-soft); }
+.inspector-source > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11px; color: var(--muted); }
+.inspector-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+.object-metrics { margin: 0; padding: 12px; }
+.object-metrics dt { color: var(--muted); font-size: 11px; font-weight: 600; margin-bottom: 3px; }
+.object-metrics dd { margin: 0 0 15px; font-size: 13px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.inspector-definition-toolbar { padding: 6px 10px; border-bottom: 1px solid var(--border-soft); }
+.inspector-definition { flex: 1; min-height: 0; direction: ltr; }
+.type-color-panel { display: flex; flex-direction: column; gap: 10px; padding: 12px; min-width: 0; }
+.type-color-panel h3 { margin: 2px 0; font-size: 13px; }
+.inspector-type-list { max-height: 245px; overflow-y: auto; border: 1px solid var(--border); border-radius: 4px; }
+.inspector-type-list .bson-type-option { padding: 6px; }
+.type-color-footer { display: flex; flex-wrap: wrap; gap: 7px; justify-content: space-between; }
+.typed-grid td.has-bson-color { box-shadow: none; background: color-mix(in srgb, var(--bson-color) 32%, var(--panel)); color: var(--text); }
+.typed-grid tr.selected td.has-bson-color { background: color-mix(in srgb, var(--bson-color) 38%, var(--selected)); box-shadow: inset 0 1px var(--accent), inset 0 -1px var(--accent); }

@@ -5,6 +5,8 @@ import { canSafelyEditMongoDocument, mongoFieldFilter } from '../../shared/bson-
 import { formatBsonValue, parseBsonDocument } from '../../shared/bson-display'
 import { activeTypeColor } from '../../shared/bson-palette'
 import { bsonPalette } from '../bson-preferences'
+import { databasePalettes } from '../database-color-preferences'
+import { databaseTypeColor } from '../../shared/database-palette'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 const props = withDefaults(defineProps<{
@@ -15,6 +17,9 @@ const props = withDefaults(defineProps<{
   checked?: number[]
   offset?: number
   bsonTypes?: BsonTypeBranch[]
+  columnTypes?: string[]
+  nullCells?: number[][]
+  redisRowTypes?: string[]
   documents?: string[]
   documentMenu?: boolean
   canEditDocument?: boolean
@@ -161,7 +166,24 @@ onBeforeUnmount(() => { window.removeEventListener('pointerdown', outside); wind
 function cellType(row: Record<string, unknown>, index: number, key: string): BsonType | undefined {
   return cellRows.value[index]?.[key]?.type ?? (props.bsonTypes ? gridBsonType(row, props.bsonTypes[index], key) : undefined)
 }
-function cellColor(type?: BsonType): string | undefined { return type ? activeTypeColor(bsonPalette.value, type) : undefined }
+function genericType(index: number, column: number): string | undefined {
+  if (props.columnTypes) return props.nullCells?.[index]?.includes(column) ? 'NULL' : props.columnTypes[column] || 'UNKNOWN'
+  if (props.redisRowTypes) return props.redisRowTypes[index] || 'unknown'
+  return undefined
+}
+function gridType(row: Record<string, unknown>, index: number, key: string, column: number): string | undefined { return cellType(row, index, key) || genericType(index, column) }
+function gridColor(row: Record<string, unknown>, index: number, key: string, column: number): string | undefined {
+  const bson = cellType(row, index, key)
+  if (bson) return activeTypeColor(bsonPalette.value, bson)
+  const kind = props.columnTypes ? 'mysql' : props.redisRowTypes ? 'redis' : undefined
+  const type = genericType(index, column)
+  return kind && type && databasePalettes.value[kind].enabled ? databaseTypeColor(kind, databasePalettes.value[kind], type) : undefined
+}
+function gridLabel(row: Record<string, unknown>, index: number, key: string, column: number): string {
+  const bson = cellType(row, index, key)
+  return bson ? t(bsonLabel(bson)) : genericType(index, column) || ''
+}
+const showTypeLabels = computed(() => mongo.value ? bsonPalette.value.showLabels : props.columnTypes ? databasePalettes.value.mysql.showLabels : props.redisRowTypes ? databasePalettes.value.redis.showLabels : false)
 function display(value: unknown): string {
   if (value === null) return 'NULL'
   if (value === undefined) return '—'
@@ -174,7 +196,7 @@ function display(value: unknown): string {
 
 <template>
   <div ref="scrollHost" class="grid-scroll" tabindex="0" :aria-label="t('结果表格')" @scroll.passive="onScroll">
-    <table :class="['data-table', { 'virtual-grid': virtual, 'mongo-grid': mongo }]" :style="mongo ? { width: tableWidth + 'px' } : undefined" :aria-rowcount="rows.length + 1" :dir="mongo ? 'ltr' : undefined">
+    <table :class="['data-table', { 'virtual-grid': virtual, 'mongo-grid': mongo, 'typed-grid': !!columnTypes || !!redisRowTypes }]" :style="mongo ? { width: tableWidth + 'px' } : undefined" :aria-rowcount="rows.length + 1" :dir="mongo ? 'ltr' : undefined">
       <colgroup v-if="mongo"><col style="width: 38px" /><col v-for="column in columns" :key="column" :style="{ width: columnWidth(column) + 'px' }" /></colgroup>
       <thead><tr>
         <th v-if="selectable" class="number-cell"><input type="checkbox" :aria-label="t('选择当前页')" :checked="rows.length > 0 && checked.length === rows.length" @change="emit('checkAll')" /></th>
@@ -185,14 +207,16 @@ function display(value: unknown): string {
         <tr v-for="item in visibleRows" :key="item.index" :data-row-index="item.index" :aria-rowindex="item.index + 2" :class="{ selected: selected === item.index }" @click="emit('select', item.index)" @dblclick="emit('open', item.index)" :tabindex="documentMenu ? 0 : undefined" @contextmenu="openRowMenu($event, item.index)" @keydown.shift.f10="openRowMenu($event, item.index)">
           <td v-if="selectable" class="number-cell"><input type="checkbox" :aria-label="t('选择第 {0} 行', [item.index + 1])" :checked="checked.includes(item.index)" @click.stop @change="emit('check', item.index)" /></td>
           <td class="number-cell">{{ offset + item.index + 1 }}</td>
-          <td v-for="column in columns" :key="column"
-            :class="{ 'null-cell': item.row[column] === null || !Object.hasOwn(item.row, column) || cellType(item.row, item.index, column) === 'Null' || cellType(item.row, item.index, column) === 'Undefined', 'has-bson-color': !!cellColor(cellType(item.row, item.index, column)) }"
+          <td v-for="(column, columnIndex) in columns" :key="column"
+            :class="{ 'null-cell': item.row[column] === null || !Object.hasOwn(item.row, column) || cellType(item.row, item.index, column) === 'Null' || cellType(item.row, item.index, column) === 'Undefined' || genericType(item.index, columnIndex) === 'NULL', 'has-bson-color': !!gridColor(item.row, item.index, column, columnIndex) }"
             :data-mongo-field="documentMenu ? column : undefined"
             :data-bson-type="cellType(item.row, item.index, column)"
-            :data-bson-color="cellColor(cellType(item.row, item.index, column))"
-            :style="cellColor(cellType(item.row, item.index, column)) ? { '--bson-color': cellColor(cellType(item.row, item.index, column)) } : {}"
-            :title="(cellType(item.row, item.index, column) ? t(bsonLabel(cellType(item.row, item.index, column)!)) + ': ' : '') + cellText(item.row, item.index, column)">
-            <span v-if="bsonTypes && bsonPalette.showLabels" class="bson-type-label">{{ t(bsonLabel(cellType(item.row, item.index, column)!)) }}</span><span class="grid-value">{{ cellText(item.row, item.index, column) }}</span>
+            :data-value-type="gridType(item.row, item.index, column, columnIndex)"
+            :data-type-color="gridColor(item.row, item.index, column, columnIndex)"
+            :data-bson-color="mongo ? gridColor(item.row, item.index, column, columnIndex) : undefined"
+            :style="gridColor(item.row, item.index, column, columnIndex) ? { '--bson-color': gridColor(item.row, item.index, column, columnIndex) } : {}"
+            :title="(gridLabel(item.row, item.index, column, columnIndex) ? gridLabel(item.row, item.index, column, columnIndex) + ': ' : '') + cellText(item.row, item.index, column)">
+            <span v-if="showTypeLabels && gridType(item.row, item.index, column, columnIndex)" class="bson-type-label">{{ gridLabel(item.row, item.index, column, columnIndex) }}</span><span class="grid-value">{{ cellText(item.row, item.index, column) }}</span>
           </td>
         </tr>
         <tr v-if="bottomSpace" class="virtual-spacer" aria-hidden="true"><td :colspan="columnCount" :style="{ height: bottomSpace + 'px' }"></td></tr>

@@ -168,7 +168,7 @@ export class RedisOperations {
         const [type, ttl] = await Promise.all([this.client.type(name), this.client.ttl(name)])
         const inspection: ObjectInspection = { kind: 'key', metrics: metrics(metric('类型', type), metric('TTL（秒）', ttl)), definitionNote: 'Redis 没有 DDL；以下是只读 Key 检查命令，不是数据备份。' }
         const commands: Record<string, string> = { string: 'STRLEN', hash: 'HLEN', list: 'LLEN', set: 'SCARD', zset: 'ZCARD', stream: 'XLEN' }
-        const command = commands[type]
+        const command = Object.hasOwn(commands, type) ? commands[type] : undefined
         if (command) {
           try { inspection.metrics.push(...metrics(metric(type === 'string' ? '数据大小' : '元素数量', await this.client.call(command, name), type === 'string' ? 'bytes' : undefined))) } catch { inspection.infoNote = '部分元数据不可用或无读取权限。' }
         }
