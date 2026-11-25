@@ -562,3 +562,11 @@ html[dir=rtl] .tree-chevron:not(.expanded) { transform: rotate(180deg); }
 .mongo-library .query-editor { min-height:120px; flex:0 0 34%; }
 .mongo-library .library-query-parts {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:10px;}
 .mongo-library .library-query-parts textarea {width:100%;min-height:65px;}
+
+.database-context-menu { width: 246px; z-index: 80; }
+.database-action-dialog { width: 530px; }
+.database-action-body { display:flex; flex-direction:column; gap:12px; padding:16px 20px; min-height:0; overflow:auto; }
+.database-action-body .field { width:100%; }
+.database-object-results { min-height:100px; max-height:320px; overflow:auto; border:1px solid var(--border); }
+.database-object-results .resource-node { min-height:30px; }
+.database-object-results small { color:var(--muted); }

@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { t, localize, languages, languagePreference, setLanguage } from './i18n'
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import ConnectionDialog from './ConnectionDialog.vue'
 import ConnectionSidebar from './components/ConnectionSidebar.vue'
 import { colorStyle } from '../shared/connection-appearance'
 import DatabaseWorkbench from './DatabaseWorkbench.vue'
-import { mongoCategory } from '../shared/mongo-catalog'
+import { mongoCategory, mongoCategoryNodes } from '../shared/mongo-catalog'
+import { protectedDatabase } from '../shared/database-admin'
+import DatabaseActionsDialog from './components/DatabaseActionsDialog.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import { useConfirmation } from './composables/useConfirmation'
 import type { ConnectionAppearancePatch, ConnectionDraft, ExplorerNode, SavedConnection, SessionInfo } from '../shared/types'
@@ -38,6 +40,12 @@ const visibleTree = computed(() => {
   for(const node of state.roots)visit(node,0)
   return rows
 })
+type DatabaseMode='create'|'drop'|'search'|'import'|'export'|'schema'
+const dbMenu=ref<{sessionId:string;node?:ExplorerNode;x:number;y:number}>()
+const dbMenuHost=ref<HTMLElement>()
+const dbDialog=ref<{sessionId:string;database:string;mode:DatabaseMode}>()
+const dbDialogSession=computed(()=>sessions.value.find(item=>item.id===dbDialog.value?.sessionId))
+const dbMenuSession=computed(()=>sessions.value.find(item=>item.id===dbMenu.value?.sessionId))
 const busy = ref(false)
 const error = ref('')
 const notice = ref('')
@@ -67,6 +75,7 @@ async function refreshRoots(id: string) {
     const roots = await window.dbex.roots(id)
     if (explorers[id] !== state) return
     state.roots = roots; state.children = {}; state.expanded = []
+    if (state.selected?.database && !roots.some(root=>root.database===state.selected?.database)) state.selected=undefined
     if (sessions.value.find(item => item.id === id)?.kind === 'redis') state.selected = roots[0]
   } catch (reason) { if (explorers[id] === state) error.value = messageOf(reason) }
   finally { if (explorers[id] === state) state.busy = false }
@@ -113,6 +122,66 @@ async function disconnect(id: string) {
   if (session.transaction && !await confirm({ title: t('断开并回滚事务'), message: t('“{0}”仍有打开的事务。断开连接会回滚尚未提交的修改。', [session.name]), danger: true, confirmLabel: t('回滚并断开') })) return
   await task(async () => { await window.dbex.disconnect(id); removeSession(id) })
 }
+function closeDbMenu(){dbMenu.value=undefined}
+function outsideMenu(event:PointerEvent){if(dbMenu.value&&!dbMenuHost.value?.contains(event.target as Node))closeDbMenu()}
+function menuKey(event:KeyboardEvent){if(event.key==='Escape')closeDbMenu()}
+async function showDbMenu(event:MouseEvent|KeyboardEvent,node?:ExplorerNode){
+  if(!activeSession.value||activeSession.value.kind==='redis'||busy.value||currentExplorer.value?.busy||dbDialog.value)return
+  if(node&&node.kind!=='database')return
+  event.preventDefault();event.stopPropagation()
+  const rect=(event.currentTarget as HTMLElement).getBoundingClientRect()
+  const mouse='clientX' in event
+  dbMenu.value={sessionId:activeSession.value.id,node,x:Math.max(4,Math.min(mouse?event.clientX:rect.left,window.innerWidth-254)),y:Math.max(4,Math.min(mouse?event.clientY:rect.bottom,window.innerHeight-60))}
+  await nextTick()
+  if(dbMenu.value&&dbMenuHost.value){
+    dbMenu.value.y=Math.max(4,Math.min(dbMenu.value.y,window.innerHeight-dbMenuHost.value.getBoundingClientRect().height-4))
+    dbMenuHost.value.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus({preventScroll:true})
+  }
+}
+let querySerial=0
+function clearDatabase(state:ExplorerState,database:string){
+  for(const key of Object.keys(state.children)){
+    const root=state.roots.find(item=>item.id===key)
+    if(root?.database===database||state.children[key]?.some(item=>item.database===database)){
+      delete state.children[key];state.expanded=state.expanded.filter(id=>id!==key)
+    }
+  }
+  if(state.selected?.database===database)state.selected=undefined
+}
+function dbMenuAction(action:DatabaseMode|'close'|'query'|'refresh'){
+  const menu=dbMenu.value, session=dbMenuSession.value
+  closeDbMenu()
+  if(!menu||!session||current.value!==session.id)return
+  const state=explorers[session.id],database=menu.node?.database||''
+  if(!state)return
+  if(action==='refresh'){void refreshRoots(session.id);return}
+  if(action==='close'){clearDatabase(state,database);return}
+  if(action==='query'){
+    if(!database)return
+    state.selected=session.kind==='mongodb'?{...mongoCategoryNodes(database).find(item=>item.category==='queries')!,id:JSON.stringify(['new-query',database,++querySerial])}:{id:JSON.stringify(['new-query',database,++querySerial]),label:'新建查询',database,kind:'database-query'}
+    return
+  }
+  if(action!=='create'&&!database)return
+  if(action==='drop'&&(protectedDatabase(session.kind,database)||session.transaction))return
+  dbDialog.value={sessionId:session.id,database,mode:action}
+}
+async function databaseChanged(database:string){
+  const dialog=dbDialog.value
+  if(!dialog)return
+  dbDialog.value=undefined
+  const state=explorers[dialog.sessionId]
+  if(state)clearDatabase(state,database)
+  notice.value=dialog.mode==='drop'?'数据库已删除':'数据库已创建'
+  await refreshRoots(dialog.sessionId)
+}
+function databaseObjectSelected(node:ExplorerNode){
+  const dialog=dbDialog.value
+  if(!dialog)return
+  dbDialog.value=undefined
+  const state=explorers[dialog.sessionId]
+  if(state)state.selected=node
+}
+watch(current,closeDbMenu)
 async function toggleRoot(node: ExplorerNode) {
   const id = current.value
   const state = id ? explorers[id] : undefined
@@ -166,9 +235,10 @@ onMounted(() => {
     if (Number.isFinite(saved.explorer)) explorerWidth.value = Math.max(170, Math.min(400, saved.explorer))
   } catch { /* Ignore invalid preference data. */ }
   document.documentElement.dataset.theme = theme.value
+  window.addEventListener('pointerdown',outsideMenu); window.addEventListener('keydown',menuKey); window.addEventListener('resize',closeDbMenu)
   void refreshConnections()
 })
-onBeforeUnmount(() => stopResize?.())
+onBeforeUnmount(() => { stopResize?.(); window.removeEventListener('pointerdown',outsideMenu); window.removeEventListener('keydown',menuKey); window.removeEventListener('resize',closeDbMenu) })
 </script>
 
 <template>
@@ -178,10 +248,19 @@ onBeforeUnmount(() => stopResize?.())
       <div class="resize-handle" role="separator" :aria-label="t('调整连接列表宽度')" aria-orientation="vertical" :aria-valuenow="sidebarWidth" :aria-valuemin="170" :aria-valuemax="400" tabindex="0" @pointerdown="resize($event, 'sidebar')" @keydown="resizeKey($event, 'sidebar')"></div>
       <section class="main-panel"><div class="tabbar"><div v-if="!sessions.length" class="tab active">{{ t('欢迎') }}</div><div v-for="session in sessions" :key="session.id" :class="['session-tab', { active: current === session.id, 'has-color': !!sessionColor(session) }]" :style="colorStyle(sessionColor(session))" :data-color="sessionColor(session) || ''"><button class="tab" @click="current = session.id"><span :class="['db-small-icon', session.kind]">{{ kindIcon(session.kind) }}</span>{{ session.name }}</button><button class="tab-close" :title="t('断开 {0}', [session.name])" :disabled="busy" @click="disconnect(session.id)">×</button></div><div class="tab-filler"></div><span v-if="busy" class="tab-trailing">{{ t('正在连接 / 处理…') }}</span></div><div v-if="error" class="inline-message error" role="alert">{{ localize(error) }}<button class="ghost-icon" :aria-label="t('关闭错误')" @click="error = ''">×</button></div><div v-if="notice" class="inline-message notice">{{ localize(notice) }}</div>
         <div v-if="!current" class="welcome-body"><div class="welcome-mark">▦</div><span class="eyebrow">YOUR DATA, YOUR WORKSPACE</span><h1>{{ t('一个工作空间，') }}<br /><span>{{ t('连接你的数据库。') }}</span></h1><p>{{ t('MySQL 查询与事务、MongoDB 文档、Redis 数据管理。') }}<br />{{ t('SSH 多跳、代理与 TLS，按你的网络方式连接。') }}</p><button class="btn primary large" @click="newConnection">{{ t('＋ 创建数据库连接') }}</button><div class="welcome-features"><span>MySQL</span><span>MongoDB</span><span>Redis</span></div></div>
-        <div v-else class="data-area"><aside :class="['explorer-pane', { 'has-color': !!sessionColor(activeSession) }]" :style="colorStyle(sessionColor(activeSession))"><div class="panel-heading"><span>{{ t('资源浏览器') }}</span><button class="ghost-icon" :title="t('刷新资源树')" :disabled="currentExplorer?.busy" @click="current && refreshRoots(current)">↻</button></div><div v-if="currentExplorer?.busy" class="compact-help">{{ t('正在加载资源…') }}</div><div class="resource-list"><template v-for="item in visibleTree" :key="item.node.id + (item.empty ? ':empty' : '')"><span v-if="item.empty" class="empty-tree" :style="{ paddingInlineStart: (10 + item.depth * 17) + 'px' }">{{ t('无可见对象') }}</span><button v-else :class="['resource-node', { 'child-node': item.depth > 0, 'mongo-folder': item.node.kind === 'mongo-category', active: currentExplorer?.selected?.id === item.node.id }]" :style="{ paddingInlineStart: (10 + item.depth * 17) + 'px' }" :data-object-kind="item.node.kind" :data-object-category="item.node.category" :aria-expanded="expandable(item.node) ? currentExplorer?.expanded.includes(item.node.id) : undefined" @click="toggleRoot(item.node)"><span class="arrow">{{ expandable(item.node) ? currentExplorer?.expanded.includes(item.node.id) ? '⌄' : '›' : '' }}</span><span :class="['object-tree-icon', item.node.kind]">{{ nodeIcon(item.node) }}</span><span class="ellipsis">{{ item.node.kind === 'mongo-category' ? t(item.node.label) : item.node.label }}</span><span v-if="currentExplorer?.loading.has(item.node.id)">…</span></button></template></div></aside><div class="resize-handle" role="separator" :aria-label="t('调整资源树宽度')" aria-orientation="vertical" :aria-valuenow="explorerWidth" :aria-valuemin="170" :aria-valuemax="400" tabindex="0" @pointerdown="resize($event, 'explorer')" @keydown="resizeKey($event, 'explorer')"></div><div class="content-pane"><DatabaseWorkbench v-for="session in sessions" v-show="session.id === current" :key="session.id" :session="session" :node="explorers[session.id]?.selected" @update-session="updateSession" @disconnect="removeSession(session.id)" @refresh-tree="refreshRoots(session.id)" /></div></div>
+        <div v-else class="data-area"><aside :class="['explorer-pane', { 'has-color': !!sessionColor(activeSession) }]" :style="colorStyle(sessionColor(activeSession))"><div class="panel-heading"><span>{{ t('资源浏览器') }}</span><button v-if="activeSession?.kind !== 'redis'" class="ghost-icon" :title="t('数据库菜单')" :aria-label="t('数据库菜单')" :disabled="currentExplorer?.busy" @click="showDbMenu($event)">···</button><button class="ghost-icon" :title="t('刷新资源树')" :disabled="currentExplorer?.busy" @click="current && refreshRoots(current)">↻</button></div><div v-if="currentExplorer?.busy" class="compact-help">{{ t('正在加载资源…') }}</div><div class="resource-list" @scroll="closeDbMenu" @contextmenu.self="showDbMenu($event)"><template v-for="item in visibleTree" :key="item.node.id + (item.empty ? ':empty' : '')"><span v-if="item.empty" class="empty-tree" :style="{ paddingInlineStart: (10 + item.depth * 17) + 'px' }">{{ t('无可见对象') }}</span><button v-else :class="['resource-node', { 'child-node': item.depth > 0, 'mongo-folder': item.node.kind === 'mongo-category', active: currentExplorer?.selected?.id === item.node.id }]" :style="{ paddingInlineStart: (10 + item.depth * 17) + 'px' }" :data-object-kind="item.node.kind" :data-object-category="item.node.category" :aria-expanded="expandable(item.node) ? currentExplorer?.expanded.includes(item.node.id) : undefined" @click="toggleRoot(item.node)" @contextmenu="showDbMenu($event,item.node)" @keydown.shift.f10="showDbMenu($event,item.node)"><span class="arrow">{{ expandable(item.node) ? currentExplorer?.expanded.includes(item.node.id) ? '⌄' : '›' : '' }}</span><span :class="['object-tree-icon', item.node.kind]">{{ nodeIcon(item.node) }}</span><span class="ellipsis">{{ item.node.kind === 'mongo-category' ? t(item.node.label) : item.node.label }}</span><span v-if="currentExplorer?.loading.has(item.node.id)">…</span></button></template></div></aside><div class="resize-handle" role="separator" :aria-label="t('调整资源树宽度')" aria-orientation="vertical" :aria-valuenow="explorerWidth" :aria-valuemin="170" :aria-valuemax="400" tabindex="0" @pointerdown="resize($event, 'explorer')" @keydown="resizeKey($event, 'explorer')"></div><div class="content-pane"><DatabaseWorkbench v-for="session in sessions" v-show="session.id === current" :key="session.id" :session="session" :node="explorers[session.id]?.selected" @update-session="updateSession" @disconnect="removeSession(session.id)" @refresh-tree="refreshRoots(session.id)" /></div></div>
       </section>
     </div>
     <footer class="statusbar"><span class="status-dot"></span>{{ activeSession ? activeSession.displayHost : 'Ready' }}<span class="separator">|</span>{{ activeSession?.name || t('未连接数据库') }}<span v-if="activeSession?.transaction" class="transaction-text">{{ t('事务尚未提交') }}</span><span class="status-right">DB EX · Core Preview</span></footer>
+    <Teleport to="body"><div v-if="dbMenu" ref="dbMenuHost" class="connection-context-menu database-context-menu" :style="{left:dbMenu.x+'px',top:dbMenu.y+'px'}" @contextmenu.prevent @pointerdown.stop>
+      <div class="context-title"><strong>{{ dbMenu.node?.label || dbMenuSession?.name }}</strong></div>
+      <button v-if="dbMenu.node" class="context-action" @click="dbMenuAction('close')">{{ t('关闭数据库') }}</button>
+      <button class="context-action" :disabled="dbMenuSession?.transaction" @click="dbMenuAction('create')">{{ t('新建数据库') }}…</button>
+      <button v-if="dbMenu.node" class="context-action danger" :disabled="protectedDatabase(dbMenuSession?.kind || 'mongodb',dbMenu.node.database || '') || dbMenuSession?.transaction" @click="dbMenuAction('drop')">{{ t('删除数据库') }}…</button>
+      <template v-if="dbMenu.node"><div class="context-menu-divider"></div><button class="context-action" @click="dbMenuAction('query')">{{ t('新建查询') }}</button><button class="context-action" @click="dbMenuAction('search')">{{ t('查找数据库对象') }}…</button><div class="context-menu-divider"></div><button class="context-action" @click="dbMenuAction('schema')">{{ t('导出结构脚本') }}…</button><button class="context-action" @click="dbMenuAction('import')">{{ t('导入数据') }}…</button><button class="context-action" @click="dbMenuAction('export')">{{ t('导出数据') }}…</button></template>
+      <div class="context-menu-divider"></div><button class="context-action" @click="dbMenuAction('refresh')">{{ t('刷新') }}</button>
+    </div></Teleport>
+    <DatabaseActionsDialog v-if="dbDialog && dbDialogSession" :session="dbDialogSession" :database="dbDialog.database" :mode="dbDialog.mode" :existing="explorers[dbDialog.sessionId]?.roots.map(item=>item.database || item.label) || []" @close="dbDialog=undefined" @changed="databaseChanged" @select="databaseObjectSelected" @session="updateSession" />
     <ConnectionDialog v-if="dialogOpen" :draft="connectionDraft" @close="dialogOpen = false" @saved="refreshConnections" @connected="startSession" />
     <ConfirmDialog v-if="confirmation" v-bind="confirmation" @confirm="answer(true)" @cancel="answer(false)" />
   </main>
