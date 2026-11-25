@@ -1,3 +1,4 @@
+import { queryEditorCatalogs } from './catalog-query-editor'
 import { navigationCatalogs } from './catalog-navigation'
 import { indexHelpCatalogs } from './catalog-index-help'
 // English resource catalog. Chinese source strings are stable message keys.
@@ -1060,4 +1061,5 @@ export const en: Readonly<Record<string, string>> = {
   "导出": "Export",
   ...indexHelpCatalogs.en,
   ...navigationCatalogs.en,
+  ...queryEditorCatalogs.en,
 }

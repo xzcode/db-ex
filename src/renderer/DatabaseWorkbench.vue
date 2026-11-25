@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import {formatQuery} from '../shared/query-format'
 import { canActOnColumn,changeColumnSort,mongoSortRules,mongoSortText,type ColumnAction } from '../shared/column-actions'
 import { databaseCapabilities } from '../shared/database-capabilities'
 import { t, localize, locale } from './i18n'
@@ -118,7 +119,7 @@ const libraryKind = computed(() => props.node?.category === 'queries' ? 'query' 
 const canWrite = computed(() => props.session.writable && !props.node?.readOnly && props.node?.kind !== 'mongo-category')
 const inspectorName = computed(() => isRedis.value ? (tab.value === 'data' ? result.value?.rows[selectedRow.value]?.key || (redisDetail.value ? redisKey.value : '') : '') : entity.value.entity)
 const inspectionKey = computed(() => JSON.stringify([props.session.id, props.session.kind, entity.value.database, inspectorName.value]))
-const visibleSnippets = computed(() => snippets.value.filter(item => item.kind === props.session.kind && (!historyOnlyFavorites.value || item.favorite) && (!isMongo.value || item.mongoKind !== 'query')))
+const visibleSnippets = computed(() => snippets.value.filter(item => item.kind === props.session.kind && (!historyOnlyFavorites.value || item.favorite) && (!isMongo.value || !item.mongoKind || item.mongoKind === 'aggregation')))
 const browseFields = computed(() => (databaseCapabilities(props.session.kind).browser==='relational') ? (structure.value?.rows || []).map(row => String(row.name || row.Field || '')).filter(Boolean) : result.value?.columns || [])
 function supportsRecordMutation(operation:'insert'|'update'|'delete'|'import'){
   if(props.session.kind!=='mariadb')return true
@@ -333,6 +334,11 @@ async function loadStructure() {
   if (!hasEntity.value) return
   const next = await execute(isMysql.value ? { action: 'mysql.structure', ...entity.value } : { action: 'mongo.indexes', ...entity.value }, false)
   if (next) { structure.value = next; primaryKeys.value = next.primaryKeys || [] }
+}
+async function beautifySql(){
+ if(busy.value)return
+ const before=sql.value
+ try{const formatted=await formatQuery(before,props.session.kind,preferences.value.editor.tabSize);if(sql.value===before)sql.value=formatted}catch(reason){setError(reason)}
 }
 async function runQuery(nextOffset = 0) {
   if (busy.value) return
@@ -723,7 +729,7 @@ onBeforeUnmount(() => { disposed = true; generation++; if (inspectionTimer) clea
     <div v-if="busy" class="operation-progress"><span class="progress-indicator"></span> {{ t('正在执行') }} <button v-if="tab !== 'data' || isRedis || session.kind==='sqlite'" class="btn secondary small" @click="cancel">{{ t('取消并断开') }}</button></div>
 
     <template v-if="isMysql && tab === 'query'">
-      <div class="editor-toolbar"><button class="btn primary" :disabled="busy" @click="runQuery()">{{ t('运行选中 / 全部') }} <kbd>⌘ / Ctrl ↵</kbd></button><label class="inline-field">{{ t('每页') }}<select v-model.number="limit"><option :value="100">100</option><option :value="200">200</option><option :value="500">500</option></select></label><span class="toolbar-spacer"></span><button v-if="capabilities.transactions" class="btn secondary" :disabled="busy || !canWrite || session.transaction" @click="transaction('mysql.begin')">{{ t('开始事务') }}</button><button v-if="capabilities.transactions" class="btn secondary" :disabled="busy || !session.transaction" @click="transaction('mysql.commit')">{{ t('提交') }}</button><button v-if="capabilities.transactions" class="btn secondary" :disabled="busy || !session.transaction" @click="transaction('mysql.rollback')">{{ t('回滚') }}</button></div>
+      <div class="editor-toolbar"><button class="btn primary" :disabled="busy" @click="runQuery()">{{ t('运行选中 / 全部') }} <kbd>⌘ / Ctrl ↵</kbd></button><button class="btn secondary" :disabled="busy" @click="beautifySql">{{ t('美化语句') }}</button><label class="inline-field">{{ t('每页') }}<select v-model.number="limit"><option :value="100">100</option><option :value="200">200</option><option :value="500">500</option></select></label><span class="toolbar-spacer"></span><button v-if="capabilities.transactions" class="btn secondary" :disabled="busy || !canWrite || session.transaction" @click="transaction('mysql.begin')">{{ t('开始事务') }}</button><button v-if="capabilities.transactions" class="btn secondary" :disabled="busy || !session.transaction" @click="transaction('mysql.commit')">{{ t('提交') }}</button><button v-if="capabilities.transactions" class="btn secondary" :disabled="busy || !session.transaction" @click="transaction('mysql.rollback')">{{ t('回滚') }}</button></div>
       <p v-if="recovery.error.value && tab==='query'" class="compact-help">{{ t(recovery.error.value) }}</p><div v-if="recovery.available.value && tab==='query'" class="recovery-banner"><span>{{ t('发现未恢复的查询草稿') }}</span><button class="btn secondary small" @click="recovery.restore">{{ t('恢复草稿') }}</button><button class="btn secondary small" @click="recovery.dismiss">{{ t('放弃草稿') }}</button></div><div class="query-editor"><CodeEditor ref="sqlEditor" v-model="sql" language="sql" :suggestions="structure?.rows.map(row => row.Field || row.name || '') || []" :table-suggestions="tableSuggestions" @execute="runQuery()" /></div>
       <label class="parameter-line">{{ t('参数') }} <input v-model="parameters" :aria-label="t('SQL 参数 JSON 数组')" placeholder='["value", 123]' spellcheck="false" /><span>{{ t('用 ? 绑定参数；每次仅执行一条 SQL') }}</span></label>
     </template>

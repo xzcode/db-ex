@@ -25,12 +25,15 @@
   },
   "dependencies": {
     "@clickhouse/client": "^1.25.0",
+    "acorn": "^8.19.0",
     "ioredis": "^5.11.1",
     "monaco-editor": "^0.57.0",
     "mongodb": "^6.15.0",
     "mysql2": "^3.12.0",
     "papaparse": "^5.7.1",
+    "prettier": "^3.10.1",
     "socks": "^2.8.11",
+    "sql-formatter": "^15.10.0",
     "ssh2": "^1.16.0",
     "vue": "^3.5.13"
   },
@@ -59,8 +62,14 @@
       "package.json"
     ],
     "extraResources": [
-      { "from": "build/icon.png", "to": "icons/db-ex.png" },
-      { "from": "build/icon-mac.png", "to": "icons/db-ex-mac.png" }
+      {
+        "from": "build/icon.png",
+        "to": "icons/db-ex.png"
+      },
+      {
+        "from": "build/icon-mac.png",
+        "to": "icons/db-ex-mac.png"
+      }
     ],
     "asar": true,
     "asarUnpack": [

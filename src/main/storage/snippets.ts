@@ -20,7 +20,7 @@ export class SnippetStore {
       if (!input || typeof input.name !== 'string' || input.name.length > 100 || typeof input.text !== 'string' || input.text.length > 100000 || !['mysql', 'mongodb', 'redis', 'sqlite','mariadb','clickhouse'].includes(input.kind) || typeof input.favorite !== 'boolean') throw new Error('查询记录参数错误')
       if(input.parameters!==undefined&&(typeof input.parameters!=='string'||input.parameters.length>100000))throw new Error('查询记录参数错误')
       if (input.database !== undefined && (typeof input.database !== 'string' || input.database.length > 200)) throw new Error('数据库名称无效')
-      if (input.mongoKind !== undefined && (input.kind !== 'mongodb' || !['query','aggregation'].includes(input.mongoKind))) throw new Error('查询记录参数错误')
+      if (input.mongoKind !== undefined && (input.kind !== 'mongodb' || !['query','aggregation','script'].includes(input.mongoKind))) throw new Error('查询记录参数错误')
       if (input.entity !== undefined && (typeof input.entity !== 'string' || input.entity.length > 200)) throw new Error('查询记录参数错误')
       if (input.connectionId !== undefined) validateId(input.connectionId)
       if (input.id) validateId(input.id)

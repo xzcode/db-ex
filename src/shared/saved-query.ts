@@ -3,7 +3,7 @@ import type { DatabaseKind, ExplorerNode } from './types'
 export type QueryEngine=Exclude<DatabaseKind,'redis'>
 export type QueryMode='sql'|'mongo-find'|'mongo-aggregation'
 export interface QueryScope {connectionId:string;kind:QueryEngine;database:string}
-export interface QueryDraft {name:string;mode:QueryMode;text:string;parameters?:string;entity?:string}
+export interface QueryDraft {name:string;mode:QueryMode;text:string;parameters?:string;entity?:string;syntax?:'mongo-shell'}
 export interface SavedQuery extends QueryDraft,QueryScope {id:string;createdAt:string;updatedAt:string;revision:string}
 export interface QuerySummary extends QueryScope {id:string;name:string;mode:QueryMode;createdAt:string;updatedAt:string;revision:string;bytes:number}
 export interface QuerySave {draft:QueryDraft;id?:string;revision?:string}
@@ -35,6 +35,7 @@ export function normalizeQueryDraft(kind:QueryEngine,input:unknown):QueryDraft{
  // A saved draft may be incomplete. Query execution still passes the engine
  // policy and native write confirmation; saving/importing never executes.
  if(mode==='sql')return {name,mode,text,parameters:bounded(v.parameters??(kind==='clickhouse'?'{}':'[]'),100000)}
+ if(v.syntax==='mongo-shell')return {name,mode,text,syntax:'mongo-shell'}
  const entity=bounded(v.entity??'',200)
  if(/[\u0000-\u001f]/.test(entity))throw new Error('查询记录参数错误')
  if(mode==='mongo-find'){

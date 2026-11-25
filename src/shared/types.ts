@@ -180,7 +180,7 @@ export type ClickHouseOperation =
 export type DatabaseOperation = MysqlOperation | MongoOperation | RedisOperation | ClickHouseOperation
 export interface QuerySnippet {
   /** Optional fields keep existing encrypted history files compatible. */
-  mongoKind?: 'query' | 'aggregation'
+  mongoKind?: 'query' | 'aggregation' | 'script'
   parameters?:string
   entity?: string
   connectionId?: string

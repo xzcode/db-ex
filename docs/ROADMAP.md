@@ -227,3 +227,5 @@ MySQL/MongoDB 集成测试用 `DB_EX_INTEGRATION=1` 显式开启，连接 `MYSQL
 - [ ] 运行时 DB EX 图标代码已接入正式资源（macOS Dock PNG 与 ICNS 源一致；Windows/Linux 原生窗口图标及 Windows AppUserModelID），等待跨平台打包和实际 Dock／任务栏外观验收。
 
 - 单栏资源树已实现：多个连接可同时独立展开，保留按连接的对象缓存、会话、分组、颜色及数据库右键菜单；移除独立资源浏览器及其分隔条。连接行压缩为单行，地址和 SSH/TLS/代理信息可悬停查看；唯一侧栏可调宽至 520px。8 项相关 UI 回归、类型检查和构建通过。
+
+- [x] MongoDB 查询与聚合查询对象改为原生语句编辑器，旧查询兼容加载、保存及另存为；支持受控单语句 find/findOne/countDocuments/aggregate、游标修饰器和已有确认机制下的 insertOne/insertMany/createIndex/dropIndex，精确 BSON 构造器。原生查询、SQL 编辑器提供格式化，MongoDB 支持集合和方法补全，字段提示来自已执行查询结果。尚不支持任意 mongosh 脚本或 update/delete 语句。19 项单元测试、3 项 UI 回归及集合/方法补全 UI 检查通过，类型检查和构建通过。见 docs/NATIVE_QUERY_EDITOR.md。
