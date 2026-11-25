@@ -5,7 +5,6 @@ export const mongoCategories = [
   { key: 'views', label: '视图', icon: '◉', expandable: true },
   { key: 'functions', label: '函数', icon: 'ƒ', expandable: true },
   { key: 'indexes', label: '索引', icon: 'A–Z', expandable: true },
-  { key: 'mapReduce', label: 'MapReduce', icon: '⤨', expandable: false },
   { key: 'pipelines', label: '聚合管道', icon: '≡', expandable: false },
   { key: 'gridfs', label: 'GridFS 存储桶', icon: '▣', expandable: true },
   { key: 'queries', label: '查询', icon: '▤', expandable: false },

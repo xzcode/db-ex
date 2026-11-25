@@ -30,6 +30,10 @@ export function normalizeWorkspace(input:unknown):WorkspaceSnapshot{
   for(const id of ids){
     if(!Object.hasOwn(values,id))continue
     const v=object(values[id]),n=object(v.node)
+    if(n.kind==='mongo-category'&&n.category==='mapReduce'&&name(n.database)){
+      positions[id]={tab:'data',node:{kind:'database',database:n.database}}
+      continue
+    }
     const kind=nodeKinds.find(k=>k===n.kind)
     const node=kind&&name(n.database)?{kind,database:n.database,entity:name(n.entity)?n.entity:undefined,category:mongoCategory(n.category)?.key,...(isQueryId(n.queryId)?{queryId:n.queryId}:{}),...(['sql','mongo-find','mongo-aggregation'].includes(String(n.queryMode))?{queryMode:n.queryMode as QueryMode}:{})}:undefined
     positions[id]={tab:workbenchTabs.includes(v.tab as WorkbenchTab)?v.tab as WorkbenchTab:'data',node}

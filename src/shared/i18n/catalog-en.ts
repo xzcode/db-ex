@@ -894,8 +894,6 @@ export const en: Readonly<Record<string, string>> = {
   "聚合管道": "Aggregation pipelines",
   "GridFS 存储桶": "GridFS buckets",
   "只读对象": "Read-only object",
-  "MapReduce 已弃用": "MapReduce is deprecated",
-  "请使用聚合管道替代；DB EX 不执行服务器端 JavaScript。": "Use aggregation pipelines instead; DB EX does not execute server-side JavaScript.",
   "GridFS 文件元数据浏览；暂不支持文件上传、下载和删除。": "Browse GridFS file metadata; file upload, download and deletion are not supported yet.",
   "仅查看已存储的函数，不执行服务器端 JavaScript。": "View stored functions only; server-side JavaScript is not executed.",
   "已保存对象": "Saved objects",

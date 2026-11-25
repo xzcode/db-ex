@@ -54,7 +54,7 @@ async function installBridge(page: Page) {
       async children(id: string, database: string, category?: string) {
         if(id==='ch')return [{id:database+'-events',label:'events',database,entity:'events',kind:'table',metrics:[{label:'存储引擎',value:'MergeTree'},{label:'记录数（估算）',value:'10'}]}]
         if(id!=='mongo')return [{ id: database + '-users', label: 'users', database, entity: 'users', kind: 'table' }]
-        if(!category)return [['collections','集合'],['views','视图'],['functions','函数'],['indexes','索引'],['mapReduce','MapReduce'],['pipelines','聚合管道'],['gridfs','GridFS 存储桶'],['queries','查询']].map(([key,label])=>({id:database+'-'+key,label,database,kind:'mongo-category',category:key}))
+        if(!category)return [['collections','集合'],['views','视图'],['functions','函数'],['indexes','索引'],['pipelines','聚合管道'],['gridfs','GridFS 存储桶'],['queries','查询']].map(([key,label])=>({id:database+'-'+key,label,database,kind:'mongo-category',category:key}))
         if(category==='collections')return [{id:database+'-users',label:'users',database,entity:'users',kind:'collection',metrics:[{label:'文档数',value:'10'},{label:'数据大小',value:'2048',format:'bytes'}]},...((window as any).__dbexCatalogFixture?[{id:database+'-audit',label:'audit',database,entity:'audit',kind:'collection',metrics:[{label:'文档数',value:'2'},{label:'数据大小',value:'100',format:'bytes'}]}]:[])]
         if(category==='views')return [{id:database+'-users-view',label:'users_view',database,entity:'users_view',kind:'view',readOnly:true}]
         if(category==='indexes')return [{id:database+'-users-indexes',label:'users',database,entity:'users',kind:'mongo-indexes'}]
@@ -723,7 +723,7 @@ test('MongoDB filter detects ObjectId while typing and preserves a manual text o
 test('MongoDB classified explorer and saved query library',async({page})=>{
   await connect(page,'Mongo Local')
   await page.locator('.resource-node[data-object-kind="database"]').click()
-  await expect(page.locator('.resource-node[data-object-kind="mongo-category"]')).toHaveCount(8)
+  await expect(page.locator('.resource-node[data-object-kind="mongo-category"]')).toHaveCount(7)
   await page.locator('[data-object-category="views"]').click()
   await page.locator('[data-object-kind="view"]').click()
   await expect(page.locator('.workbench:visible')).toContainText('只读对象')
@@ -757,8 +757,8 @@ test('MongoDB classified explorer and saved query library',async({page})=>{
   await expect(catalog.locator('tbody')).toContainText('My saved query')
   await catalog.locator('tbody tr').filter({hasText:'My saved query'}).dblclick()
   await expect(library.getByLabel('Filter',{exact:true})).toHaveValue('{"score":{"$numberInt":"7"}}')
-  await page.locator('[data-object-category="mapReduce"]').click()
-  await expect(page.locator('.workbench:visible')).toContainText('MapReduce 已弃用')
+  await expect(page.locator('[data-object-category="mapReduce"]')).toHaveCount(0)
+  await expect(page.locator('[data-object-category="pipelines"]')).toBeVisible()
 })
 
 test('database menu creates and drops a named MongoDB database, with typed confirmation',async({page})=>{
