@@ -17,10 +17,13 @@ export class SnippetStore {
   }
   save(input: Omit<QuerySnippet, 'id' | 'updatedAt'> & { id?: string }): Promise<QuerySnippet> {
     return this.writes.run(async () => {
-      if (!input || typeof input.name !== 'string' || input.name.length > 100 || typeof input.text !== 'string' || input.text.length > 100000 || !['mysql', 'mongodb', 'redis'].includes(input.kind) || typeof input.favorite !== 'boolean') throw new Error('查询记录参数错误')
+      if (!input || typeof input.name !== 'string' || input.name.length > 100 || typeof input.text !== 'string' || input.text.length > 100000 || !['mysql', 'mongodb', 'redis', 'sqlite'].includes(input.kind) || typeof input.favorite !== 'boolean') throw new Error('查询记录参数错误')
       if (input.database !== undefined && (typeof input.database !== 'string' || input.database.length > 200)) throw new Error('数据库名称无效')
+      if (input.mongoKind !== undefined && (input.kind !== 'mongodb' || !['query','aggregation'].includes(input.mongoKind))) throw new Error('查询记录参数错误')
+      if (input.entity !== undefined && (typeof input.entity !== 'string' || input.entity.length > 200)) throw new Error('查询记录参数错误')
+      if (input.connectionId !== undefined) validateId(input.connectionId)
       if (input.id) validateId(input.id)
-      const entry: QuerySnippet = { id: input.id || randomUUID(), name: input.name, kind: input.kind, database: input.database, text: input.text, favorite: input.favorite, updatedAt: new Date().toISOString() }
+      const entry: QuerySnippet = { id: input.id || randomUUID(), name: input.name, kind: input.kind, database: input.database, mongoKind: input.mongoKind, entity: input.entity, connectionId: input.connectionId, text: input.text, favorite: input.favorite, updatedAt: new Date().toISOString() }
       const old = await this.read()
       const result = [entry, ...old.filter(x => x.id !== entry.id)]
       const favorites = result.filter(x => x.favorite)

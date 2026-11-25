@@ -2,8 +2,8 @@ import type { ConnectionConfig, ConnectionDraft, DatabaseKind, Endpoint, SshOpti
 
 export type EntryMode = 'fields' | 'uri'
 export type DatabaseAuthMode = 'none' | 'password'
-export const defaultPorts: Record<DatabaseKind, number> = { mysql: 3306, mongodb: 27017, redis: 6379 }
-export const databaseNames: Record<DatabaseKind, string> = { mysql: 'MySQL', mongodb: 'MongoDB', redis: 'Redis' }
+export const defaultPorts: Record<DatabaseKind, number> = { mysql: 3306, mongodb: 27017, redis: 6379, sqlite: 0 }
+export const databaseNames: Record<DatabaseKind, string> = { mysql: 'MySQL', mongodb: 'MongoDB', redis: 'Redis', sqlite: 'SQLite' }
 
 export function newSshHost(): SshOptions {
   return { enabled: true, host: '', port: 22, username: '', authMode: 'password', password: '', privateKeyPath: '', passphrase: '', agentSocket: '', hostFingerprint: '', jumps: [] }
@@ -11,7 +11,7 @@ export function newSshHost(): SshOptions {
 export function newConnectionConfig(kind: DatabaseKind): ConnectionConfig {
   return {
     name: '', kind, host: '127.0.0.1', port: defaultPorts[kind],
-    username: kind === 'mysql' ? 'root' : '', password: '', database: '', authSource: 'admin', redisDb: 0, uri: '',
+    username: kind === 'mysql' ? 'root' : '', password: '', database: '', filePath: '', authSource: 'admin', redisDb: 0, uri: '',
     ssh: { ...newSshHost(), enabled: false }, tls: { enabled: false, caPath: '', certPath: '', keyPath: '', servername: '' },
     proxy: { enabled: false, type: 'socks5', host: '', port: 1080, username: '', password: '' },
     redisMode: 'standalone', nodes: [], mongoReplicaSet: '', mongoDirect: false, mongoTopology: 'auto', connectTimeoutMs: 12000,
@@ -35,6 +35,7 @@ export function mongoUriAddress(uri: string): string | undefined {
 }
 /** The actual displayed target follows driver routing, not an inactive host field. */
 export function connectionDisplayEndpoint(config: ConnectionConfig): Endpoint {
+  if (config.kind === 'sqlite') return {host:config.filePath||'SQLite',port:0}
   if (config.kind === 'mongodb' && config.uri) return { host: 'MongoDB URI', port: config.port }
   if ((config.kind === 'mongodb' || (config.kind === 'redis' && config.redisMode !== 'standalone')) && config.nodes?.length) return config.nodes[0]!
   return { host: config.host || 'MongoDB URI', port: config.port }
@@ -50,6 +51,10 @@ export function prepareConnection(config: ConnectionConfig, options: FormOptions
     if (!options.allowUnnamed) throw new Error('INVALID_CONNECTION: 请填写连接名称')
     value.name = databaseNames[value.kind]
   }
+  if(value.kind==='sqlite'){
+    if(!value.filePath?.trim())throw new Error('INVALID_CONNECTION: SQLite')
+    return {config:{...newConnectionConfig('sqlite'),id:value.id,name:value.name,filePath:value.filePath.trim(),group:value.group,color:value.color},clearSecrets:[...clear]}
+  }
   if (value.kind === 'mongodb' && options.entry === 'uri') {
     value.uri = value.uri?.trim() || ''
     const retain = !value.uri && options.draft?.secretFields.includes('uri') && !clear.has('uri')
@@ -63,7 +68,7 @@ export function prepareConnection(config: ConnectionConfig, options: FormOptions
         authSource: old.authSource, nodes: old.nodes, mongoReplicaSet: old.mongoReplicaSet,
         mongoTopology: old.mongoTopology, mongoDirect: old.mongoDirect })
     } else {
-      Object.assign(value, { host: '', port: 27017, username: '', password: '', database: '', authSource: '',
+      Object.assign(value, { host: '', port: 27017, username: '', password: '', database: '', filePath: '', authSource: '',
         nodes: [], mongoReplicaSet: '', mongoDirect: false, mongoTopology: 'auto' })
     }
     // Field credentials are not used by URI connections.

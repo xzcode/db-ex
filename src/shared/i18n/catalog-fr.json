@@ -406,5 +406,16 @@
   "已选择": "Sélectionné",
   "数据库": "Base de données",
   "集合": "Collection",
-  "主键": "Clé primaire"
+  "主键": "Clé primaire",
+  "恢复工作区": "Restaurer l’espace de travail",
+  "恢复已保存的连接选项卡，不会自动执行查询或启用写入。": "Restaurer les onglets de connexion enregistrés sans exécuter de requêtes ni activer les écritures.",
+  "配置工具绝对路径并检查版本。数据库菜单可执行受控导入、导出和备份恢复。": "Configurer les chemins absolus et vérifier les versions. Le menu de la base permet l’importation, l’exportation, la sauvegarde et la restauration.",
+  "备份数据库": "Sauvegarder la base de données",
+  "恢复数据库": "Restaurer la base de données",
+  "确认执行外部工具？": "Exécuter l’outil externe ?",
+  "外部工具当前仅支持普通直连。": "Les outils externes prennent actuellement en charge uniquement les connexions directes.",
+  "导入或恢复可能写入数据库，请确认文件来源及目标。": "L’importation ou la restauration peut modifier la base. Vérifiez la source et la destination.",
+  "导出仅创建新文件，不覆盖现有文件。": "L’exportation crée un nouveau fichier sans écraser les fichiers existants.",
+  "SQLite 无法无损导出当前结果；请使用数据库备份。": "Le résultat SQLite actuel ne peut pas être exporté sans perte. Utilisez une sauvegarde de la base.",
+  "发现未保存的记录编辑草稿": "Brouillon de modification non enregistré trouvé"
 }

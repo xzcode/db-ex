@@ -49,4 +49,28 @@ test('native PNG/ICNS/ICO use the user-approved bitmap rather than legacy redraw
   assert.equal(icns.subarray(0, 4).toString('ascii'), 'icns')
   assert.equal(icns.readUInt32BE(4), icns.length)
   assert(icns.includes(Buffer.from('ic10')))
+  let macPng: Buffer | undefined
+  for (let at = 8; at + 8 <= icns.length;) {
+    const length = icns.readUInt32BE(at + 4)
+    assert(length >= 8 && at + length <= icns.length)
+    if (icns.toString('ascii', at, at + 4) === 'ic10') macPng = icns.subarray(at + 8, at + length)
+    at += length
+  }
+  assert(macPng)
+  assert.equal(macPng.readUInt32BE(16), 1024)
+  assert.equal(macPng.readUInt32BE(20), 1024)
+  // Verify the actual packaged Mac artwork, not just the Linux PNG.
+  for (const [x, y] of [[99, 512], [924, 512], [512, 99], [512, 924], [100, 100]]) {
+    assert.equal(pixel(macPng, x, y)[3], 0, 'Mac icon must stay inside its inset rounded-square template')
+  }
+  for (const [x, y] of [[100, 512], [923, 512], [512, 100], [512, 923]]) {
+    const edge = pixel(macPng, x, y)
+    assert.equal(edge[3], 255, 'Mac artwork has an opaque inner edge, no separate translucent border')
+    assert(edge[0] < 70 && edge[2] > edge[0], 'Mac artwork edge remains dark navy, not white')
+  }
+  const macCenter = pixel(macPng, 512, 512)
+  assert(macCenter[0] < 50 && macCenter[2] > macCenter[0] && macCenter[3] === 255)
+  // The existing cyan ellipse is rescaled with the original approved symbol.
+  const arc = Array.from({ length: 7 }, (_, i) => pixel(macPng!, 512, 293 + i))
+  assert(arc.some(value => value[1] > 160 && value[2] > 160), 'Mac icon preserves the approved cyan ellipse')
 })

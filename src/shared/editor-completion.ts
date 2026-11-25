@@ -1,0 +1,9 @@
+export const sqlKeywords=['SELECT','FROM','WHERE','JOIN','LEFT JOIN','INNER JOIN','ON','GROUP BY','ORDER BY','HAVING','LIMIT','OFFSET','DISTINCT','AS','AND','OR','NOT','NULL','IS NULL','IS NOT NULL','IN','BETWEEN','LIKE','UNION','WITH','INSERT INTO','VALUES','UPDATE','SET','DELETE FROM','CREATE TABLE','ALTER TABLE','DROP TABLE','CREATE INDEX','DROP INDEX','CASE','WHEN','THEN','ELSE','END'] as const
+export const sqlFunctions=['COUNT','SUM','AVG','MIN','MAX','COALESCE','NULLIF','ROUND','ABS','LOWER','UPPER','LENGTH','SUBSTR','TRIM','REPLACE','DATE','TIME'] as const
+export const mongoSuggestions=['$match','$project','$group','$sort','$limit','$skip','$unwind','$lookup','$addFields','$set','$unset','$count','$facet','$sample','$replaceRoot','$eq','$ne','$gt','$gte','$lt','$lte','$in','$nin','$and','$or','$not','$exists','$type','$regex','$sum','$avg','$min','$max','$first','$last','$push','$addToSet','$cond','$ifNull'] as const
+export const redisSuggestions=['PING','GET','MGET','STRLEN','EXISTS','TYPE','TTL','PTTL','SCAN','HGET','HMGET','HGETALL','HSCAN','HLEN','LRANGE','LLEN','SSCAN','SCARD','SISMEMBER','ZRANGE','ZSCAN','ZCARD','ZSCORE','XRANGE','XLEN','INFO','SET','DEL','EXPIRE','PERSIST','HSET','HDEL','LPUSH','RPUSH','LPOP','RPOP','SADD','SREM','ZADD','ZREM','XADD','XDEL'] as const
+export function sqlContext(prefix:string):'table'|'field'|'general' {
+ if(/\b(?:FROM|JOIN|INTO|UPDATE|TABLE)\s+[\w.\x60"]*$/i.test(prefix))return 'table'
+ if(/\b(?:SELECT|WHERE|ON|HAVING|SET|ORDER\s+BY|GROUP\s+BY)\s+[^;]*$/i.test(prefix))return 'field'
+ return 'general'
+}

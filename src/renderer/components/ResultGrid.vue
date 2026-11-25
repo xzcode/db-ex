@@ -1,10 +1,14 @@
 <script setup lang="ts">
 import { t } from '../i18n'
+import { preferences } from '../preferences'
+import { gridRowHeight } from '../../shared/preferences'
 import { bsonLabel, gridBsonType, type BsonTypeBranch, type BsonType } from '../../shared/bson-types'
 import { canSafelyEditMongoDocument, mongoFieldFilter } from '../../shared/bson-editor'
 import { formatBsonValue, parseBsonDocument } from '../../shared/bson-display'
 import { activeTypeColor } from '../../shared/bson-palette'
 import { bsonPalette } from '../bson-preferences'
+import { databasePalettes } from '../database-color-preferences'
+import { databaseTypeColor } from '../../shared/database-palette'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 const props = withDefaults(defineProps<{
@@ -15,6 +19,10 @@ const props = withDefaults(defineProps<{
   checked?: number[]
   offset?: number
   bsonTypes?: BsonTypeBranch[]
+  columnTypes?: string[]
+  sqliteTypes?: string[][]
+  nullCells?: number[][]
+  redisRowTypes?: string[]
   documents?: string[]
   documentMenu?: boolean
   canEditDocument?: boolean
@@ -23,8 +31,9 @@ const props = withDefaults(defineProps<{
 }>(), { selected: -1, selectable: false, checked: () => [], offset: 0 })
 const emit = defineEmits<{ select: [index: number]; open: [index: number]; check: [index: number]; checkAll: []; documentEdit: [index: number]; documentView: [index: number]; documentAction: [action: 'add' | 'copy-value' | 'copy-document' | 'duplicate' | 'delete' | 'null' | 'empty' | 'filter', index: number, field?: string] }>()
 const mongo = computed(() => props.bsonTypes !== undefined)
-const rowHeight = computed(() => mongo.value ? 26 : 34)
-const headerHeight = computed(() => mongo.value ? 28 : 34)
+const rowHeight = computed(() => gridRowHeight(preferences.value,mongo.value))
+const headerHeight = computed(() => Math.max(mongo.value?28:34,preferences.value.records.fontSize+12))
+const gridStyle=computed(()=>({'--record-height':rowHeight.value+'px','--record-header-height':headerHeight.value+'px','--record-font-size':preferences.value.records.fontSize+'px','--record-font':preferences.value.records.fontFamily==='default'?(mongo.value?'inherit':'"SFMono-Regular", Consolas, monospace'):'"'+preferences.value.records.fontFamily+'", sans-serif',...(mongo.value?{width:tableWidth.value+'px'}:{})}))
 const OVERSCAN = 6
 const scrollHost = ref<HTMLElement>()
 const scrollTop = ref(0)
@@ -161,7 +170,25 @@ onBeforeUnmount(() => { window.removeEventListener('pointerdown', outside); wind
 function cellType(row: Record<string, unknown>, index: number, key: string): BsonType | undefined {
   return cellRows.value[index]?.[key]?.type ?? (props.bsonTypes ? gridBsonType(row, props.bsonTypes[index], key) : undefined)
 }
-function cellColor(type?: BsonType): string | undefined { return type ? activeTypeColor(bsonPalette.value, type) : undefined }
+function genericType(index: number, column: number): string | undefined {
+  if(props.sqliteTypes)return props.sqliteTypes[index]?.[column]||'NULL'
+  if (props.columnTypes) return props.nullCells?.[index]?.includes(column) ? 'NULL' : props.columnTypes[column] || 'UNKNOWN'
+  if (props.redisRowTypes) return props.redisRowTypes[index] || 'unknown'
+  return undefined
+}
+function gridType(row: Record<string, unknown>, index: number, key: string, column: number): string | undefined { return cellType(row, index, key) || genericType(index, column) }
+function gridColor(row: Record<string, unknown>, index: number, key: string, column: number): string | undefined {
+  const bson = cellType(row, index, key)
+  if (bson) return activeTypeColor(bsonPalette.value, bson)
+  const kind = props.sqliteTypes?'sqlite':props.columnTypes ? 'mysql' : props.redisRowTypes ? 'redis' : undefined
+  const type = genericType(index, column)
+  return kind && type && databasePalettes.value[kind].enabled ? databaseTypeColor(kind, databasePalettes.value[kind], type) : undefined
+}
+function gridLabel(row: Record<string, unknown>, index: number, key: string, column: number): string {
+  const bson = cellType(row, index, key)
+  return bson ? t(bsonLabel(bson)) : genericType(index, column) || ''
+}
+const showTypeLabels = computed(() => mongo.value ? bsonPalette.value.showLabels : props.sqliteTypes?databasePalettes.value.sqlite.showLabels:props.columnTypes ? databasePalettes.value.mysql.showLabels : props.redisRowTypes ? databasePalettes.value.redis.showLabels : false)
 function display(value: unknown): string {
   if (value === null) return 'NULL'
   if (value === undefined) return '—'
@@ -174,7 +201,7 @@ function display(value: unknown): string {
 
 <template>
   <div ref="scrollHost" class="grid-scroll" tabindex="0" :aria-label="t('结果表格')" @scroll.passive="onScroll">
-    <table :class="['data-table', { 'virtual-grid': virtual, 'mongo-grid': mongo }]" :style="mongo ? { width: tableWidth + 'px' } : undefined" :aria-rowcount="rows.length + 1" :dir="mongo ? 'ltr' : undefined">
+    <table :class="['data-table', 'configured-grid', { 'virtual-grid': virtual, 'mongo-grid': mongo, 'typed-grid': !!columnTypes || !!redisRowTypes || !!sqliteTypes }]" :style="gridStyle" :aria-rowcount="rows.length + 1" :dir="mongo ? 'ltr' : undefined">
       <colgroup v-if="mongo"><col style="width: 38px" /><col v-for="column in columns" :key="column" :style="{ width: columnWidth(column) + 'px' }" /></colgroup>
       <thead><tr>
         <th v-if="selectable" class="number-cell"><input type="checkbox" :aria-label="t('选择当前页')" :checked="rows.length > 0 && checked.length === rows.length" @change="emit('checkAll')" /></th>
@@ -182,17 +209,19 @@ function display(value: unknown): string {
       </tr></thead>
       <tbody>
         <tr v-if="topSpace" class="virtual-spacer" aria-hidden="true"><td :colspan="columnCount" :style="{ height: topSpace + 'px' }"></td></tr>
-        <tr v-for="item in visibleRows" :key="item.index" :data-row-index="item.index" :aria-rowindex="item.index + 2" :class="{ selected: selected === item.index }" @click="emit('select', item.index)" @dblclick="emit('open', item.index)" :tabindex="documentMenu ? 0 : undefined" @contextmenu="openRowMenu($event, item.index)" @keydown.shift.f10="openRowMenu($event, item.index)">
+        <tr v-for="item in visibleRows" :key="item.index" :data-row-index="item.index" :aria-rowindex="item.index + 2" :class="{ selected: selected === item.index, 'record-stripe': preferences.records.stripes > 0 && (offset + item.index + 1) % preferences.records.stripes === 0 }" @click="emit('select', item.index)" @dblclick="emit('open', item.index)" :tabindex="documentMenu ? 0 : undefined" @contextmenu="openRowMenu($event, item.index)" @keydown.shift.f10="openRowMenu($event, item.index)">
           <td v-if="selectable" class="number-cell"><input type="checkbox" :aria-label="t('选择第 {0} 行', [item.index + 1])" :checked="checked.includes(item.index)" @click.stop @change="emit('check', item.index)" /></td>
           <td class="number-cell">{{ offset + item.index + 1 }}</td>
-          <td v-for="column in columns" :key="column"
-            :class="{ 'null-cell': item.row[column] === null || !Object.hasOwn(item.row, column) || cellType(item.row, item.index, column) === 'Null' || cellType(item.row, item.index, column) === 'Undefined', 'has-bson-color': !!cellColor(cellType(item.row, item.index, column)) }"
+          <td v-for="(column, columnIndex) in columns" :key="column"
+            :class="{ 'null-cell': item.row[column] === null || !Object.hasOwn(item.row, column) || cellType(item.row, item.index, column) === 'Null' || cellType(item.row, item.index, column) === 'Undefined' || genericType(item.index, columnIndex) === 'NULL', 'has-bson-color': !!gridColor(item.row, item.index, column, columnIndex) }"
             :data-mongo-field="documentMenu ? column : undefined"
             :data-bson-type="cellType(item.row, item.index, column)"
-            :data-bson-color="cellColor(cellType(item.row, item.index, column))"
-            :style="cellColor(cellType(item.row, item.index, column)) ? { '--bson-color': cellColor(cellType(item.row, item.index, column)) } : {}"
-            :title="(cellType(item.row, item.index, column) ? t(bsonLabel(cellType(item.row, item.index, column)!)) + ': ' : '') + cellText(item.row, item.index, column)">
-            <span v-if="bsonTypes && bsonPalette.showLabels" class="bson-type-label">{{ t(bsonLabel(cellType(item.row, item.index, column)!)) }}</span><span class="grid-value">{{ cellText(item.row, item.index, column) }}</span>
+            :data-value-type="gridType(item.row, item.index, column, columnIndex)"
+            :data-type-color="gridColor(item.row, item.index, column, columnIndex)"
+            :data-bson-color="mongo ? gridColor(item.row, item.index, column, columnIndex) : undefined"
+            :style="gridColor(item.row, item.index, column, columnIndex) ? { '--bson-color': gridColor(item.row, item.index, column, columnIndex) } : {}"
+            :title="(gridLabel(item.row, item.index, column, columnIndex) ? gridLabel(item.row, item.index, column, columnIndex) + ': ' : '') + cellText(item.row, item.index, column)">
+            <span v-if="showTypeLabels && gridType(item.row, item.index, column, columnIndex)" class="bson-type-label">{{ gridLabel(item.row, item.index, column, columnIndex) }}</span><span class="grid-value">{{ cellText(item.row, item.index, column) }}</span>
           </td>
         </tr>
         <tr v-if="bottomSpace" class="virtual-spacer" aria-hidden="true"><td :colspan="columnCount" :style="{ height: bottomSpace + 'px' }"></td></tr>
@@ -236,4 +265,9 @@ function display(value: unknown): string {
 .mongo-grid.virtual-grid thead tr { height: 28px; }
 .mongo-grid.virtual-grid tbody tr:not(.virtual-spacer), .mongo-grid.virtual-grid tbody tr:not(.virtual-spacer) td { height: 26px; }
 .mongo-grid.virtual-grid tbody tr:not(.virtual-spacer) td { line-height: 19px; padding: 3px 7px; }
+
+.configured-grid.data-table th { height:var(--record-header-height);font-size:var(--record-font-size); }
+.configured-grid.data-table tbody tr:not(.virtual-spacer),.configured-grid.data-table tbody tr:not(.virtual-spacer) td { height:var(--record-height);box-sizing:border-box; }
+.configured-grid.data-table tbody tr:not(.virtual-spacer) td { font-size:var(--record-font-size);font-family:var(--record-font);padding-top:3px;padding-bottom:3px;line-height:calc(var(--record-font-size) + 4px); }
+.configured-grid.data-table tbody tr.record-stripe:not(.selected):not(:hover) td:not(.has-bson-color) { background:color-mix(in srgb,var(--panel-raised) 70%,var(--panel)); }
 </style>

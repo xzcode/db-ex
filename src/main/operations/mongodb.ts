@@ -2,6 +2,9 @@ import { BSON, MongoBulkWriteError, type AbstractCursor, type CreateIndexesOptio
 import type { MongoOperation, OperationResult } from '../../shared/types'
 import type { BsonTypeBranch } from '../../shared/bson-types'
 import { describeBsonDocument, newTypeBudget } from './bson-metadata'
+import { metric, metrics, type ObjectInspection } from '../../shared/object-inspection'
+import { validateDatabaseName, validateInitialCollection } from '../../shared/database-admin'
+import { mongoDefinition } from './mongo-definition'
 import { boundedText, checkAborted, databaseError, displayCell, emptyResult, MAX_BYTES, MAX_ROWS, MAX_VALUE_BYTES, page, plainObject, requireWrite, resourceName, TIMEOUT_MS, type OperationContext } from './common'
 
 const FORBIDDEN_OPERATORS = new Set(['$where', '$function', '$accumulator', '$out', '$merge'])
@@ -142,6 +145,18 @@ export class MongoOperations {
 
   private async run(operation: MongoOperation, context: OperationContext, signal: AbortSignal): Promise<OperationResult> {
     const database = resourceName(operation.database, '数据库')
+    if (operation.action === 'mongo.createDatabase' || operation.action === 'mongo.dropDatabase') {
+      requireWrite(context)
+      validateDatabaseName('mongodb', database)
+      const db = this.client.db(database)
+      if (operation.action === 'mongo.createDatabase') {
+        const initial = validateInitialCollection(operation.initialCollection)
+        await db.createCollection(initial, { timeoutMS: TIMEOUT_MS })
+        return emptyResult('数据库已创建')
+      }
+      await db.dropDatabase({ timeoutMS: TIMEOUT_MS })
+      return emptyResult('数据库已删除')
+    }
     const entity = resourceName(operation.entity, '集合')
     const collection = this.client.db(database).collection(entity)
     // Protocol metadata (especially error.code) must remain JavaScript numbers:
@@ -149,6 +164,51 @@ export class MongoOperations {
     // Decode only raw user documents with BSON wrappers below, not whole replies.
     const options = { maxTimeMS: TIMEOUT_MS, timeoutMS: TIMEOUT_MS, signal, promoteValues: true, promoteLongs: true }
     switch (operation.action) {
+      case 'mongo.inspect': {
+        const db = this.client.db(database)
+        const inspection: ObjectInspection = { kind: 'collection', metrics: [] }
+        let collectionInfo: Document | undefined
+        try {
+          const cursor = db.listCollections({ name: entity }, { ...options, nameOnly: false, batchSize: 1, raw: true })
+          const data = await this.readCursor(cursor, 1, signal)
+          if (data.documents?.[0]) collectionInfo = BSON.EJSON.parse(data.documents[0], { relaxed: false }) as Document
+          if (collectionInfo?.type === 'view') inspection.kind = 'view'
+        } catch { checkAborted(signal) }
+        if (inspection.kind !== 'view') {
+          try {
+            const stats = await db.command({ collStats: entity, scale: 1 }, { signal, timeoutMS: TIMEOUT_MS, raw: false, promoteValues: true, promoteLongs: false })
+            inspection.metrics = metrics(metric('文档数', stats.count), metric('已固定', stats.capped ?? (collectionInfo ? collectionInfo.options?.capped === true : undefined), 'boolean'), metric('数据大小', stats.size, 'bytes'), metric('对象的平均大小', stats.avgObjSize, 'bytes'), metric('存储大小', stats.storageSize, 'bytes'), metric('索引数', stats.nindexes), metric('索引的总大小', stats.totalIndexSize))
+          } catch {
+            checkAborted(signal)
+            inspection.infoNote = '部分元数据不可用或无读取权限。'
+            try { inspection.metrics.push(...metrics(metric('文档数', await collection.estimatedDocumentCount({ timeoutMS: TIMEOUT_MS })))) } catch { checkAborted(signal) }
+          }
+        }
+        if (!collectionInfo) inspection.definitionNote = 'DDL 不可用或超出读取上限。'
+        else {
+          try {
+            let indexes: Document[] = []
+            let limited = false
+            if (inspection.kind !== 'view') {
+              const data = await this.readCursor(collection.listIndexes({ ...options, batchSize: 50, raw: true }), MAX_ROWS, signal)
+              indexes = (data.documents || []).map(value => BSON.EJSON.parse(value, { relaxed: false }) as Document)
+              limited = Boolean(data.truncated)
+              if (!limited && !inspection.metrics.some(item => item.label === '索引数')) inspection.metrics.push(...metrics(metric('索引数', indexes.length)))
+            }
+            const generated = mongoDefinition(database, entity, collectionInfo, indexes)
+            if (Buffer.byteLength(generated.definition, 'utf8') > MAX_BYTES) inspection.definitionNote = 'DDL 不可用或超出读取上限。'
+            else {
+              inspection.definition = generated.definition
+              if (limited || generated.incomplete) inspection.definitionNote = '部分索引无法完整生成，请核对索引列表。'
+            }
+          } catch { checkAborted(signal); inspection.definitionNote = 'DDL 不可用或超出读取上限。' }
+        }
+        return { columns: [], rows: [], inspection }
+      }
+      case 'mongo.count': {
+        const count = await collection.countDocuments(objectEjson(operation.filter, 'Filter'), { ...options, limit: 1000001 })
+        return { columns: [], rows: [], totalRows: String(count), countLimited: count >= 1000001 }
+      }
       case 'mongo.find': {
         const { limit, offset } = page(operation)
         const cursor = collection.find(objectEjson(operation.filter, 'Filter'), {

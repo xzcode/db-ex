@@ -2,7 +2,7 @@
 
 本地优先的桌面数据库工具，统一管理 **MySQL、MongoDB、Redis**。基于 Electron、Vue 3、TypeScript 与 Monaco，不依赖账号、云端服务或遥测。
 
-当前版本：**0.5.6 预览版**。M2–M5 的功能实现已接入；完整范围、验收证据和限制见 [路线图](docs/ROADMAP.md)。预览安装包与最终发行签名是不同的交付项。
+当前版本：**0.5.7 预览版**。M2–M5 的功能实现已接入；完整范围、验收证据和限制见 [路线图](docs/ROADMAP.md)。预览安装包与最终发行签名是不同的交付项。
 
 ## 功能
 
@@ -138,3 +138,13 @@ Removed the fixed Development / Testing / Production environment classification.
 MongoDB now uses a compact, typed spreadsheet-style value grid: scalar values without canonical EJSON wrappers, per-cell backgrounds, collapsed-by-default filters, resizable columns and 200 rows per page by default (100/200/500 selectable). Array/document summaries open the typed document viewer. Raw EJSON remains available for exact viewing, editing and JSON export; CSV export is unchanged.
 
 The MongoDB row context menu supports document viewing/editing/creation/duplication/deletion, exact value copying, full EJSON copying, field drafts for NULL/empty strings and typed value filtering. The document editor understands a non-executable BSON constructor grammar and provides local Validate and Update actions; the original EJSON editing option and write confirmation remain available.
+
+## v0.5.7 Preview
+
+Shared collapsible object inspector with information, DDL (MongoDB/MySQL) or read-only Redis inspection commands, and per-engine type colors. Statistics are retrieved from the connected database; DDL is copyable and exportable, not executed. MySQL uses server field packet types, MongoDB preserves per-value BSON metadata, Redis uses server key types. Palette preferences are independent per engine and saved locally.
+
+Visual filter and sort builder for MongoDB/MySQL, compact navigation footer, bounded on-demand last-page counts, table/record/text views, and Redis cursor batch navigation. All data updates continue through explicit record review and confirmation.
+
+## Development: SQLite and unified preferences
+
+See [SQLite and preferences continuation](docs/SQLITE_AND_PREFERENCES.md) for the new local SQLite engine, supported operations, recovery and native tool limitations. This development work is not an independently released installer.

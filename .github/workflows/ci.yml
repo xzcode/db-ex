@@ -58,7 +58,13 @@ jobs:
           MYSQL_URL: mysql://root:dbex-test@127.0.0.1:3306
           MONGODB_URI: mongodb://127.0.0.1:27017
           REDIS_URL: redis://127.0.0.1:6379
+      - name: Verify native MySQL and MongoDB backup/restore against isolated databases
+        run: bash scripts/test-native-tools-docker.sh
+        env:
+          DB_EX_TEST_MONGO_IMAGE: mongo:7
       - run: npm run build
+      - name: SQLite isolated process cancellation and rollback
+        run: node scripts/test-sqlite-process.mjs
       - run: npx playwright install --with-deps chromium
       - run: npm run test:ui
       - uses: actions/upload-artifact@v4

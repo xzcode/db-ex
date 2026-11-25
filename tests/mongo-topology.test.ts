@@ -72,7 +72,7 @@ test('real MongoDB replica discovery and primary change keep the same session on
     })
     assert.equal(first.affectedRows, 1)
     assert.equal((await manager.execute(session.id, { action: 'mongo.find', ...target })).documents?.length, 1)
-    assert.ok((await manager.children(session.id, database)).some(node => node.entity === 'documents'))
+    assert.ok((await manager.children(session.id, database, 'collections')).some(node => node.entity === 'documents'))
 
     // A majority barrier confirms the prior application insert has replicated
     // before intentionally moving the primary; no application write is in flight.

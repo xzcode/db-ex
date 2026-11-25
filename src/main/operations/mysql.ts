@@ -2,11 +2,15 @@ import type { Connection } from 'mysql2/promise'
 import type { Connection as CoreConnection, FieldPacket, ResultSetHeader } from 'mysql2'
 import type { MysqlOperation, OperationResult, SqlRow, SqlValue } from '../../shared/types'
 import { checkAborted, databaseError, displayCell, emptyResult, MAX_BYTES, MAX_ROWS, MAX_VALUE_BYTES, page, requireWrite, resourceName, sqlRow, TIMEOUT_MS, type OperationContext } from './common'
+import { validateDatabaseName } from '../../shared/database-admin'
+import { compileMysqlFilter } from '../../shared/browse-filter'
+import { metric, metrics, mysqlFieldType, type ObjectInspection } from '../../shared/object-inspection'
 import { inspectSql, quoteIdentifier } from './sql-policy'
 
 interface QueryData {
   columns: string[]
   values: unknown[][]
+  columnTypes?: string[]
   header?: ResultSetHeader
   truncated: boolean
 }
@@ -75,7 +79,16 @@ export class MysqlOperations {
 
   private async run(operation: MysqlOperation, context: OperationContext, signal: AbortSignal): Promise<OperationResult> {
     switch (operation.action) {
+      case 'mysql.createDatabase': case 'mysql.dropDatabase': {
+        requireWrite(context)
+        if (this.transaction) throw new Error('TRANSACTION_ACTIVE: 当前已有未完成事务')
+        const database = quoteIdentifier(validateDatabaseName('mysql', operation.database))
+        await this.query((operation.action === 'mysql.createDatabase' ? 'CREATE DATABASE ' : 'DROP DATABASE ') + database, [], signal, 1, false)
+        return emptyResult(operation.action === 'mysql.createDatabase' ? '数据库已创建' : '数据库已删除')
+      }
       case 'mysql.query': return this.executeSql(operation, context, signal)
+      case 'mysql.browse': return this.browse(operation, signal)
+      case 'mysql.inspect': return this.inspectObject(operation.database, operation.entity, signal)
       case 'mysql.structure': {
         const structure = await this.structure(operation.database, operation.entity, signal)
         const rows = structure.columns.map(column => ({
@@ -113,6 +126,32 @@ export class MysqlOperations {
     }
   }
 
+  private async browse(operation: Extract<MysqlOperation, { action: 'mysql.browse' }>, signal: AbortSignal): Promise<OperationResult> {
+    const { limit, offset } = page(operation)
+    const compiled = compileMysqlFilter(operation.database, operation.entity, operation.filter)
+    const temporary = !this.transaction
+    if (temporary) await this.query('START TRANSACTION READ ONLY', [], signal, 1, false)
+    try {
+      if (operation.countOnly === true) {
+        const data = await this.query(compiled.countSql, compiled.parameters, signal, 1)
+        const count = String(data.values[0]?.[0] ?? '')
+        if (!/^\d+$/.test(count)) throw new Error('INVALID_FILTER: 筛选或排序条件无效')
+        return { columns: [], rows: [], totalRows: count, countLimited: BigInt(count) >= 1000001n }
+      }
+      // Direct ORDER BY + LIMIT ensures the selected ordering isn't discarded
+      // by a derived-table pagination wrapper.
+      const data = await this.query(compiled.sql + ' LIMIT ' + (limit + 1) + ' OFFSET ' + offset, compiled.parameters, signal, limit + 1)
+      const more = data.values.length > limit
+      if (more) data.values.pop()
+      const result = this.result(data)
+      result.nextOffset = more ? offset + limit : undefined
+      result.truncated = result.truncated || more
+      return result
+    } finally {
+      if (temporary && !this.closed) await this.query('ROLLBACK', [], signal, 1, false)
+    }
+  }
+
   private async executeSql(operation: Extract<MysqlOperation, { action: 'mysql.query' }>, context: OperationContext, signal: AbortSignal): Promise<OperationResult> {
     const policy = inspectSql(operation.sql, context.writable)
     if (policy.mode === 'write') requireWrite(context)
@@ -142,6 +181,34 @@ export class MysqlOperations {
     } finally {
       if (temporaryReadTransaction && !this.closed) await this.query('ROLLBACK', [], signal, 1, false)
     }
+  }
+
+  private async inspectObject(database: string, entity: string, signal: AbortSignal): Promise<OperationResult> {
+    const target = quoteIdentifier(database) + '.' + quoteIdentifier(entity)
+    const inspection: ObjectInspection = { kind: 'table', metrics: [] }
+    try {
+      const meta = await this.query('SELECT TABLE_TYPE, ENGINE, TABLE_ROWS, AVG_ROW_LENGTH, DATA_LENGTH, INDEX_LENGTH, DATA_FREE, AUTO_INCREMENT, TABLE_COLLATION, ROW_FORMAT, CREATE_TIME, UPDATE_TIME FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? LIMIT 1', [database, entity], signal, 1)
+      const row = this.records(meta)[0]
+      if (row) {
+        inspection.kind = row.TABLE_TYPE === 'VIEW' ? 'view' : 'table'
+        inspection.metrics = metrics(metric('存储引擎', row.ENGINE), metric('记录数（估算）', row.TABLE_ROWS, 'estimate'), metric('平均记录大小', row.AVG_ROW_LENGTH, 'bytes'), metric('数据大小', row.DATA_LENGTH, 'bytes'), metric('索引的总大小', row.INDEX_LENGTH, 'bytes'), metric('空闲空间', row.DATA_FREE, 'bytes'), metric('自增值', row.AUTO_INCREMENT), metric('排序规则', row.TABLE_COLLATION), metric('行格式', row.ROW_FORMAT), metric('创建时间', row.CREATE_TIME), metric('更新时间', row.UPDATE_TIME))
+      } else inspection.infoNote = '部分元数据不可用或无读取权限。'
+    } catch (error) { checkAborted(signal); if (this.closed) throw error; inspection.infoNote = '部分元数据不可用或无读取权限。' }
+    try {
+      const sizes = await this.query('SELECT (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?) AS column_count, (SELECT COUNT(DISTINCT INDEX_NAME) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?) AS index_count', [database, entity, database, entity], signal, 1)
+      const row = this.records(sizes)[0]
+      if (row) inspection.metrics.push(...metrics(metric('字段数', row.column_count), metric('索引数', row.index_count)))
+    } catch (error) { checkAborted(signal); if (this.closed) throw error; inspection.infoNote = '部分元数据不可用或无读取权限。' }
+    try {
+      const ddl = await this.query('SHOW CREATE TABLE ' + target, [], signal, 1)
+      const row = this.records(ddl)[0]
+      const statement = row?.['Create Table'] ?? row?.['Create View']
+      if (typeof statement === 'string' && !ddl.truncated) {
+        inspection.definition = statement.trimEnd().replace(/;$/, '') + ';'
+        if (row?.['Create View'] !== undefined) inspection.kind = 'view'
+      } else inspection.definitionNote = 'DDL 不可用或超出读取上限。'
+    } catch (error) { checkAborted(signal); if (this.closed) throw error; inspection.definitionNote = 'DDL 不可用或超出读取上限。' }
+    return { columns: [], rows: [], inspection }
   }
 
   private async structure(database: string, entity: string, signal: AbortSignal): Promise<Structure> {
@@ -274,7 +341,7 @@ export class MysqlOperations {
       return [key, value]
     })) as SqlRow) : undefined
     return {
-      columns: data.columns, rows, rawRows, truncated: data.truncated,
+      columns: data.columns, rows, rawRows, columnTypes: data.columnTypes, nullCells: data.values.map(values => values.flatMap((value, index) => value === null || value === undefined ? [index] : [])), truncated: data.truncated,
       message: data.truncated ? '返回量达到上限；请缩小查询范围后重试' : editable ? undefined : '含二进制字段的结果仅供浏览，避免从编码预览误写数据',
     }
   }
@@ -302,6 +369,7 @@ export class MysqlOperations {
       const query = prepared ? this.core.execute(options, parameters) : this.core.query(options)
       query.on('fields', (fields?: FieldPacket[]) => {
         if (!fields) return
+        data.columnTypes = fields.map(mysqlFieldType)
         const counts = new Map<string, number>()
         data.columns = fields.map(field => {
           const count = (counts.get(field.name) ?? 0) + 1

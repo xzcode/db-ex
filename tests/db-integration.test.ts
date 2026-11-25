@@ -25,13 +25,26 @@ test('MySQL real database: pagination, prepared CRUD, conflicts, transactions an
   const database = name()
   const operations = new MysqlOperations(client)
   try {
-    await client.query(`CREATE DATABASE \`${database}\``)
+    await assert.rejects(operations.execute({action:'mysql.createDatabase',database},read),/READ_ONLY/)
+    await operations.execute({action:'mysql.createDatabase',database},write)
+    await assert.rejects(operations.execute({action:'mysql.dropDatabase',database:'mysql'},write),/PROTECTED_DATABASE/)
     await client.query(`CREATE TABLE \`${database}\`.records (id BIGINT PRIMARY KEY, name VARCHAR(255) COLLATE utf8mb4_general_ci NULL, amount DECIMAL(20,5) NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
     const target = { database, entity: 'records' }
     await operations.execute({ action: 'mysql.insert', ...target, values: { id: '9007199254740993', name: 'original', amount: '123456789012345.12345' } }, write)
     const result = await operations.execute({ action: 'mysql.query', database, sql: 'SELECT * FROM records' }, read)
     assert.equal(result.rawRows?.[0].id, '9007199254740993')
     assert.equal(result.rawRows?.[0].amount, '123456789012345.12345')
+    assert.equal(result.columnTypes?.[result.columns.indexOf('id')], 'BIGINT')
+    assert.equal(result.columnTypes?.[result.columns.indexOf('amount')], 'DECIMAL')
+    const inspected = (await operations.execute({ action: 'mysql.inspect', ...target }, read)).inspection!
+    assert.equal(inspected.kind, 'table')
+    assert.equal(inspected.metrics.find(item => item.label === '存储引擎')?.value, 'InnoDB')
+    assert.equal(inspected.metrics.find(item => item.label === '字段数')?.value, '3')
+    assert.match(inspected.definition || '', /CREATE TABLE.*records/s)
+    const browse = { join: 'and' as const, groups: [{ join: 'and' as const, rules: [{ field: 'id', operator: 'eq' as const, type: 'Long' as const, value: '9007199254740993' }] }], sort: [{ field: 'id', direction: -1 as const }] }
+    const filtered = await operations.execute({ action: 'mysql.browse', ...target, filter: browse, limit: 100 }, read)
+    assert.equal(filtered.rawRows?.[0]?.id, '9007199254740993')
+    assert.equal((await operations.execute({ action: 'mysql.browse', ...target, filter: browse, countOnly: true }, read)).totalRows, '1')
     const original = result.rawRows![0]
     const schema = await operations.execute({ action: 'mysql.structure', ...target }, read)
     assert.deepEqual(schema.primaryKeys, ['id'])
@@ -98,10 +111,15 @@ test('MongoDB real database: BSON exactness, filter, aggregation, indexes and op
   const operations = new MongoOperations(client)
   const canonical = (value: unknown) => BSON.EJSON.stringify(value, { relaxed: false })
   try {
+    await assert.rejects(operations.execute({action:'mongo.createDatabase',database,initialCollection:'records'},read),/READ_ONLY/)
+    await assert.rejects(operations.execute({action:'mongo.dropDatabase',database:'admin'},write),/PROTECTED_DATABASE/)
+    await operations.execute({action:'mongo.createDatabase',database,initialCollection:'records'},write)
+    assert((await client.db(database).listCollections({name:'records'}).toArray()).length===1)
     const document = { _id: new BSON.ObjectId(), score: new BSON.Int32(5), big: BSON.Long.fromString('9223372036854775807'), money: BSON.Decimal128.fromString('123456789.123456789'), date: new Date('2025-01-01T00:00:00.000Z') }
     await operations.execute({ action: 'mongo.insert', ...target, documents: [canonical(document)] }, write)
     const first = await operations.execute({ action: 'mongo.find', ...target, filter: '{"score":{"$gte":5}}', sort: '{"score":-1}' }, read)
     assert.equal(first.documents?.length, 1)
+    assert.equal((await operations.execute({ action: 'mongo.count', ...target, filter: '{"score":{"$numberInt":"5"}}' }, read)).totalRows, '1')
     const parsed = BSON.EJSON.parse(first.documents![0], { relaxed: false })
     assert.equal(parsed.big.toString(), '9223372036854775807')
     assert.equal(parsed.money.toString(), '123456789.123456789')
@@ -113,6 +131,14 @@ test('MongoDB real database: BSON exactness, filter, aggregation, indexes and op
     await operations.execute({ action: 'mongo.createIndex', ...target, keys: '{"score":1}', options: '{"name":"score_index","unique":true}' }, write)
     const indexes = await operations.execute({ action: 'mongo.indexes', ...target }, read)
     assert.equal(indexes.documents!.some(text => BSON.EJSON.parse(text).name === 'score_index'), true)
+    const inspected = (await operations.execute({ action: 'mongo.inspect', ...target }, read)).inspection!
+    assert.equal(inspected.kind, 'collection')
+    assert.equal(inspected.metrics.find(item => item.label === '文档数')?.value, '1')
+    assert.equal(inspected.metrics.find(item => item.label === '索引数')?.value, '2')
+    assert.match(inspected.definition || '', /createCollection\("records"/)
+    assert.match(inspected.definition || '', /createIndex/)
+    assert.match(inspected.definition || '', /score_index/)
+    assert.match(inspected.definition || '', /unique/)
     await operations.execute({ action: 'mongo.dropIndex', ...target, name: 'score_index' }, write)
     const latest = await operations.execute({ action: 'mongo.find', ...target, filter: '{}' }, read)
     const projected = await operations.execute({ action: 'mongo.find', ...target, projection: '{"_id":1}' }, read)
@@ -122,6 +148,8 @@ test('MongoDB real database: BSON exactness, filter, aggregation, indexes and op
     await assert.rejects(operations.execute({ action: 'mongo.insert', ...target, documents: ['{}'] }, read), /READ_ONLY/)
     await assert.rejects(operations.execute({ action: 'mongo.insert', database, entity: 'bulk', documents: ['{"_id":"same","value":1}', '{"_id":"same","value":2}'] }, write), /PARTIAL_WRITE:.*1/)
     assert.equal(await client.db(database).collection('bulk').countDocuments(), 1)
+    await operations.execute({action:'mongo.dropDatabase',database},write)
+    assert.equal((await client.db(database).listCollections().toArray()).length,0)
   } finally {
     await operations.close()
     await client.db(database).dropDatabase()

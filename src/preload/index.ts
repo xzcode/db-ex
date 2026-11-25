@@ -2,6 +2,19 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { DbExAPI } from '../shared/types'
 // Every bridge method is explicit. Renderer receives no filesystem, raw IPC or driver handles.
 const api: DbExAPI = {
+  getNativePreferences:()=>ipcRenderer.invoke('preferences:native-get'),
+  saveNativePreferences:value=>ipcRenderer.invoke('preferences:native-save',value),
+  pickTool:name=>ipcRenderer.invoke('preferences:pick-tool',name),
+  checkTool:(name,path)=>ipcRenderer.invoke('preferences:check-tool',name,path),
+  toolVersion:(name,path)=>ipcRenderer.invoke('preferences:tool-version',name,path),
+  backupSqlite:id=>ipcRenderer.invoke('sessions:sqlite-backup',id),
+  runNativeTool:(id,task,database,entity)=>ipcRenderer.invoke('sessions:native-tool',id,task,database,entity),
+  logPath:()=>ipcRenderer.invoke('preferences:log-path'),
+  openLogs:()=>ipcRenderer.invoke('preferences:open-logs'),
+  saveRecovery:value=>ipcRenderer.invoke('recovery:save',value),
+  loadRecovery:value=>ipcRenderer.invoke('recovery:load',value),
+  deleteRecovery:value=>ipcRenderer.invoke('recovery:delete',value),
+  clearRecovery:()=>ipcRenderer.invoke('recovery:clear'),
   pickConnectionFile: kind => ipcRenderer.invoke('connections:pick-file', kind),
   getSystemLanguage: () => ipcRenderer.invoke('preferences:system-language'),
   setLocale: locale => ipcRenderer.invoke('preferences:locale', locale),
@@ -16,7 +29,7 @@ const api: DbExAPI = {
   testConnection: (config, clearSecrets) => ipcRenderer.invoke('connections:test', config, clearSecrets),
   disconnect: id => ipcRenderer.invoke('connections:disconnect', id),
   roots: id => ipcRenderer.invoke('explorer:roots', id),
-  children: (id, database) => ipcRenderer.invoke('explorer:children', id, database),
+  children: (id, database, category) => ipcRenderer.invoke('explorer:children', id, database, category),
   preview: (id, database, entity, offset) => ipcRenderer.invoke('explorer:preview', id, database, entity, offset),
   redisKeys: (id, cursor, pattern) => ipcRenderer.invoke('explorer:redis-keys', id, cursor, pattern),
   redisValue: (id, key) => ipcRenderer.invoke('explorer:redis-value', id, key),

@@ -1,6 +1,8 @@
 import type { BsonTypeBranch } from './bson-types'
+import type { BrowseFilter } from './browse-filter'
+import type { ObjectInspection } from './object-inspection'
 
-export type DatabaseKind = 'mysql' | 'mongodb' | 'redis'
+export type DatabaseKind = 'mysql' | 'mongodb' | 'redis' | 'sqlite'
 export type SqlValue = string | number | boolean | null
 export type SqlRow = Record<string, SqlValue>
 
@@ -46,6 +48,7 @@ export interface ConnectionConfig extends ConnectionAppearance {
   username?: string
   password?: string
   database?: string
+  filePath?: string
   authSource?: string
   redisDb?: number
   uri?: string
@@ -85,10 +88,14 @@ export interface SessionInfo {
   writable: boolean
   transaction: boolean
 }
+import type { MongoCategory } from './mongo-catalog'
+
 export interface ExplorerNode {
   id: string
   label: string
-  kind: 'database' | 'table' | 'collection' | 'keyspace'
+  kind: 'database' | 'table' | 'collection' | 'keyspace' | 'view' | 'mongo-category' | 'mongo-function' | 'mongo-indexes' | 'gridfs-bucket' | 'database-query'
+  category?: MongoCategory
+  readOnly?: boolean
   database?: string
   entity?: string
 }
@@ -100,6 +107,13 @@ export interface DataPreview {
   value?: string
 }
 export interface OperationResult extends DataPreview {
+  inspection?: ObjectInspection
+  totalRows?: string
+  countLimited?: boolean
+  columnTypes?: string[]
+  sqliteTypes?: string[][]
+  nullCells?: number[][]
+  redisRowTypes?: string[]
   redisType?: string
   ttl?: number
   length?: number
@@ -119,25 +133,31 @@ interface Confirmed { confirmed?: boolean }
 interface Entity { database: string; entity: string }
 export type MysqlOperation =
   | ({ action: 'mysql.query'; database?: string; sql: string; parameters?: SqlValue[]; limit?: number; offset?: number } & Confirmed)
-  | ({ action: 'mysql.structure' } & Entity)
+  | ({ action: 'mysql.structure' | 'mysql.inspect' } & Entity)
+  | ({ action: 'mysql.createDatabase' | 'mysql.dropDatabase'; database: string } & Confirmed)
+  | ({ action: 'mysql.browse'; filter: BrowseFilter; countOnly?: boolean; limit?: number; offset?: number } & Entity)
   | ({ action: 'mysql.insert'; values: SqlRow } & Entity & Confirmed)
   | ({ action: 'mysql.update'; key: SqlRow; original: SqlRow; changes: SqlRow } & Entity & Confirmed)
   | ({ action: 'mysql.delete'; key: SqlRow; original: SqlRow } & Entity & Confirmed)
   | ({ action: 'mysql.import'; rows: SqlRow[] } & Entity & Confirmed)
   | ({ action: 'mysql.begin' | 'mysql.commit' | 'mysql.rollback' } & Confirmed)
 export type MongoOperation =
+  | ({ action: 'mongo.createDatabase'; database: string; initialCollection: string } & Confirmed)
+  | ({ action: 'mongo.dropDatabase'; database: string } & Confirmed)
   | ({ action: 'mongo.find'; filter?: string; projection?: string; sort?: string; offset?: number; limit?: number } & Entity)
+  | ({ action: 'mongo.count'; filter?: string } & Entity)
   | ({ action: 'mongo.aggregate'; pipeline: string; limit?: number } & Entity)
   | ({ action: 'mongo.insert'; documents: string[] } & Entity & Confirmed)
   | ({ action: 'mongo.replace'; original: string; document: string } & Entity & Confirmed)
   | ({ action: 'mongo.delete'; original: string } & Entity & Confirmed)
-  | ({ action: 'mongo.indexes' } & Entity)
+  | ({ action: 'mongo.indexes' | 'mongo.inspect' } & Entity)
   | ({ action: 'mongo.createIndex'; keys: string; options?: string } & Entity & Confirmed)
   | ({ action: 'mongo.dropIndex'; name: string } & Entity & Confirmed)
 export type RedisValueType = 'string' | 'hash' | 'list' | 'set' | 'zset' | 'stream'
 export type RedisOperation =
   | { action: 'redis.scan'; cursor?: string; pattern?: string; node?: string }
   | { action: 'redis.get'; key: string; cursor?: string; offset?: number }
+  | { action: 'redis.inspect'; key: string }
   | ({ action: 'redis.set'; key: string; value: string; ttl?: number; expected?: string } & Confirmed)
   | ({ action: 'redis.mutate'; key: string; type: RedisValueType; command: string; args: string[] } & Confirmed)
   | ({ action: 'redis.ttl'; key: string; ttl: number } & Confirmed)
@@ -146,6 +166,10 @@ export type RedisOperation =
   | { action: 'redis.nodes' }
 export type DatabaseOperation = MysqlOperation | MongoOperation | RedisOperation
 export interface QuerySnippet {
+  /** Optional fields keep existing encrypted history files compatible. */
+  mongoKind?: 'query' | 'aggregation'
+  entity?: string
+  connectionId?: string
   id: string
   name: string
   kind: DatabaseKind
@@ -156,8 +180,21 @@ export interface QuerySnippet {
 }
 export interface FileImport { name: string; text: string; format: 'csv' | 'json' | 'text' }
 export interface SshImportResult { hosts: { name: string; ssh: SshOptions }[]; warnings: string[] }
-export type ConnectionFileKind = 'certificate' | 'private-key'
+export type ConnectionFileKind = 'certificate' | 'private-key' | 'sqlite' | 'sqlite-create'
 export interface DbExAPI {
+  getNativePreferences():Promise<import('./preferences').NativePreferences>
+  saveNativePreferences(value:import('./preferences').NativePreferences):Promise<import('./preferences').NativePreferences>
+  pickTool(name:import('./preferences').ToolName):Promise<string|null>
+  checkTool(name:import('./preferences').ToolName,path:string):Promise<boolean>
+  toolVersion(name:import('./preferences').ToolName,path:string):Promise<string>
+  backupSqlite(id:string):Promise<boolean>
+  runNativeTool(id:string,task:import('./preferences').NativeToolTask,database:string,entity?:string):Promise<boolean>
+  logPath():Promise<string>
+  openLogs():Promise<void>
+  saveRecovery(value:import('./preferences').RecoveryDraft):Promise<void>
+  loadRecovery(value:import('./preferences').RecoveryDraft):Promise<import('./preferences').RecoveryDraft|null>
+  clearRecovery():Promise<void>
+  deleteRecovery(value:import('./preferences').RecoveryDraft):Promise<void>
   pickConnectionFile(kind: ConnectionFileKind): Promise<string | null>
   getSystemLanguage(): Promise<string>
   setLocale(locale: import('./i18n').Locale): Promise<void>
@@ -172,7 +209,7 @@ export interface DbExAPI {
   testConnection(config: ConnectionConfig, clearSecrets?: string[]): Promise<string>
   disconnect(sessionId: string): Promise<void>
   roots(sessionId: string): Promise<ExplorerNode[]>
-  children(sessionId: string, database: string): Promise<ExplorerNode[]>
+  children(sessionId: string, database: string, category?: MongoCategory): Promise<ExplorerNode[]>
   preview(sessionId: string, database: string, entity: string, offset?: number): Promise<DataPreview>
   redisKeys(sessionId: string, cursor?: string, pattern?: string): Promise<DataPreview>
   redisValue(sessionId: string, key: string): Promise<DataPreview>

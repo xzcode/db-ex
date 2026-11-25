@@ -1,14 +1,19 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, session as electronSession } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, shell, utilityProcess, session as electronSession } from 'electron'
 import { isLocale, resolveLocale, translate, localizeMessage, type Locale } from '../shared/i18n'
-import { join, basename, extname } from 'node:path'
-import { readFile, stat, writeFile } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { join, basename, extname, dirname } from 'node:path'
+import { readFile, stat, writeFile, mkdir, mkdtemp, copyFile, rm, chmod } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 import type { ConnectionConfig, DatabaseOperation, FileImport, QuerySnippet } from '../shared/types'
 import { ConnectionStore } from './connections/store'
 import { SessionManager } from './connections/manager'
 import { validateId } from './connections/validation'
 import { SnippetStore } from './storage/snippets'
+import { initNativePreferences, getNativePreferences, saveNativePreferences, checkTool, diagnosticDirectory, diagnostic, saveRecovery, loadRecovery, clearRecovery, deleteRecovery } from './storage/preferences'
+import { nativeTasks,runNativeTool,toolVersion } from './operations/native-tools'
+import { nativeToolTasks,toolNames, type ToolName,type NativeToolTask } from '../shared/preferences'
 import { parseSshConfig } from './connections/ssh-config'
+import { inspectSqliteSql } from './operations/sqlite-policy'
 import { inspectSql } from './operations/sql-policy'
 import { validateMongoDocumentEdit } from './operations/mongodb'
 import { redisCommandWrites, validateRedisCommand } from './operations/redis'
@@ -17,7 +22,10 @@ function getSystemLanguage(): string { return app.getPreferredSystemLanguages()[
 let currentLocale: Locale = 'en'
 const tr = (key: string, values: readonly unknown[] = []) => translate(currentLocale, key, values)
 const store = new ConnectionStore()
-const sessions = new SessionManager()
+const sessions = new SessionManager(modulePath=>{
+  const child=utilityProcess.fork(modulePath,[],{stdio:'ignore',serviceName:'DB EX SQLite'})
+  return {send:message=>child.postMessage(message),onMessage:callback=>{child.on('message',callback)},onExit:callback=>{child.once('exit',callback)},onError:callback=>{child.on('error',callback)},kill:()=>{child.kill()}}
+},app.isPackaged?join(process.resourcesPath,'app.asar.unpacked','dist-electron','sqlite-worker.cjs'):join(__dirname,'sqlite-worker.cjs'))
 const snippets = new SnippetStore()
 let quitting = false
 const development = !app.isPackaged && process.argv.includes('--dev')
@@ -43,16 +51,16 @@ async function confirm(win: BrowserWindow, message: string, detail: string, acti
   const answer = await dialog.showMessageBox(win, { type: 'warning', title: tr('DB EX · 操作确认'), message: tr(message), detail, buttons: [tr('取消'), tr(action)], defaultId: 0, cancelId: 0, noLink: true })
   if (answer.response !== 1) throw new Error('CANCELLED: 已取消操作')
 }
-function writes(op: DatabaseOperation, writable: boolean): boolean {
+function writes(op: DatabaseOperation, writable: boolean, kind:import('../shared/types').DatabaseKind): boolean {
   if (!op || typeof op !== 'object' || typeof op.action !== 'string') throw new Error('INVALID_OPERATION: 操作参数无效')
   if (Buffer.byteLength(JSON.stringify(op)) > 4 * 1024 * 1024) throw new Error('LIMIT_EXCEEDED: 操作参数最多4 MiB')
-  if (op.action === 'mysql.query') return inspectSql(op.sql, writable).mode === 'write'
+  if (op.action === 'mysql.query') return (kind==='sqlite'?inspectSqliteSql(op.sql):inspectSql(op.sql,writable)).mode === 'write'
   if (op.action === 'redis.command') return redisCommandWrites(validateRedisCommand(op.args))
-  return new Set(['mysql.insert', 'mysql.update', 'mysql.delete', 'mysql.import', 'mysql.begin', 'mysql.commit', 'mongo.insert', 'mongo.replace', 'mongo.delete', 'mongo.createIndex', 'mongo.dropIndex', 'redis.set', 'redis.mutate', 'redis.ttl', 'redis.delete']).has(op.action)
+  return new Set(['mysql.createDatabase', 'mysql.dropDatabase', 'mongo.createDatabase', 'mongo.dropDatabase', 'mysql.insert', 'mysql.update', 'mysql.delete', 'mysql.import', 'mysql.begin', 'mysql.commit', 'mongo.insert', 'mongo.replace', 'mongo.delete', 'mongo.createIndex', 'mongo.dropIndex', 'redis.set', 'redis.mutate', 'redis.ttl', 'redis.delete']).has(op.action)
 }
 function operationDetail(id: string, op: DatabaseOperation): string {
   const info = sessions.info(id)
-  const target = 'entity' in op ? `${op.database}.${op.entity}` : 'key' in op ? op.key : 'keys' in op ? tr('{0} 个已选择的Key', [op.keys.length]) : ''
+  const target = 'entity' in op ? `${op.database}.${op.entity}` : 'initialCollection' in op ? `${op.database}.${op.initialCollection}` : 'database' in op ? op.database || '' : 'key' in op ? op.key : 'keys' in op ? tr('{0} 个已选择的Key', [op.keys.length]) : ''
   const count = 'rows' in op ? '\n' + tr('导入 {0} 行', [op.rows.length]) : 'documents' in op ? '\n' + tr('写入 {0} 个文档', [op.documents.length]) : ''
   const sql = op.action === 'mysql.query' ? `\n\n${op.sql.slice(0, 1500)}` : op.action === 'redis.command' ? '\n' + tr('命令：') + ' ' + op.args[0] : ''
   return `${tr('连接：')} ${info.name}\n${tr('地址：')} ${info.displayHost}\n${tr('操作：')} ${op.action}${target ? '\n' + tr('目标：') + ' ' + target : ''}${count}\n${tr(info.transaction ? '当前有未提交事务。' : '本操作可能立即持久化。')}${sql}`
@@ -69,14 +77,45 @@ async function openText(win: BrowserWindow, title: string, limit = 4 * 1024 * 10
 }
 async function saveText(win: BrowserWindow, name: string, content: string, format: 'csv' | 'json' | 'text', title = '导出当前数据', limit = 8 * 1024 * 1024): Promise<boolean> {
   if (typeof name !== 'string' || name.length > 200 || typeof content !== 'string' || Buffer.byteLength(content) > limit || !['csv', 'json', 'text'].includes(format)) throw new Error(`导出参数无效或超过${limit / 1024 / 1024} MiB`)
-  const extension = format === 'text' ? 'txt' : format
+  const requestedExtension = extname(name).slice(1).toLowerCase()
+  const extension = format === 'text' ? (['txt', 'sql', 'js'].includes(requestedExtension) ? requestedExtension : 'txt') : format
   const answer = await dialog.showSaveDialog(win, { title: tr(title), defaultPath: basename(name), filters: [{ name: extension.toUpperCase(), extensions: [extension] }] })
   if (answer.canceled || !answer.filePath) return false
   await writeFile(answer.filePath, content, { encoding: 'utf8', mode: 0o600 })
   return true
 }
 function registerIpc(): void {
+  ipcMain.handle('preferences:native-get', handler(()=>getNativePreferences()))
+  ipcMain.handle('preferences:native-save', handler((_win,value:unknown)=>saveNativePreferences(value)))
+  ipcMain.handle('preferences:pick-tool', handler(async(win,name:ToolName)=>{
+    if(!toolNames.includes(name))throw new Error('INVALID_TOOL_PATH: 请输入可执行文件的绝对路径')
+    const result=await dialog.showOpenDialog(win,{title:tr('选择可执行文件')+' · '+name,properties:['openFile']})
+    return result.canceled?null:result.filePaths[0]||null
+  }))
+  ipcMain.handle('preferences:check-tool',handler((_win,name:ToolName,path:unknown)=>checkTool(name,path)))
+  ipcMain.handle('preferences:tool-version',handler(async(win,name:ToolName,path:string)=>{
+    if(!await checkTool(name,path))throw new Error('INVALID_TOOL_PATH: 请输入可执行文件的绝对路径')
+    await confirm(win,'确认执行外部工具？',name+' --version\n'+path)
+    return toolVersion(path)
+  }))
+  ipcMain.handle('preferences:log-path',handler(()=>diagnosticDirectory()))
+  ipcMain.handle('preferences:open-logs',handler(async()=>{const dir=diagnosticDirectory();await mkdir(dir,{recursive:true,mode:0o700});const error=await shell.openPath(dir);if(error)throw new Error('无法打开日志目录')}))
+  ipcMain.handle('recovery:save',handler((_win,value:unknown)=>saveRecovery(value)))
+  ipcMain.handle('recovery:load',handler((_win,value:unknown)=>loadRecovery(value)))
+  ipcMain.handle('recovery:delete',handler((_win,value:unknown)=>deleteRecovery(value)))
+  ipcMain.handle('recovery:clear',handler(()=>clearRecovery()))
+
   ipcMain.handle('connections:pick-file', handler(async (win, kind: unknown) => {
+    if(kind==='sqlite-create'){
+      const answer=await dialog.showSaveDialog(win,{title:'SQLite',defaultPath:'database.sqlite',filters:[{name:'SQLite',extensions:['sqlite','sqlite3','db']}]})
+      if(answer.canceled||!answer.filePath)return null
+      await writeFile(answer.filePath,'',{flag:'wx',mode:0o600})
+      return answer.filePath
+    }
+    if(kind==='sqlite'){
+      const answer=await dialog.showOpenDialog(win,{title:'SQLite',properties:['openFile'],filters:[{name:'SQLite',extensions:['sqlite','sqlite3','db','db3']},{name:tr('所有文件'),extensions:['*']}]})
+      return answer.canceled?null:answer.filePaths[0]||null
+    }
     if (kind !== 'certificate' && kind !== 'private-key') throw new Error('INVALID_FILE_KIND')
     const all = { name: tr('所有文件'), extensions: ['*'] }
     const answer = await dialog.showOpenDialog(win, { title: tr(kind === 'certificate' ? '客户端证书 PEM 路径' : '私钥文件'),
@@ -115,7 +154,7 @@ function registerIpc(): void {
   }))
   ipcMain.handle('connections:ssh-config', handler(async win => { const file = await openText(win, '选择 SSH config 文件', 1024 * 1024); return file ? parseSshConfig(file.text) : null }))
   ipcMain.handle('explorer:roots', handler((_win, id: string) => sessions.roots(id)))
-  ipcMain.handle('explorer:children', handler((_win, id: string, database: string) => sessions.children(id, database)))
+  ipcMain.handle('explorer:children', handler((_win, id: string, database: string, category?: import('../shared/mongo-catalog').MongoCategory) => sessions.children(id, database, category)))
   ipcMain.handle('explorer:preview', handler((_win, id: string, database: string, entity: string, offset?: number) => sessions.preview(id, database, entity, offset)))
   ipcMain.handle('explorer:redis-keys', handler((_win, id: string, cursor?: string, pattern?: string) => sessions.redisKeys(id, cursor, pattern)))
   ipcMain.handle('explorer:redis-value', handler((_win, id: string, key: string) => sessions.redisValue(id, key)))
@@ -127,17 +166,44 @@ function registerIpc(): void {
   }))
   ipcMain.handle('sessions:execute', handler(async (win, id: string, operation: DatabaseOperation) => {
     const info = sessions.info(id)
-    if (writes(operation, info.writable)) {
+    if (writes(operation, info.writable, info.kind)) {
       if (!info.writable || !('confirmed' in operation) || operation.confirmed !== true) throw new Error('WRITE_CONFIRMATION_REQUIRED: 请先解锁会话，并主动确认写入')
-      await confirm(win, '确认执行数据库写操作？', operationDetail(id, operation))
+      await confirm(win, operation.action === 'mongo.dropDatabase' || operation.action === 'mysql.dropDatabase' ? '确认永久删除整个数据库？' : '确认执行数据库写操作？', operationDetail(id, operation))
     }
-    return sessions.execute(id, operation)
+    const start=Date.now()
+    try { const result=await sessions.execute(id,operation);diagnostic(operation.action,'ok',Date.now()-start);return result }
+    catch(error){diagnostic(operation.action,'error',Date.now()-start);throw error}
   }))
   ipcMain.handle('clipboard:copy-text', handler((_win, value: unknown) => {
     if (typeof value !== 'string' || Buffer.byteLength(value, 'utf8') > 2 * 1024 * 1024) throw new Error('LIMIT_EXCEEDED: 剪贴板文本过大')
     clipboard.writeText(value)
   }))
   ipcMain.handle('mongo:validate-document', handler((_win, document: string, original?: string) => validateMongoDocumentEdit(document, original)))
+  ipcMain.handle('sessions:sqlite-backup',handler(async(win,id:string)=>{
+    const info=sessions.info(id)
+    if(info.kind!=='sqlite'||info.transaction)throw new Error('INVALID_OPERATION: 不支持的操作')
+    const answer=await dialog.showSaveDialog(win,{title:tr('备份数据库'),defaultPath:'backup.sqlite',filters:[{name:'SQLite',extensions:['sqlite','sqlite3','db']}]})
+    if(answer.canceled||!answer.filePath)return false
+    await confirm(win,'备份数据库',info.name+'\n'+answer.filePath+'\n'+tr('导出仅创建新文件，不覆盖现有文件。'))
+    const dir=await mkdtemp(join(dirname(answer.filePath),'.dbex-sqlite-'))
+    try{const temp=join(dir,'backup.sqlite');await sessions.backupSqlite(id,temp);await chmod(temp,0o600);await copyFile(temp,answer.filePath,constants.COPYFILE_EXCL);return true}
+    finally{await rm(dir,{recursive:true,force:true})}
+  }))
+  ipcMain.handle('sessions:native-tool',handler(async(win,id:string,task:NativeToolTask,database:string,entity?:string)=>{
+    if(!nativeToolTasks.includes(task))throw new Error('INVALID_OPERATION: 不支持的操作')
+    const spec=nativeTasks[task],info=sessions.info(id)
+    if(info.kind!==spec.kind)throw new Error('INVALID_OPERATION: 操作与连接类型不匹配')
+    if(spec.write&&!info.writable)throw new Error('READ_ONLY: 请先启用当前会话的写入权限')
+    const executable=getNativePreferences().tools[spec.tool]
+    if(!executable||!await checkTool(spec.tool,executable))throw new Error('INVALID_TOOL_PATH: 请输入可执行文件的绝对路径')
+    const filters=[{name:spec.tool,extensions:[spec.extension]}]
+    const result=spec.write?await dialog.showOpenDialog(win,{properties:['openFile'],filters}):await dialog.showSaveDialog(win,{defaultPath:'database.'+spec.extension,filters})
+    const file='filePaths'in result?result.filePaths[0]:result.filePath
+    if(result.canceled||!file)return false
+    await confirm(win,'确认执行外部工具？',spec.tool+'\n'+info.name+' · '+database+(entity?'.'+entity:'')+'\n'+file+'\n'+tr(spec.write?'导入或恢复可能写入数据库，请确认文件来源及目标。':'导出仅创建新文件，不覆盖现有文件。'))
+    await sessions.external(id,spec.write,(config,signal)=>runNativeTool(executable,task,config,database,entity,file,signal))
+    return true
+  }))
   ipcMain.handle('sessions:cancel', handler((_win, id: string) => sessions.cancel(id)))
   ipcMain.handle('snippets:list', handler(() => snippets.list()))
   ipcMain.handle('snippets:save', handler((_win, value: Omit<QuerySnippet, 'id' | 'updatedAt'> & { id?: string }) => snippets.save(value)))
@@ -165,6 +231,8 @@ app.whenReady().then(async () => {
   electronSession.defaultSession.setPermissionCheckHandler(() => false)
   electronSession.defaultSession.on('will-download', event => event.preventDefault())
   await store.init()
+  // Preferences are optional; a corrupt preferences file must not prevent opening existing connections.
+  await initNativePreferences().catch(()=>{})
   registerIpc()
   createWindow()
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })

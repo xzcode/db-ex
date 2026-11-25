@@ -96,6 +96,45 @@ function raster(size) {
   return pixels
 }
 
+// The original bitmap occupies ~94% of its canvas. macOS Tahoe can
+// interpret that oversize legacy ICNS as an irregular icon and place it
+// inside a system-generated light tile. Normalize ONLY the Mac icon to the
+// standard inset rounded-square artwork area (824 of 1024 pixels).
+// Preserve the approved symbol and composite its edge onto navy, not white.
+function rasterMac(size) {
+  const pixels = Buffer.alloc(size * size * 4)
+  const oversample = size <= 64 ? 4 : size <= 256 ? 2 : 1
+  const half = 412, radius = 185
+  const step = 1024 / (size * oversample)
+  const center = sample(192, 192)
+  const navy = center[3] >= 240 && center[0] < 50 && center[2] > center[0] ? center.slice(0, 3) : [13, 20, 47]
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    let alpha = 0, r = 0, g = 0, b = 0
+    for (let fy = 0; fy < oversample; fy++) for (let fx = 0; fx < oversample; fx++) {
+      const u = (x + (fx + .5) / oversample) * 1024 / size - 512
+      const v = (y + (fy + .5) / oversample) * 1024 / size - 512
+      const dx = Math.abs(u) - (half - radius), dy = Math.abs(v) - (half - radius)
+      const d = Math.hypot(Math.max(dx, 0), Math.max(dy, 0)) + Math.min(Math.max(dx, dy), 0) - radius
+      const coverage = Math.max(0, Math.min(1, .5 - d / step))
+      if (coverage === 0) continue
+      const p = sample(192 + u * 181 / half, 192 + v * 180 / half)
+      const a = p[3] / 255
+      alpha += coverage
+      r += coverage * (p[0] * a + navy[0] * (1 - a))
+      g += coverage * (p[1] * a + navy[1] * (1 - a))
+      b += coverage * (p[2] * a + navy[2] * (1 - a))
+    }
+    const at = (y * size + x) * 4
+    if (alpha > 0) {
+      pixels[at] = Math.round(r / alpha)
+      pixels[at + 1] = Math.round(g / alpha)
+      pixels[at + 2] = Math.round(b / alpha)
+      pixels[at + 3] = Math.round(255 * alpha / (oversample * oversample))
+    }
+  }
+  return pixels
+}
+
 const crcTable = Uint32Array.from({ length: 256 }, (_, i) => {
   let n = i
   for (let j = 0; j < 8; j++) n = (n & 1) ? 0xEDB88320 ^ (n >>> 1) : n >>> 1
@@ -112,8 +151,8 @@ function chunk(name, body) {
   out.writeUInt32BE((crc ^ 0xFFFFFFFF) >>> 0, 8 + body.length)
   return out
 }
-function png(size) {
-  const pixels = raster(size)
+function png(size, mac = false) {
+  const pixels = mac ? rasterMac(size) : raster(size)
   const raw = Buffer.alloc((size * 4 + 1) * size)
   for (let row = 0; row < size; row++) pixels.copy(raw, row * (size * 4 + 1) + 1, row * size * 4, (row + 1) * size * 4)
   const ihdr = Buffer.alloc(13)
@@ -163,9 +202,10 @@ function icns(images) {
 await mkdir('build', { recursive: true })
 const sizes = [16, 24, 32, 48, 64, 128, 256, 512, 1024]
 const images = new Map(sizes.map(size => [size, png(size)]))
+const macImages = new Map([16, 32, 64, 128, 256, 512, 1024].map(size => [size, png(size, true)]))
 await Promise.all([
   writeFile('build/icon.png', images.get(1024)),
   writeFile('build/icon.ico', ico(images)),
-  writeFile('build/icon.icns', icns(images))
+  writeFile('build/icon.icns', icns(macImages))
 ])
 console.log('Generated user-approved DB EX icons (source SHA-256 verified): build/icon.png, build/icon.ico, build/icon.icns')

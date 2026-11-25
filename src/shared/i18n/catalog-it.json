@@ -406,5 +406,16 @@
   "已选择": "Selezionato",
   "数据库": "Database",
   "集合": "Raccolta",
-  "主键": "Chiave primaria"
+  "主键": "Chiave primaria",
+  "恢复工作区": "Ripristina area di lavoro",
+  "恢复已保存的连接选项卡，不会自动执行查询或启用写入。": "Ripristina le schede salvate senza eseguire query o abilitare le scritture.",
+  "配置工具绝对路径并检查版本。数据库菜单可执行受控导入、导出和备份恢复。": "Configura i percorsi assoluti e verifica le versioni. Il menu del database supporta importazione, esportazione, backup e ripristino.",
+  "备份数据库": "Esegui backup del database",
+  "恢复数据库": "Ripristina database",
+  "确认执行外部工具？": "Eseguire lo strumento esterno?",
+  "外部工具当前仅支持普通直连。": "Gli strumenti esterni supportano attualmente solo connessioni dirette.",
+  "导入或恢复可能写入数据库，请确认文件来源及目标。": "Importazione o ripristino possono modificare il database. Verifica origine e destinazione.",
+  "导出仅创建新文件，不覆盖现有文件。": "L’esportazione crea un nuovo file senza sovrascrivere file esistenti.",
+  "SQLite 无法无损导出当前结果；请使用数据库备份。": "Impossibile esportare il risultato SQLite senza perdita. Usa il backup del database.",
+  "发现未保存的记录编辑草稿": "Trovata una bozza di modifica del record non salvata"
 }

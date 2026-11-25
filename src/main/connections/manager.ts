@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { mongoCategory, mongoCategoryNodes, mongoCatalogNodes, type MongoCategory, type MongoCatalogEntry } from '../../shared/mongo-catalog'
 import { connectionDisplayEndpoint } from '../../shared/connection-form'
 import { readFile, stat } from 'node:fs/promises'
 import { MongoClient, type MongoClientOptions } from 'mongodb'
@@ -13,6 +14,7 @@ import { validateConnection, validateId } from './validation'
 import { describeMongoConnectionError } from './mongo-diagnostics'
 import { mongoDirectConnection, mongoUriTlsEnabled } from './mongo-topology'
 import { secretValues } from './credentials'
+import { SqliteClient, type SqliteProcessFactory } from '../operations/sqlite-client'
 import { MysqlOperations } from '../operations/mysql'
 import { MongoOperations } from '../operations/mongodb'
 import { RedisOperations } from '../operations/redis'
@@ -23,6 +25,7 @@ type DriverSession =
   | { kind: 'mysql'; client: MysqlConnection; operations: MysqlOperations }
   | { kind: 'mongodb'; client: MongoClient; operations: MongoOperations }
   | { kind: 'redis'; client: RedisClient; operations: RedisOperations }
+  | { kind: 'sqlite'; operations: SqliteClient }
 interface LiveSession {
   info: SessionInfo
   config: ConnectionConfig
@@ -30,7 +33,7 @@ interface LiveSession {
   transport: ConnectionTransport
   controller?: AbortController
 }
-const ACTIONS = new Set(['mysql.query', 'mysql.structure', 'mysql.insert', 'mysql.update', 'mysql.delete', 'mysql.import', 'mysql.begin', 'mysql.commit', 'mysql.rollback', 'mongo.find', 'mongo.aggregate', 'mongo.insert', 'mongo.replace', 'mongo.delete', 'mongo.indexes', 'mongo.createIndex', 'mongo.dropIndex', 'redis.scan', 'redis.get', 'redis.set', 'redis.mutate', 'redis.ttl', 'redis.delete', 'redis.command', 'redis.nodes'])
+const ACTIONS = new Set(['mysql.query', 'mysql.createDatabase', 'mysql.dropDatabase', 'mysql.browse', 'mysql.structure', 'mysql.inspect', 'mysql.insert', 'mysql.update', 'mysql.delete', 'mysql.import', 'mysql.begin', 'mysql.commit', 'mysql.rollback', 'mongo.find', 'mongo.createDatabase', 'mongo.dropDatabase', 'mongo.count', 'mongo.aggregate', 'mongo.insert', 'mongo.replace', 'mongo.delete', 'mongo.indexes', 'mongo.inspect', 'mongo.createIndex', 'mongo.dropIndex', 'redis.scan', 'redis.get', 'redis.inspect', 'redis.set', 'redis.mutate', 'redis.ttl', 'redis.delete', 'redis.command', 'redis.nodes'])
 async function certificate(path?: string): Promise<Buffer | undefined> {
   if (!path) return undefined
   const info = await stat(path)
@@ -42,6 +45,7 @@ export class SessionManager {
   private readonly sessions = new Map<string, LiveSession>()
   private pendingConnections = 0
   private generation = 0
+  constructor(private readonly sqliteProcessFactory?:SqliteProcessFactory,private readonly sqliteModulePath?:string){}
   private session(id: string): LiveSession {
     validateId(id)
     const result = this.sessions.get(id)
@@ -71,6 +75,7 @@ export class SessionManager {
       const [ca, cert, key] = loadTls ? await Promise.all([certificate(config.tls.caPath), certificate(config.tls.certPath), certificate(config.tls.keyPath)]) : []
       const tls: TlsConnectionOptions = { ca, cert, key, servername: config.tls.servername || undefined, rejectUnauthorized: true, minVersion: 'TLSv1.2' }
       switch (config.kind) {
+        case 'sqlite': { const operations=new SqliteClient(config.filePath!,this.sqliteProcessFactory,this.sqliteModulePath);driver={kind:'sqlite',operations};await operations.connect();break }
         case 'mysql': {
           const stream = await transport.open(config.host, config.port)
           try {
@@ -148,6 +153,7 @@ export class SessionManager {
   private async closeDriver(driver: DriverSession): Promise<void> {
     if (driver.kind === 'mysql') { await driver.operations.close().catch(() => {}); driver.client.destroy() }
     else if (driver.kind === 'mongodb') { driver.operations.cancel(); await driver.client.close().catch(() => {}) }
+    else if(driver.kind==='sqlite')await driver.operations.close().catch(()=>{})
     else driver.client.disconnect()
   }
   async disconnect(id: string): Promise<void> {
@@ -165,7 +171,7 @@ export class SessionManager {
     if (typeof enabled !== 'boolean') throw new Error('权限参数无效')
     const session = this.session(id)
     if (session.controller) throw new Error('SESSION_BUSY: 请等待当前操作完成或取消')
-    if (!enabled && session.driver.kind === 'mysql' && session.driver.operations.transactionActive) await this.execute(id, { action: 'mysql.rollback' })
+    if (!enabled && (session.driver.kind === 'mysql'||session.driver.kind==='sqlite') && session.driver.operations.transactionActive) await this.execute(id, { action: 'mysql.rollback' })
     session.info.writable = enabled
     return { ...session.info }
   }
@@ -182,7 +188,7 @@ export class SessionManager {
         new Promise<never>((_resolve, reject) => { timeout = setTimeout(() => { controller.abort(); void this.disconnect(id); reject(new Error('TIMEOUT: 操作超过30秒，连接已断开；未提交事务将回滚，写入结果请重连后核对')) }, 30000) }),
       ])
     } catch (error) {
-      if (session.driver.kind === 'mysql' && session.driver.operations.disconnected) await this.disconnect(id)
+      if ((session.driver.kind === 'mysql'||session.driver.kind==='sqlite') && session.driver.operations.disconnected) await this.disconnect(id)
       const e = error as { code?: unknown; name?: string }
       if (e?.code !== undefined || e?.name?.startsWith('Mongo')) throw databaseError(error)
       throw error
@@ -191,17 +197,25 @@ export class SessionManager {
       if (session.driver.kind === 'redis') setRedisReadBudget(session.driver.client, undefined)
       session.controller = undefined
       if (redisBudget?.exceeded) { await this.disconnect(id); throw new Error('LIMIT_EXCEEDED: Redis回复超过8 MiB，连接已关闭；写操作可能部分完成，请重连核对') }
-      if (session.driver.kind === 'mysql') session.info.transaction = session.driver.operations.transactionActive
+      if (session.driver.kind === 'mysql'||session.driver.kind==='sqlite') session.info.transaction = session.driver.operations.transactionActive
     }
+  }
+  async backupSqlite(id:string,path:string){const session=this.session(id);if(session.driver.kind!=='sqlite')throw new Error('INVALID_OPERATION: 不支持的操作');const driver=session.driver;return this.external(id,false,()=>driver.operations.backupTo(path))}
+  async external<T>(id:string,write:boolean,work:(config:ConnectionConfig,signal:AbortSignal)=>Promise<T>):Promise<T>{
+    const session=this.session(id)
+    if(session.controller||session.info.transaction)throw new Error('SESSION_BUSY: 请等待当前操作完成或取消')
+    if(write&&!session.info.writable)throw new Error('READ_ONLY: 请先启用当前会话的写入权限')
+    const controller=new AbortController();session.controller=controller
+    try{return await work(session.config,controller.signal)}finally{session.controller=undefined}
   }
   async execute(id: string, input: DatabaseOperation): Promise<OperationResult> {
     if (!input || typeof input !== 'object' || !ACTIONS.has(input.action)) throw new Error('INVALID_OPERATION: 不支持的操作')
     if (Buffer.byteLength(JSON.stringify(input)) > 4 * 1024 * 1024) throw new Error('LIMIT_EXCEEDED: 单次操作参数最多4 MiB')
     const session = this.session(id)
-    const prefix = session.info.kind === 'mongodb' ? 'mongo.' : `${session.info.kind}.`
+    const prefix = session.info.kind === 'mongodb' ? 'mongo.' : session.info.kind==='sqlite'?'mysql.': `${session.info.kind}.`
     if (!input.action.startsWith(prefix)) throw new Error('INVALID_OPERATION: 操作与连接类型不匹配')
     const result = await this.guard(id, async ({ driver }, context) => {
-      if (driver.kind === 'mysql') return driver.operations.execute(input as MysqlOperation, context)
+      if (driver.kind === 'mysql'||driver.kind==='sqlite') return driver.operations.execute(input as MysqlOperation, context)
       if (driver.kind === 'mongodb') return driver.operations.execute(input as MongoOperation, context)
       return driver.operations.execute(input as RedisOperation, context)
     }, 'confirmed' in input && input.confirmed === true)
@@ -211,6 +225,7 @@ export class SessionManager {
   async roots(id: string): Promise<ExplorerNode[]> {
     return this.guard(id, async (session, context) => {
       const { driver, config } = session
+      if(driver.kind==='sqlite')return [{id:'db:main',label:'main',kind:'database',database:'main'}]
       if (driver.kind === 'mysql') {
         const data = await driver.operations.execute({ action: 'mysql.query', sql: 'SHOW DATABASES' }, context)
         return data.rows.map(row => { const db = Object.values(row)[0]; return { id: `db:${db}`, label: db, kind: 'database', database: db } })
@@ -228,19 +243,25 @@ export class SessionManager {
       return [{ id: `db:${config.redisDb || 0}`, label: config.redisMode === 'cluster' ? 'Cluster · DB 0' : `DB ${config.redisDb || 0}`, kind: 'keyspace', database: String(config.redisDb || 0) }]
     })
   }
-  async children(id: string, database: string): Promise<ExplorerNode[]> {
+  async children(id: string, database: string, category?: MongoCategory): Promise<ExplorerNode[]> {
     resourceName(database, '数据库')
     return this.guard(id, async ({ driver }, context) => {
+      if(driver.kind==='sqlite'){if(database!=='main')throw new Error('INVALID_OPERATION: 不支持的操作');return driver.operations.children()}
       if (driver.kind === 'mysql') {
         const data = await driver.operations.execute({ action: 'mysql.query', sql: `SHOW FULL TABLES FROM ${quoteIdentifier(database)}` }, context)
-        return data.rows.map(row => { const entity = Object.values(row)[0]; return { id: `table:${database}:${entity}`, label: entity, kind: 'table', database, entity } })
+        return data.rows.map(row => { const [entity, type] = Object.values(row); return { id: `table:${database}:${entity}`, label: entity, kind: type === 'VIEW' ? 'view' : 'table', readOnly: type === 'VIEW', database, entity } })
       }
       if (driver.kind === 'mongodb') {
-        const cursor = driver.client.db(database).listCollections({}, { nameOnly: true, authorizedCollections: true, batchSize: 100, maxTimeMS: 10000 })
-        const nodes: ExplorerNode[] = []
-        try { for await (const item of cursor) { nodes.push({ id: `collection:${database}:${item.name}`, label: item.name, kind: 'collection', database, entity: item.name }); if (nodes.length >= 500 || context.signal?.aborted) break } }
+        if (category === undefined) return mongoCategoryNodes(database)
+        const group = mongoCategory(category)
+        if (!group) throw new Error('INVALID_OPERATION: 不支持的操作')
+        if (!group.expandable) return []
+        const filter = category === 'functions' ? { name: 'system.js' } : category === 'views' ? { type: 'view' } : category === 'gridfs' ? { name: /\.(files|chunks)$/ } : {}
+        const cursor = driver.client.db(database).listCollections(filter, { nameOnly: true, authorizedCollections: true, batchSize: 100, maxTimeMS: 10000 })
+        const entries: MongoCatalogEntry[] = []
+        try { for await (const item of cursor) { entries.push({ name:item.name, type:item.type }); if (entries.length >= 500 || context.signal?.aborted) break } }
         finally { await cursor.close() }
-        return nodes
+        return mongoCatalogNodes(database, entries, category)
       }
       return []
     })
@@ -248,6 +269,7 @@ export class SessionManager {
   preview(id: string, database: string, entity: string, offset = 0): Promise<DataPreview> {
     resourceName(database, '数据库'); resourceName(entity, '表/集合')
     const kind = this.session(id).info.kind
+    if(kind==='sqlite')return this.execute(id,{action:'mysql.browse',database,entity,filter:{join:'and',groups:[],sort:[]},offset,limit:100})
     if (kind === 'mysql') return this.execute(id, { action: 'mysql.query', database, sql: `SELECT * FROM ${quoteIdentifier(database)}.${quoteIdentifier(entity)}`, offset, limit: 100 })
     if (kind === 'mongodb') return this.execute(id, { action: 'mongo.find', database, entity, offset, limit: 100 })
     throw new Error('此连接不支持表数据预览')
