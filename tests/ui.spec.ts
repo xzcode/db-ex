@@ -27,6 +27,11 @@ async function installBridge(page: Page) {
     const grid = (values: Record<string, string>[]) => ({ columns: Object.keys(values[0] || {}), rows: values })
     ;(window as any).__dbexCalls = calls
     ;(window as any).dbex = {
+      async getNativePreferences(){return JSON.parse(localStorage.getItem('mock.native-preferences')||'{"tools":{},"diagnostics":false}')},
+      async saveNativePreferences(value:any){localStorage.setItem('mock.native-preferences',JSON.stringify(value));return value},
+      async logPath(){return '/mock/logs'},async openLogs(){calls.push({action:'openLogs'})},
+      async pickTool(name:string){return '/opt/bin/'+name},async checkTool(_name:string,path:string){return path.startsWith('/opt/bin/')},
+      async saveRecovery(value:any){calls.push({action:'saveRecovery',value})},async loadRecovery(){return null},
       async getSystemLanguage() { return navigator.language },
       async setLocale(locale: string) { calls.push({ action: 'setLocale', locale }) },
       async listConnections() { return configs },
@@ -737,4 +742,35 @@ test('database menu opens query and finds objects without scanning data',async({
   await root.click({button:'right'})
   await menu.getByRole('button',{name:'关闭数据库',exact:true}).click()
   await expect(page.locator('.workbench:visible .data-table')).toHaveCount(0)
+})
+
+test('unified preferences persist editor, record and external tool settings',async({page})=>{
+  await page.getByRole('button',{name:'偏好设置',exact:true}).click()
+  const dialog=page.getByRole('dialog',{name:'偏好设置'})
+  await dialog.getByRole('button',{name:'编辑器',exact:true}).click()
+  await dialog.getByRole('checkbox',{name:'显示行号',exact:true}).uncheck()
+  await dialog.getByLabel('字号',{exact:true}).fill('16')
+  await dialog.getByRole('button',{name:'记录',exact:true}).click()
+  await dialog.getByLabel('MySQL',{exact:true}).selectOption('500')
+  await dialog.getByLabel('行高',{exact:true}).selectOption('40')
+  await dialog.getByRole('button',{name:'外部工具',exact:true}).click()
+  await dialog.getByRole('button',{name:'选择可执行文件 mongodump',exact:true}).click()
+  await expect(dialog.getByLabel('mongodump',{exact:true})).toHaveValue('/opt/bin/mongodump')
+  await dialog.getByRole('button',{name:'确认',exact:true}).click()
+  await expect(dialog).toHaveCount(0)
+  await connect(page,'MySQL Local');await openUsers(page)
+  await expect(page.locator('.workbench:visible .browse-page-size select')).toHaveValue('500')
+  await expect(page.locator('.workbench:visible .configured-grid').first()).toHaveCSS('--record-height','40px')
+  await page.reload()
+  await page.getByRole('button',{name:'偏好设置',exact:true}).click()
+  await dialog.getByRole('button',{name:'编辑器',exact:true}).click()
+  await expect(dialog.getByRole('checkbox',{name:'显示行号',exact:true})).not.toBeChecked()
+  await expect(dialog.getByLabel('字号',{exact:true})).toHaveValue('16')
+  await dialog.getByRole('button',{name:'外部工具',exact:true}).click()
+  await expect(dialog.getByLabel('mongodump',{exact:true})).toHaveValue('/opt/bin/mongodump')
+  await dialog.getByRole('button',{name:'还原默认值',exact:true}).click()
+  await dialog.getByRole('button',{name:'取消',exact:true}).click()
+  await page.getByRole('button',{name:'偏好设置',exact:true}).click()
+  await dialog.getByRole('button',{name:'外部工具',exact:true}).click()
+  await expect(dialog.getByLabel('mongodump',{exact:true})).toHaveValue('/opt/bin/mongodump')
 })
