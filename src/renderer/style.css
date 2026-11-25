@@ -627,3 +627,5 @@ html[dir=rtl] .tree-chevron:not(.expanded) { transform: rotate(180deg); }
 .object-tab.has-color {border-top-color:var(--connection-color,var(--accent))}
 .object-tab .catalog-object-icon {color:var(--accent);font-size:15px;flex:none}
 .object-dirty {color:var(--warning)}
+
+.db-icon.clickhouse,.db-small-icon.clickhouse{color:#eac04d;background:rgba(234,192,77,.12)}

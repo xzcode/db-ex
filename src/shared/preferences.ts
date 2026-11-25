@@ -16,7 +16,7 @@ export interface AppPreferences {
   theme:'dark'|'light'|'system'; language:LanguagePreference; alwaysShowTabs:boolean;
   startup:'welcome'|'lastConnection'|'workspace'; completion:boolean; autoCompletion:boolean; firstSuggestion:boolean;
   editor:EditorPreferences;
-  records:{ mysqlPageSize:100|200|500; mariadbPageSize:100|200|500; mongoPageSize:100|200|500; sqlitePageSize:100|200|500; fontFamily:typeof gridFonts[number]; fontSize:number; rowHeight:0|26|30|34|40; stripes:0|2|3; recordHistory:boolean };
+  records:{ mysqlPageSize:100|200|500; mariadbPageSize:100|200|500; clickhousePageSize:100|200|500; mongoPageSize:100|200|500; sqlitePageSize:100|200|500; fontFamily:typeof gridFonts[number]; fontSize:number; rowHeight:0|26|30|34|40; stripes:0|2|3; recordHistory:boolean };
   recoverySeconds:0|15|30|60|180
 }
 export interface NativePreferences { tools:Partial<Record<ToolName,string>>; diagnostics:boolean }
@@ -26,7 +26,7 @@ export function syntaxDefaults(light:boolean):Record<SyntaxRole,string> {
 export function defaultPreferences():AppPreferences{
  return {theme:'dark',language:'system',alwaysShowTabs:true,startup:'welcome',completion:true,autoCompletion:true,firstSuggestion:true,
  editor:{lineNumbers:true,folding:true,brackets:true,syntax:true,insertSpaces:true,tabSize:2,wordWrap:true,fontFamily:'default',fontSize:13,maxHighlightMB:11,customColors:false,colors:syntaxDefaults(false)},
- records:{mysqlPageSize:100,mariadbPageSize:100,mongoPageSize:200,sqlitePageSize:100,fontFamily:'default',fontSize:12,rowHeight:0,stripes:2,recordHistory:true},recoverySeconds:0}
+ records:{mysqlPageSize:100,mariadbPageSize:100,clickhousePageSize:100,mongoPageSize:200,sqlitePageSize:100,fontFamily:'default',fontSize:12,rowHeight:0,stripes:2,recordHistory:true},recoverySeconds:0}
 }
 function obj(value:unknown):Record<string,unknown>{return value&&typeof value==='object'&&!Array.isArray(value)?value as Record<string,unknown>:{}}
 function bool(value:unknown,fallback:boolean){return typeof value==='boolean'?value:fallback}
@@ -41,7 +41,7 @@ export function normalizePreferences(value:unknown):AppPreferences{
  alwaysShowTabs:bool(v.alwaysShowTabs,d.alwaysShowTabs),startup:choice(v.startup,['welcome','lastConnection','workspace'] as const,d.startup),
  completion:bool(v.completion,d.completion),autoCompletion:bool(v.autoCompletion,d.autoCompletion),firstSuggestion:bool(v.firstSuggestion,d.firstSuggestion),
  editor:{lineNumbers:bool(e.lineNumbers,d.editor.lineNumbers),folding:bool(e.folding,d.editor.folding),brackets:bool(e.brackets,d.editor.brackets),syntax:bool(e.syntax,d.editor.syntax),insertSpaces:bool(e.insertSpaces,d.editor.insertSpaces),tabSize:int(e.tabSize,2,1,8),wordWrap:bool(e.wordWrap,d.editor.wordWrap),fontFamily:choice(e.fontFamily,editorFonts,'default'),fontSize:int(e.fontSize,13,10,28),maxHighlightMB:int(e.maxHighlightMB,11,1,32),customColors:bool(e.customColors,false),colors},
- records:{mysqlPageSize:choice(r.mysqlPageSize,[100,200,500] as const,100),mariadbPageSize:choice(r.mariadbPageSize,[100,200,500] as const,100),mongoPageSize:choice(r.mongoPageSize,[100,200,500] as const,200),sqlitePageSize:choice(r.sqlitePageSize,[100,200,500] as const,100),fontFamily:choice(r.fontFamily,gridFonts,'default'),fontSize:int(r.fontSize,12,10,22),rowHeight:choice(r.rowHeight,[0,26,30,34,40] as const,0),stripes:choice(r.stripes,[0,2,3] as const,2),recordHistory:bool(r.recordHistory,true)},
+ records:{mysqlPageSize:choice(r.mysqlPageSize,[100,200,500] as const,100),mariadbPageSize:choice(r.mariadbPageSize,[100,200,500] as const,100),clickhousePageSize:choice(r.clickhousePageSize,[100,200,500] as const,100),mongoPageSize:choice(r.mongoPageSize,[100,200,500] as const,200),sqlitePageSize:choice(r.sqlitePageSize,[100,200,500] as const,100),fontFamily:choice(r.fontFamily,gridFonts,'default'),fontSize:int(r.fontSize,12,10,22),rowHeight:choice(r.rowHeight,[0,26,30,34,40] as const,0),stripes:choice(r.stripes,[0,2,3] as const,2),recordHistory:bool(r.recordHistory,true)},
  recoverySeconds:choice(v.recoverySeconds,[0,15,30,60,180] as const,0)}
 }
 export function normalizeNativePreferences(value:unknown):NativePreferences{
@@ -49,7 +49,7 @@ export function normalizeNativePreferences(value:unknown):NativePreferences{
  for(const name of toolNames){const path=raw[name];if(typeof path==='string'&&path.length<=4096&&!/[\u0000-\u001f]/.test(path)&&path.trim())tools[name]=path.trim()}
  return {tools,diagnostics:v.diagnostics===true}
 }
-export function pageSizeFor(p:AppPreferences,kind:string){return kind==='mongodb'?p.records.mongoPageSize:kind==='sqlite'?p.records.sqlitePageSize:kind==='mariadb'?p.records.mariadbPageSize:p.records.mysqlPageSize}
+export function pageSizeFor(p:AppPreferences,kind:string){return kind==='clickhouse'?p.records.clickhousePageSize:kind==='mongodb'?p.records.mongoPageSize:kind==='sqlite'?p.records.sqlitePageSize:kind==='mariadb'?p.records.mariadbPageSize:p.records.mysqlPageSize}
 export function gridRowHeight(p:AppPreferences,mongo:boolean){return Math.max(p.records.rowHeight||(mongo?26:34),p.records.fontSize+10)}
 export interface RecoveryDraft { connectionId:string; database:string; entity:string; kind:'mysql-query'|'mariadb-query'|'sqlite-query'|'mongo-pipeline'|'mongo-query'|'redis-command'|'record-edit'|'saved-query'; text:string; updatedAt?:string }
 export function normalizeRecoveryDraft(input:unknown):RecoveryDraft{

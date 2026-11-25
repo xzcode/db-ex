@@ -23,6 +23,7 @@
     "icons": "node scripts/generate-icons.mjs"
   },
   "dependencies": {
+    "@clickhouse/client": "^1.25.0",
     "ioredis": "^5.11.1",
     "monaco-editor": "^0.57.0",
     "mongodb": "^6.15.0",
@@ -57,7 +58,9 @@
       "package.json"
     ],
     "asar": true,
-    "asarUnpack": ["dist-electron/sqlite-worker.cjs"],
+    "asarUnpack": [
+      "dist-electron/sqlite-worker.cjs"
+    ],
     "mac": {
       "target": [
         "dmg",

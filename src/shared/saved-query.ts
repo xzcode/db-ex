@@ -8,7 +8,7 @@ export interface SavedQuery extends QueryDraft,QueryScope {id:string;createdAt:s
 export interface QuerySummary extends QueryScope {id:string;name:string;mode:QueryMode;createdAt:string;updatedAt:string;revision:string;bytes:number}
 export interface QuerySave {draft:QueryDraft;id?:string;revision?:string}
 export const isQueryId=(v:unknown):v is string=>typeof v==='string'&&/^[A-Za-z0-9_-]{1,128}$/.test(v)
-const validKind=(v:unknown):v is QueryEngine=>v==='mysql'||v==='mariadb'||v==='sqlite'||v==='mongodb'
+const validKind=(v:unknown):v is QueryEngine=>v==='mysql'||v==='mariadb'||v==='sqlite'||v==='mongodb'||v==='clickhouse'
 const obj=(v:unknown):Record<string,unknown>=>{if(!v||typeof v!=='object'||Array.isArray(v))throw new Error('查询记录参数错误');return v as Record<string,unknown>}
 export function queryModeFor(kind:QueryEngine,mode?:unknown):QueryMode{
  if(kind==='mongodb'){
@@ -34,7 +34,7 @@ export function normalizeQueryDraft(kind:QueryEngine,input:unknown):QueryDraft{
  const text=bounded(v.text,100000)
  // A saved draft may be incomplete. Query execution still passes the engine
  // policy and native write confirmation; saving/importing never executes.
- if(mode==='sql')return {name,mode,text,parameters:bounded(v.parameters??'[]',100000)}
+ if(mode==='sql')return {name,mode,text,parameters:bounded(v.parameters??(kind==='clickhouse'?'{}':'[]'),100000)}
  const entity=bounded(v.entity??'',200)
  if(/[\u0000-\u001f]/.test(entity))throw new Error('查询记录参数错误')
  if(mode==='mongo-find'){
@@ -67,7 +67,7 @@ export function portableQuery(value:SavedQuery){
  return {format:'db-ex-query',version:1,kind:value.kind,...draft}
 }
 export function readPortableQuery(kind:QueryEngine,mode:QueryMode,text:string,name:string,isSql:boolean):QueryDraft{
- if(isSql){if(mode!=='sql')throw new Error('查询记录参数错误');return normalizeQueryDraft(kind,{name,mode,text,parameters:'[]'})}
+ if(isSql){if(mode!=='sql')throw new Error('查询记录参数错误');return normalizeQueryDraft(kind,{name,mode,text,parameters:kind==='clickhouse'?'{}':'[]'})}
  const v=obj(JSON.parse(text))
  if(v.format!=='db-ex-query'||v.version!==1||v.kind!==kind||v.mode!==mode)throw new Error('查询文件与当前数据库类型不匹配。')
  return normalizeQueryDraft(kind,v)

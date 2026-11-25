@@ -75,7 +75,7 @@ function operationDetail(id: string, op: DatabaseOperation): string {
   const info = sessions.info(id)
   const target = 'entity' in op ? `${op.database}.${op.entity}` : 'initialCollection' in op ? `${op.database}.${op.initialCollection}` : 'database' in op ? op.database || '' : 'key' in op ? op.key : 'keys' in op ? tr('{0} 个已选择的Key', [op.keys.length]) : ''
   const count = 'rows' in op ? '\n' + tr('导入 {0} 行', [op.rows.length]) : 'documents' in op ? '\n' + tr('写入 {0} 个文档', [op.documents.length]) : ''
-  const sql = op.action === 'mysql.query' ? `\n\n${op.sql.slice(0, 1500)}` : op.action === 'redis.command' ? '\n' + tr('命令：') + ' ' + op.args[0] : ''
+  const sql = (op.action === 'mysql.query'||op.action==='clickhouse.query') ? `\n\n${op.sql.slice(0, 1500)}` : op.action === 'redis.command' ? '\n' + tr('命令：') + ' ' + op.args[0] : ''
   return `${tr('连接：')} ${info.name}\n${tr('地址：')} ${info.displayHost}\n${tr('操作：')} ${op.action}${target ? '\n' + tr('目标：') + ' ' + target : ''}${count}\n${tr(info.transaction ? '当前有未提交事务。' : '本操作可能立即持久化。')}${sql}`
 }
 async function openText(win: BrowserWindow, title: string, limit = 4 * 1024 * 1024): Promise<FileImport | null> {

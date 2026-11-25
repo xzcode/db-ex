@@ -12,8 +12,9 @@ const props=defineProps<{session:SessionInfo;node:ExplorerNode;active:boolean;ta
 const emit=defineEmits<{saved:[value:QuerySummary];busyChange:[value:boolean];dirtyChange:[value:boolean];updateSession:[session:SessionInfo];disconnect:[]}>()
 const database=props.node.database||''
 const mode:QueryMode=props.node.queryMode||'sql'
+const clickhouse=props.session.kind==='clickhouse'
 const currentId=ref(props.node.queryId),revision=ref('')
-const name=ref(''),sql=ref(''),parameters=ref('[]'),entity=ref(''),filter=ref('{}'),projection=ref('{}'),sort=ref('{}'),pipeline=ref('[\n  { "$limit": 100 }\n]')
+const name=ref(''),sql=ref(''),parameters=ref(clickhouse?'{}':'[]'),entity=ref(''),filter=ref('{}'),projection=ref('{}'),sort=ref('{}'),pipeline=ref('[\n  { "$limit": 100 }\n]')
 const result=ref<OperationResult>(),offset=ref(0),limit=ref<number>(pageSizeFor(preferences.value,props.session.kind))
 const busy=ref(false),running=ref(false),loaded=ref(false),error=ref(''),notice=ref('')
 const targets=ref<ExplorerNode[]>([]),legacy=ref<QuerySnippet[]>([]),legacySelected=ref('')
@@ -32,7 +33,7 @@ function fail(reason:unknown){error.value=reason instanceof Error?reason.message
 async function task(fn:()=>Promise<void>){if(busy.value||disposed)return;busy.value=true;error.value='';notice.value='';try{await fn()}catch(reason){if(!disposed)fail(reason)}finally{busy.value=false}}
 function apply(value:QueryDraft){
  name.value=value.name
- if(mode==='sql'){sql.value=value.text;parameters.value=value.parameters||'[]'}
+ if(mode==='sql'){sql.value=value.text;parameters.value=value.parameters||(clickhouse?'{}':'[]')}
  else{entity.value=value.entity||'';if(mode==='mongo-aggregation')pipeline.value=value.text;else{const parts=JSON.parse(value.text);filter.value=parts.filter;projection.value=parts.projection;sort.value=parts.sort}}
 }
 const recovery=useQueryRecovery(()=>loaded.value&&currentId.value&&props.session.connectionId?{connectionId:props.session.connectionId,database,entity:currentId.value,kind:'saved-query'}:undefined,()=>fingerprint.value,text=>{
@@ -91,10 +92,11 @@ async function execute(paging?:number,selection=false){
    op={...applied,offset:paging}
   }else if(mode==='sql'){
    const params:unknown=JSON.parse(parameters.value)
-   if(!Array.isArray(params)||params.length>1000||params.some(v=>v!==null&&!['string','number','boolean'].includes(typeof v)||typeof v==='number'&&!Number.isFinite(v)))throw new Error('SQL 参数需要 JSON 数组，仅支持字符串、数字、布尔或 null')
+   if(!clickhouse&&(!Array.isArray(params)||params.length>1000||params.some(v=>v!==null&&!['string','number','boolean'].includes(typeof v)||typeof v==='number'&&!Number.isFinite(v))))throw new Error('SQL 参数需要 JSON 数组，仅支持字符串、数字、布尔或 null')
+   if(clickhouse&&(!params||typeof params!=='object'||Array.isArray(params)))throw new Error('ClickHouse 参数需要 JSON 对象')
    const text=selection?editor.value?.selection()||sql.value:sql.value
    if(!text.trim())throw new Error('SQL_POLICY: SQL 不能为空')
-   op={action:'mysql.query',database,sql:text,parameters:params as SqlValue[],limit:limit.value,offset:0,confirmed:props.session.writable}
+   op=clickhouse?{action:'clickhouse.query',database,sql:text,parameters:params as Record<string,SqlValue>,limit:limit.value,confirmed:props.session.writable}:{action:'mysql.query',database,sql:text,parameters:params as SqlValue[],limit:limit.value,offset:0,confirmed:props.session.writable}
   }else{
    if(!targets.value.some(n=>n.entity===entity.value))throw new Error('请选择目标集合或视图。')
    op=mode==='mongo-find'?{action:'mongo.find',database,entity:entity.value,filter:filter.value,projection:projection.value,sort:sort.value,limit:limit.value,offset:0}:{action:'mongo.aggregate',database,entity:entity.value,pipeline:pipeline.value,limit:limit.value}
@@ -107,8 +109,8 @@ async function execute(paging?:number,selection=false){
   if(next.transaction!==undefined)emit('updateSession',{...props.session,transaction:next.transaction})
   if(next.disconnected){emit('disconnect');return}
   if(next.message)notice.value=next.message
-  if(preferences.value.records.recordHistory&&mode==='sql'&&op.action==='mysql.query'){
-   await window.dbex.saveSnippet({name:op.sql.trim().split('\n')[0].slice(0,80),kind:props.session.kind,database,connectionId:props.session.connectionId,text:op.sql,parameters:JSON.stringify(op.parameters||[]),favorite:false}).catch(()=>{})
+  if(preferences.value.records.recordHistory&&mode==='sql'&&(op.action==='mysql.query'||op.action==='clickhouse.query')){
+   await window.dbex.saveSnippet({name:op.sql.trim().split('\n')[0].slice(0,80),kind:props.session.kind,database,connectionId:props.session.connectionId,text:op.sql,parameters:JSON.stringify(op.parameters||(clickhouse?{}:[])),favorite:false}).catch(()=>{})
   }
  })
 }
@@ -139,17 +141,17 @@ async function exportQuery(format:'json'|'sql'){if(!currentId.value)return;await
    <button class="btn primary small" :disabled="busy||!loaded||(mode!=='sql'&&!entity)" @click="execute(undefined,true)">{{ mode==='sql'?t('运行选中 / 全部'):mode==='mongo-find'?t('查询'):t('运行 Aggregation') }}</button>
    <button v-if="running" class="btn secondary small" @click="cancel">{{ t('取消并断开') }}</button>
    <span class="toolbar-spacer"></span>
-   <template v-if="mode==='sql'"><button class="btn secondary small" :disabled="busy||!session.writable||session.transaction" @click="transaction('mysql.begin')">{{ t('开始事务') }}</button><button class="btn secondary small" :disabled="busy||!session.transaction" @click="transaction('mysql.commit')">{{ t('提交') }}</button><button class="btn secondary small" :disabled="busy||!session.transaction" @click="transaction('mysql.rollback')">{{ t('回滚') }}</button></template>
+   <template v-if="mode==='sql'&&!clickhouse"><button class="btn secondary small" :disabled="busy||!session.writable||session.transaction" @click="transaction('mysql.begin')">{{ t('开始事务') }}</button><button class="btn secondary small" :disabled="busy||!session.transaction" @click="transaction('mysql.commit')">{{ t('提交') }}</button><button class="btn secondary small" :disabled="busy||!session.transaction" @click="transaction('mysql.rollback')">{{ t('回滚') }}</button></template>
   </div>
   <template v-if="mode==='sql'">
    <div class="query-editor"><CodeEditor ref="editor" v-model="sql" language="sql" :readonly="busy||!loaded" :table-suggestions="tableSuggestions" @execute="execute(undefined,true)" /></div>
-   <label class="parameter-line">{{ t('参数') }}<input v-model="parameters" :aria-label="t('SQL 参数 JSON 数组')" spellcheck="false" :disabled="busy||!loaded" /></label>
+   <label class="parameter-line">{{ t('参数') }}<input v-model="parameters" :aria-label="clickhouse?t('ClickHouse 参数 JSON 对象'):t('SQL 参数 JSON 数组')" spellcheck="false" :disabled="busy||!loaded" /></label>
   </template>
   <div v-else-if="mode==='mongo-aggregation'" class="query-editor"><CodeEditor v-model="pipeline" language="json" completion-kind="mongodb" :readonly="busy||!loaded" @execute="execute()" /></div>
   <div v-else class="library-query-parts"><label class="field">Filter<textarea v-model="filter" aria-label="Filter" :disabled="busy||!loaded" spellcheck="false" /></label><label class="field">Projection<textarea v-model="projection" aria-label="Projection" :disabled="busy||!loaded" spellcheck="false" /></label><label class="field">Sort<textarea v-model="sort" aria-label="Sort" :disabled="busy||!loaded" spellcheck="false" /></label></div>
-  <ResultGrid v-if="result" :columns="result.columns" :rows="result.rows" :documents="result.documents" :bson-types="result.bsonTypes" :column-types="result.columnTypes" :sqlite-types="result.sqliteTypes" :null-cells="result.nullCells" :relational-kind="session.kind==='mariadb'?'mariadb':'mysql'" :offset="offset" :active="active" />
+  <ResultGrid v-if="result" :columns="result.columns" :rows="result.rows" :documents="result.documents" :bson-types="result.bsonTypes" :column-types="result.columnTypes" :sqlite-types="result.sqliteTypes" :null-cells="result.nullCells" :relational-kind="clickhouse?'clickhouse':session.kind==='mariadb'?'mariadb':'mysql'" :offset="offset" :active="active" />
   <div v-else class="empty-state"><strong>{{ t('运行查询查看结果') }}</strong></div>
-  <footer class="result-footer"><span>{{ result?.rows.length||0 }} {{ t('条记录') }}</span><div><button class="btn secondary small" :disabled="busy||offset===0||!applied" @click="execute(Math.max(0,offset-limit))">{{ t('上一页') }}</button><button class="btn secondary small" :disabled="busy||result?.nextOffset===undefined" @click="execute(result?.nextOffset)">{{ t('下一页') }}</button></div></footer>
+  <footer class="result-footer"><span>{{ result?.rows.length||0 }} {{ t('条记录') }}<template v-if="result?.truncated"> · {{ t('结果已截断') }}</template><template v-if="result?.queryId"> · {{ result.queryId }}</template></span><div v-if="!clickhouse"><button class="btn secondary small" :disabled="busy||offset===0||!applied" @click="execute(Math.max(0,offset-limit))">{{ t('上一页') }}</button><button class="btn secondary small" :disabled="busy||result?.nextOffset===undefined" @click="execute(result?.nextOffset)">{{ t('下一页') }}</button></div></footer>
   <div v-if="saveAsOpen" class="modal-backdrop"><section class="dialog" role="dialog" :aria-label="t('另存为')"><header class="dialog-header"><h2>{{ t('另存为') }}</h2></header><div class="dialog-body"><label class="field field-wide">{{ t('名称') }}<input v-model="copyName" :aria-label="t('名称')" maxlength="100" /></label><p v-if="error" role="alert">{{ localize(error) }}</p></div><footer class="dialog-footer"><button class="btn secondary" :disabled="busy" @click="saveAsOpen=false">{{ t('取消') }}</button><button class="btn primary" :disabled="busy||!copyName.trim()" @click="save(true)">{{ t('保存') }}</button></footer></section></div>
  </section>
 </template>

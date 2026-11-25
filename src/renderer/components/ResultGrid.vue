@@ -22,7 +22,7 @@ const props = withDefaults(defineProps<{
   offset?: number
   bsonTypes?: BsonTypeBranch[]
   columnTypes?: string[]
-  relationalKind?: 'mysql'|'mariadb'
+  relationalKind?: 'mysql'|'mariadb'|'clickhouse'
   sqliteTypes?: string[][]
   nullCells?: number[][]
   redisRowTypes?: string[]

@@ -1,0 +1,61 @@
+import assert from 'node:assert/strict'
+import {createClient} from '@clickhouse/client'
+import {SessionManager} from '../src/main/connections/manager'
+import {createTransport} from '../src/main/connections/transport'
+import {newConnectionConfig} from '../src/shared/connection-form'
+import {createConnectionBackup,readConnectionBackup} from '../src/main/connections/backup'
+import {adapterOperationWrites} from '../src/main/connections/adapters'
+const port=Number(process.env.DBEX_CH_PORT),password=process.env.DBEX_CH_PASSWORD
+if(!Number.isInteger(port)||!password)throw new Error('Missing isolated fixture')
+const config={...newConnectionConfig('clickhouse'),name:'ClickHouse fixture',host:'127.0.0.1',port,username:'dbex',password}
+const admin=createClient({url:'http://127.0.0.1:'+port,username:'dbex',password})
+const manager=new SessionManager()
+const transport=await createTransport({ssh:config.ssh})
+const database='dbex_fixture',entity='items',target={database,entity}
+try{
+ await admin.command({query:'CREATE DATABASE '+database})
+ await admin.command({query:"CREATE TABLE "+database+".items (id UInt64, amount Decimal(38,8), note Nullable(String), tags Array(UInt64), at DateTime64(3), extra String DEFAULT '') ENGINE=MergeTree ORDER BY id"})
+ await admin.command({query:"INSERT INTO "+database+".items VALUES (18446744073709551615,12345678901234567890.12345678,NULL,[18446744073709551615],'2026-01-01 12:34:56.789','a'),(2,1.23,'two',[2],'2026-01-02 00:00:00.001','b')"})
+ await admin.command({query:'CREATE VIEW '+database+'.item_view AS SELECT id FROM '+database+'.items'})
+ assert.equal(readConnectionBackup(createConnectionBackup([config]))[0]?.kind,'clickhouse')
+ const endpoint=await transport.socks()
+ const session=await manager.connect({...config,proxy:{enabled:true,type:'socks5',...endpoint}})
+ console.log('ClickHouse actual server: '+session.serverVersion+' over authenticated SOCKS')
+ assert.equal(session.writable,false);assert.equal(session.transaction,false)
+ assert((await manager.roots(session.id)).some(n=>n.database===database))
+ const nodes=await manager.children(session.id,database,undefined,true)
+ assert(nodes.some(n=>n.entity===entity&&n.metrics?.some(m=>m.label==='存储引擎'&&m.value==='MergeTree')))
+ assert(nodes.some(n=>n.entity==='item_view'&&n.kind==='view'&&n.readOnly))
+ const structure=await manager.execute(session.id,{action:'clickhouse.structure',...target})
+ assert(structure.rows.some(r=>r.name==='id'&&r.type==='UInt64'))
+ const info=await manager.execute(session.id,{action:'clickhouse.inspect',...target})
+ assert.match(info.inspection?.definition||'',/CREATE TABLE/)
+ const query=await manager.execute(session.id,{action:'clickhouse.query',database,sql:'SELECT id,amount,note,tags,at FROM items WHERE id={id:UInt64}',parameters:{id:'18446744073709551615'}})
+ assert.equal(query.rows[0]?.id,'18446744073709551615')
+ assert.equal(query.rows[0]?.amount,'12345678901234567890.12345678')
+ assert.equal(query.rawRows?.[0]?.note,null)
+ assert.match(query.rows[0]?.tags||'',/18446744073709551615/)
+ assert.equal(query.columnTypes?.[0],'UInt64')
+ assert(query.queryId)
+ const first=await manager.execute(session.id,{action:'clickhouse.browse',...target,limit:1,sort:[{field:'id',direction:1}]})
+ assert.equal(first.rows[0]?.id,'2');assert.equal(first.nextOffset,1)
+ const second=await manager.execute(session.id,{action:'clickhouse.browse',...target,limit:1,offset:1,sort:[{field:'id',direction:1}]})
+ assert.equal(second.rows[0]?.id,'18446744073709551615');assert.equal(second.nextOffset,undefined)
+ const filtered=await manager.execute(session.id,{action:'clickhouse.browse',...target,filter:{field:'note',value:'two'}})
+ assert.equal(filtered.rows[0]?.id,'2')
+ await assert.rejects(()=>manager.execute(session.id,{action:'mysql.begin'}),/INVALID_OPERATION/)
+ await assert.rejects(()=>manager.execute(session.id,{action:'clickhouse.query',database,sql:'SELECT 1 SETTINGS readonly=0'}),/SQL_POLICY/)
+ await assert.rejects(()=>manager.execute(session.id,{action:'clickhouse.query',database,sql:'CREATE TABLE denied (id UInt64) ENGINE=MergeTree ORDER BY id',confirmed:true}),/READ_ONLY/)
+ await assert.rejects(()=>manager.execute(session.id,{action:'clickhouse.insert',...target,rows:[{id:'9'}],confirmed:true}),/READ_ONLY/)
+ await manager.setWriteAccess(session.id,true)
+ await assert.rejects(()=>manager.execute(session.id,{action:'clickhouse.insert',...target,rows:[{id:'9'}]}),/CONFIRMATION_REQUIRED/)
+ const ddl=await manager.execute(session.id,{action:'clickhouse.query',database,sql:'CREATE TABLE copy_table (id UInt64, amount Decimal(38,8), note Nullable(String)) ENGINE=MergeTree ORDER BY id',confirmed:true})
+ assert(ddl.queryId)
+ const insert=await manager.execute(session.id,{action:'clickhouse.insert',database,entity:'copy_table',rows:[{id:'18446744073709551614',amount:'12345678901234567890.12345678',note:null}],confirmed:true})
+ assert.equal(insert.affectedRows,1)
+ const inserted=await manager.execute(session.id,{action:'clickhouse.query',database,sql:'SELECT * FROM copy_table'})
+ assert.equal(inserted.rows[0]?.id,'18446744073709551614');assert.equal(inserted.rows[0]?.amount,'12345678901234567890.12345678')
+ assert.equal(inserted.rawRows?.[0]?.note,null)
+ assert.equal(adapterOperationWrites('clickhouse',{action:'clickhouse.query',sql:'DROP TABLE copy_table'},true),true)
+ console.log('ClickHouse metadata, exact UInt64/Decimal, nested values, NULL, pagination, filtering, typed parameters, read-only protection and confirmed DDL/insert passed')
+}finally{await manager.closeAll();await transport.close();await admin.close()}

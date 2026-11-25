@@ -23,6 +23,7 @@ async function installBridge(page: Page) {
       { id: 'mongo', name: 'Mongo Local', kind: 'mongodb', host: '127.0.0.1', port: 27017 },
       { id: 'redis', name: 'Redis Local', kind: 'redis', host: '127.0.0.1', port: 6379 },
       { id: 'sql2', name: 'MySQL Other', kind: 'mysql', host: '127.0.0.2', port: 3306 },
+      {id:'ch',name:'ClickHouse Local',kind:'clickhouse',host:'127.0.0.1',port:8123},
     ].map(value => ({ ...value, sshEnabled: false, tlsEnabled: false }))
     const grid = (values: Record<string, string>[]) => ({ columns: Object.keys(values[0] || {}), rows: values })
     ;(window as any).__dbexCalls = calls
@@ -51,6 +52,7 @@ async function installBridge(page: Page) {
       async disconnect(id: string) { calls.push({ action: 'disconnect', id }) },
       async roots(id: string) { return [{ id: id + '-db', label: id === 'redis' ? 'DB 0' : id === 'sql2' ? 'other' : 'app', kind: id === 'redis' ? 'keyspace' : 'database', database: id === 'sql2' ? 'other' : 'app' },...(additionalDbs[id]||[]).map(database=>({id:id+'-'+database,label:database,kind:'database',database}))] },
       async children(id: string, database: string, category?: string) {
+        if(id==='ch')return [{id:database+'-events',label:'events',database,entity:'events',kind:'table',metrics:[{label:'存储引擎',value:'MergeTree'},{label:'记录数（估算）',value:'10'}]}]
         if(id!=='mongo')return [{ id: database + '-users', label: 'users', database, entity: 'users', kind: 'table' }]
         if(!category)return [['collections','集合'],['views','视图'],['functions','函数'],['indexes','索引'],['mapReduce','MapReduce'],['pipelines','聚合管道'],['gridfs','GridFS 存储桶'],['queries','查询']].map(([key,label])=>({id:database+'-'+key,label,database,kind:'mongo-category',category:key}))
         if(category==='collections')return [{id:database+'-users',label:'users',database,entity:'users',kind:'collection',metrics:[{label:'文档数',value:'10'},{label:'数据大小',value:'2048',format:'bytes'}]},...((window as any).__dbexCatalogFixture?[{id:database+'-audit',label:'audit',database,entity:'audit',kind:'collection',metrics:[{label:'文档数',value:'2'},{label:'数据大小',value:'100',format:'bytes'}]}]:[])]
@@ -62,6 +64,11 @@ async function installBridge(page: Page) {
       },
       async execute(id: string, op: any) {
         calls.push({ sessionId: id, ...op })
+        if(op.action==='clickhouse.browse'||op.action==='clickhouse.query')return {...grid([{id:'18446744073709551615',amount:'12345678901234567890.12345678'}]),columnTypes:['UInt64','Decimal(38,8)'],rawRows:[{id:'18446744073709551615',amount:'12345678901234567890.12345678'}],queryId:'fixture-id'}
+        if(op.action==='clickhouse.structure')return grid([{name:'id',type:'UInt64'}])
+        if(op.action==='clickhouse.inspect')return {columns:[],rows:[],inspection:{kind:'table',metrics:[{label:'存储引擎',value:'MergeTree'}],definition:'CREATE TABLE events (id UInt64) ENGINE=MergeTree ORDER BY id'}}
+        if(op.action==='clickhouse.insert')return {columns:[],rows:[],affectedRows:1,message:'操作已完成'}
+
         if(op.action==='mongo.createDatabase'||op.action==='mysql.createDatabase'){additionalDbs[id]=[...(additionalDbs[id]||[]),op.database];return {columns:[],rows:[],message:'数据库已创建'}}
         if(op.action==='mongo.dropDatabase'||op.action==='mysql.dropDatabase'){additionalDbs[id]=(additionalDbs[id]||[]).filter(name=>name!==op.database);return {columns:[],rows:[],message:'数据库已删除'}}
         if (op.action === 'mysql.structure') return { ...grid([{ name: 'id', type: 'int', key: 'PRI' }, { name: 'name', type: 'varchar', key: '' }]), primaryKeys: ['id'] }
@@ -1052,4 +1059,32 @@ test('macOS integrated title bar reserves native controls and keeps preferences 
  await expect(bar).toHaveCSS('direction','ltr')
  await settings.click()
  await expect(prefs).toBeVisible()
+})
+
+
+test('ClickHouse uses its own typed query actions and analytical workspace',async({page})=>{
+ await connect(page,'ClickHouse Local')
+ await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ await page.locator('.resource-node[data-object-kind="table"]').filter({hasText:'events'}).click()
+ const workbench=page.locator('.clickhouse-workbench:visible')
+ await expect(workbench.locator('.data-table')).toContainText('18446744073709551615')
+ await expect(workbench.getByRole('button',{name:'开始事务',exact:true})).toHaveCount(0)
+ await expect(workbench.getByRole('button',{name:'编辑',exact:true})).toHaveCount(0)
+ await workbench.locator('.data-table').getByRole('button',{name:'列操作: id',exact:true}).click()
+ await page.getByRole('menuitem',{name:'降序排序',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((c:any)=>c.action==='clickhouse.browse').at(-1)?.sort)).toEqual([{field:'id',direction:-1}])
+ await workbench.getByRole('button',{name:'结构',exact:true}).click()
+ await expect(workbench.locator('.data-table')).toContainText('UInt64')
+ await page.locator('[data-object-kind="query-folder"]').click()
+ await page.locator('.object-list-panel:visible').getByRole('button',{name:/新建查询/}).click()
+ const editor=page.locator('.saved-query-editor:visible')
+ await editor.getByLabel('名称',{exact:true}).fill('Analytics')
+ await replaceEditor(page,'.saved-query-editor:visible .query-editor .monaco-editor','SELECT {id:UInt64} AS id')
+ await editor.getByLabel('ClickHouse 参数 JSON 对象').fill('{"id":"18446744073709551615"}')
+ await editor.getByRole('button',{name:'保存',exact:true}).click()
+ await expect(editor.getByRole('status')).toHaveText('保存成功')
+ await editor.getByRole('button',{name:'运行选中 / 全部',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((c:any)=>c.action==='clickhouse.query').at(-1)?.parameters)).toEqual({id:'18446744073709551615'})
+ await expect(editor.getByRole('button',{name:'开始事务',exact:true})).toHaveCount(0)
+ await expect(editor.locator('.data-table')).toContainText('18446744073709551615')
 })

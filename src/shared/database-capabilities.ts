@@ -5,15 +5,16 @@ import type { DatabaseKind } from './types'
  * enforce the actual operation allowlist and write/transaction policy. */
 export interface DatabaseCapabilities {
   connection: 'network' | 'file'
-  browser: 'relational' | 'document' | 'keyspace'
+  browser: 'relational' | 'document' | 'keyspace' | 'analytical'
   editor: 'query' | 'aggregation' | 'console'
   transactions: boolean
   databaseAdministration: boolean
   graphicalIndexes: boolean
   backup: 'native-tools' | 'file' | 'none'
-  rowEditing: 'primary-key' | 'original-document' | 'key-specific'
+  rowEditing: 'primary-key' | 'original-document' | 'key-specific' | 'none'
 }
 const capabilities = {
+  clickhouse:{connection:'network',browser:'analytical',editor:'query',transactions:false,databaseAdministration:false,graphicalIndexes:false,backup:'none',rowEditing:'none'},
   mariadb: {connection:'network',browser:'relational',editor:'query',transactions:true,databaseAdministration:true,graphicalIndexes:false,backup:'native-tools',rowEditing:'primary-key'},
   mysql: {connection:'network',browser:'relational',editor:'query',transactions:true,databaseAdministration:true,graphicalIndexes:false,backup:'native-tools',rowEditing:'primary-key'},
   sqlite: {connection:'file',browser:'relational',editor:'query',transactions:true,databaseAdministration:false,graphicalIndexes:false,backup:'file',rowEditing:'primary-key'},

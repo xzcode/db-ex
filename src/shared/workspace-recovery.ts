@@ -7,7 +7,7 @@ export type WorkbenchTab=typeof workbenchTabs[number]
 type SelectedNode={kind:ExplorerNode['kind'];database:string;entity?:string;category?:MongoCategory;queryId?:string;queryMode?:QueryMode}
 export interface WorkspacePosition {tab:WorkbenchTab;node?:SelectedNode}
 export interface WorkspaceSnapshot {ids:string[];active?:string;positions:Record<string,WorkspacePosition>}
-const nodeKinds=['database','table','collection','keyspace','view','mongo-category','mongo-function','mongo-indexes','gridfs-bucket','database-query','query-folder','saved-query'] as const
+const nodeKinds=['database','table','collection','keyspace','view','mongo-category','mongo-function','mongo-indexes','gridfs-bucket','database-query','query-folder','saved-query','clickhouse-dictionary'] as const
 const isId=(v:unknown):v is string=>typeof v==='string'&&/^[a-zA-Z0-9_-]{1,128}$/.test(v)
 const name=(v:unknown):v is string=>typeof v==='string'&&v.length>0&&v.length<=200&&!v.includes('\0')
 function object(v:unknown):Record<string,unknown>{return v&&typeof v==='object'&&!Array.isArray(v)?v as Record<string,unknown>:{}}

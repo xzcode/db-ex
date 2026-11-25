@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { isMysqlFamily } from '../shared/relational-capabilities'
 import { t, localize } from './i18n'
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import type { ConnectionConfig, ConnectionDraft, DatabaseKind, SavedConnection, SessionInfo, SshImportResult } from '../shared/types'
 import { databaseNames, defaultPorts, initialAuth, initialEntry, mongoUriAddress, newConnectionConfig, newSshHost, prepareConnection, type DatabaseAuthMode, type EntryMode } from '../shared/connection-form'
 import SshHostFields from './components/SshHostFields.vue'
@@ -29,8 +29,9 @@ const authMode = ref<DatabaseAuthMode>(initialAuth(config.value, props.draft))
 const revealPassword = ref(false)
 const revealUri = ref(false)
 const pages=computed(()=>config.value.kind==='sqlite'?allPages.filter(p=>p.key==='basic'||p.key==='advanced'):allPages)
-const kinds: DatabaseKind[] = ['mysql','mariadb','mongodb','redis','sqlite']
-const symbols: Record<DatabaseKind, string> = { mysql: '▤',mariadb:'▥', mongodb: '◈', redis: '⬡', sqlite:'▧' }
+const kinds: DatabaseKind[] = ['mysql','mariadb','mongodb','redis','sqlite','clickhouse']
+const symbols: Record<DatabaseKind, string> = { mysql: '▤',mariadb:'▥', mongodb: '◈', redis: '⬡', sqlite:'▧',clickhouse:'▥' }
+watch(()=>config.value.tls.enabled,(enabled,previous)=>{if(config.value.kind==='clickhouse'&&enabled!==previous){if(enabled&&config.value.port===8123)config.value.port=8443;else if(!enabled&&config.value.port===8443)config.value.port=8123}})
 const mongoUriActive = computed(() => config.value.kind === 'mongodb' && entry.value === 'uri')
 const usesSeeds = computed(() => config.value.kind === 'mongodb' ? !mongoUriActive.value && Boolean(config.value.nodes?.length) : config.value.kind === 'redis' && config.value.redisMode !== 'standalone')
 const showSeedEditor = computed(() => config.value.kind === 'mongodb' && !mongoUriActive.value && (config.value.mongoTopology !== 'direct' || Boolean(config.value.nodes?.length)) || config.value.kind === 'redis' && config.value.redisMode !== 'standalone')
@@ -138,6 +139,7 @@ function secretLabel(path: string) {
               </template>
               <label v-if="config.kind === 'redis'" class="connection-row"><span>{{ t('Redis 拓扑') }}</span><select v-model="config.redisMode" @change="changeRedisMode"><option value="standalone">{{ t('单机') }}</option><option value="cluster">{{ t('集群') }}</option><option value="sentinel">Sentinel</option></select></label>
               <template v-if="!mongoUriActive && config.kind!=='sqlite'">
+                <p v-if="config.kind==='clickhouse'" class="helper connection-indent">HTTP 8123 / HTTPS 8443</p>
                 <template v-if="!usesSeeds">
                   <label class="connection-row"><span>{{ t('主机') }}</span><input v-model.trim="config.host" placeholder="127.0.0.1" spellcheck="false" /></label>
                   <label class="connection-row"><span>{{ t('端口') }}</span><input v-model.number="config.port" class="connection-port" type="number" min="1" max="65535" /></label>

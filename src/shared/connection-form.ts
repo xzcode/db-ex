@@ -3,8 +3,8 @@ import type { ConnectionConfig, ConnectionDraft, DatabaseKind, Endpoint, SshOpti
 
 export type EntryMode = 'fields' | 'uri'
 export type DatabaseAuthMode = 'none' | 'password'
-export const defaultPorts: Record<DatabaseKind, number> = { mysql: 3306, mariadb: 3306, mongodb: 27017, redis: 6379, sqlite: 0 }
-export const databaseNames: Record<DatabaseKind, string> = { mysql: 'MySQL', mariadb: 'MariaDB', mongodb: 'MongoDB', redis: 'Redis', sqlite: 'SQLite' }
+export const defaultPorts: Record<DatabaseKind, number> = { mysql: 3306, mariadb: 3306, mongodb: 27017, redis: 6379, sqlite: 0,clickhouse:8123 }
+export const databaseNames: Record<DatabaseKind, string> = { mysql: 'MySQL', mariadb: 'MariaDB', mongodb: 'MongoDB', redis: 'Redis', sqlite: 'SQLite',clickhouse:'ClickHouse' }
 
 export function newSshHost(): SshOptions {
   return { enabled: true, host: '', port: 22, username: '', authMode: 'password', password: '', privateKeyPath: '', passphrase: '', agentSocket: '', hostFingerprint: '', jumps: [] }
@@ -12,7 +12,7 @@ export function newSshHost(): SshOptions {
 export function newConnectionConfig(kind: DatabaseKind): ConnectionConfig {
   return {
     name: '', kind, host: '127.0.0.1', port: defaultPorts[kind],
-    username: isMysqlFamily(kind) ? 'root' : '', password: '', database: '', filePath: '', authSource: 'admin', redisDb: 0, uri: '',
+    username: kind==='clickhouse'?'default':isMysqlFamily(kind) ? 'root' : '', password: '', database:kind==='clickhouse'?'default':'', filePath: '', authSource: 'admin', redisDb: 0, uri: '',
     ssh: { ...newSshHost(), enabled: false }, tls: { enabled: false, caPath: '', certPath: '', keyPath: '', servername: '' },
     proxy: { enabled: false, type: 'socks5', host: '', port: 1080, username: '', password: '' },
     redisMode: 'standalone', nodes: [], mongoReplicaSet: '', mongoDirect: false, mongoTopology: 'auto', connectTimeoutMs: 12000,

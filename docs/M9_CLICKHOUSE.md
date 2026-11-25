@@ -1,0 +1,11 @@
+# M9 — ClickHouse initial integration
+
+Independent analytical adapter based on DB EX v0.6.0, using the official @clickhouse/client. The first batch provides HTTP/HTTPS connection settings, existing proxy/SSH transport routing with certificate identity verification, catalog metadata, table/view browsing, metadata and DDL inspection, independent type colors and page size, native named SQL query objects with typed named parameters, bounded query results and table paging/sort/equality filter, bounded scalar CSV/JSON import and current-page textual export. No MySQL transaction or row-editor semantics are exposed.
+
+Read operations have a conservative single-statement policy and server readonly=1, execution/read/memory/result budgets. Results preserve original JSON numeric tokens and explicit NULL; no JavaScript number conversion of UInt64/128/256 or Decimal. Arbitrary SQL is a bounded result, not silently rewritten for pagination. Structured insertion requires native confirmation and validates fields and engine; only supported MergeTree-family tables. Initial DDL is deliberately restricted. No full raw INSERT SQL, arbitrary SETTINGS, external table-function workflow, clustered DDL, mutations, server backups, or Parquet. Client abort/disconnect and server read-query cancellation setting are implemented; explicit KILL QUERY verification remains outstanding. Server privileges are the ultimate security boundary.
+
+Local fixture ClickHouse 25.8.33.6 validated authenticated SOCKS transport, server version, table/view metadata, exact UInt64/Decimal/array/NULL, typed parameters, pagination, sorting, filter, read-only protection, explicit confirmation, local MergeTree DDL and scalar insert. UI test for analytical workbench, sorting, structure and saved typed-parameter queries passed. HTTPS/mTLS, specific SSH deployments, second server version, dictionary-specific metadata and server cancellation behavior require further verification. CI and packaged installers remain outstanding.
+
+## Follow-up UI work
+
+See ROADMAP.md for the user's three feedback items: remove welcome-page content; correct running application icons; use a direct statement editor with completion and formatting instead of query-building forms.

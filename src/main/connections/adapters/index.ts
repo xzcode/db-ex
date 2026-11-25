@@ -1,4 +1,5 @@
 import type { DatabaseKind,DatabaseOperation } from '../../../shared/types'
+import {clickhouseAdapter} from './clickhouse'
 import { mariadbAdapter } from './mariadb'
 import { mysqlAdapter } from './mysql'
 import { mongoAdapter } from './mongodb'
@@ -6,7 +7,7 @@ import { redisAdapter } from './redis'
 import { sqliteAdapter } from './sqlite'
 import type { DatabaseAdapter,OperationAction } from './types'
 
-const registry={mysql:mysqlAdapter,mariadb:mariadbAdapter,mongodb:mongoAdapter,redis:redisAdapter,sqlite:sqliteAdapter} satisfies Record<DatabaseKind,DatabaseAdapter>
+const registry={clickhouse:clickhouseAdapter,mysql:mysqlAdapter,mariadb:mariadbAdapter,mongodb:mongoAdapter,redis:redisAdapter,sqlite:sqliteAdapter} satisfies Record<DatabaseKind,DatabaseAdapter>
 const knownActions=new Set<string>(Object.values(registry).flatMap(adapter=>adapter.actions))
 export function databaseAdapter(kind:DatabaseKind):DatabaseAdapter{
   const adapter=Object.hasOwn(registry,kind)?registry[kind]:undefined

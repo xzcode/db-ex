@@ -10,7 +10,7 @@ const emit=defineEmits<{open:[node:ExplorerNode];refresh:[];query:[];queryAction
 const query=ref(''),selected=ref(''),sortKey=ref('name'),direction=ref<1|-1>(1)
 const queryCatalog=computed(()=>isQueryFolder(props.node))
 const renameOpen=ref(false),renameValue=ref('')
-const columns=computed(()=>queryCatalog.value?queryColumns:props.node?.category==='collections'?collectionColumns:props.node?.kind==='database'&&(props.kind==='mysql'||props.kind==='mariadb')?tableColumns:[nameColumn])
+const columns=computed(()=>queryCatalog.value?queryColumns:props.node?.category==='collections'?collectionColumns:props.node?.kind==='database'&&(props.kind==='mysql'||props.kind==='mariadb'||props.kind==='clickhouse')?tableColumns:[nameColumn])
 const activeColumn=computed(()=>columns.value.find(c=>c.key===sortKey.value)||nameColumn)
 const rows=computed(()=>sortedObjects(props.nodes,activeColumn.value,direction.value,query.value))
 const selectedNode=computed(()=>rows.value.find(n=>n.id===selected.value))

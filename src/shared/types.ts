@@ -2,7 +2,7 @@ import type { BsonTypeBranch } from './bson-types'
 import type { BrowseFilter } from './browse-filter'
 import type { ObjectInspection } from './object-inspection'
 
-export type DatabaseKind = 'mysql' | 'mongodb' | 'redis' | 'sqlite' | 'mariadb'
+export type DatabaseKind = 'mysql' | 'mongodb' | 'redis' | 'sqlite' | 'mariadb' | 'clickhouse'
 export type SqlValue = string | number | boolean | null
 export type SqlRow = Record<string, SqlValue>
 
@@ -94,7 +94,7 @@ import type { MongoCategory } from './mongo-catalog'
 export interface ExplorerNode {
   id: string
   label: string
-  kind: 'database' | 'table' | 'collection' | 'keyspace' | 'view' | 'mongo-category' | 'mongo-function' | 'mongo-indexes' | 'gridfs-bucket' | 'database-query' | 'query-folder' | 'saved-query'
+  kind: 'database' | 'table' | 'collection' | 'keyspace' | 'view' | 'mongo-category' | 'mongo-function' | 'mongo-indexes' | 'gridfs-bucket' | 'database-query' | 'query-folder' | 'saved-query' | 'clickhouse-dictionary'
   category?: MongoCategory
   queryId?:string
   queryRevision?:string
@@ -128,6 +128,7 @@ export interface OperationResult extends DataPreview {
   /** Per-document metadata aligned with rows and canonical Extended JSON. */
   bsonTypes?: BsonTypeBranch[]
   affectedRows?: number
+  queryId?:string
   durationMs?: number
   truncated?: boolean
   message?: string
@@ -171,7 +172,12 @@ export type RedisOperation =
   | ({ action: 'redis.delete'; keys: string[] } & Confirmed)
   | ({ action: 'redis.command'; args: string[] } & Confirmed)
   | { action: 'redis.nodes' }
-export type DatabaseOperation = MysqlOperation | MongoOperation | RedisOperation
+export type ClickHouseOperation =
+  | ({action:'clickhouse.query';database?:string;sql:string;parameters?:Record<string,SqlValue>;limit?:number} & Confirmed)
+  | ({action:'clickhouse.browse';limit?:number;offset?:number;sort?:import('./browse-filter').SortRule[];filter?:{field:string;value:string}} & Entity)
+  | ({action:'clickhouse.structure'|'clickhouse.inspect'} & Entity)
+  | ({action:'clickhouse.insert';rows:SqlRow[]} & Entity & Confirmed)
+export type DatabaseOperation = MysqlOperation | MongoOperation | RedisOperation | ClickHouseOperation
 export interface QuerySnippet {
   /** Optional fields keep existing encrypted history files compatible. */
   mongoKind?: 'query' | 'aggregation'
