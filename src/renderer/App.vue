@@ -287,12 +287,16 @@ function clearDatabase(state:ExplorerState,database:string){
   if(state.selected?.database===database||state.activeObject&&!state.tabs.some(tab=>tab.node.id===state.activeObject))showCatalog(state)
 
 }
+function actualQueryFolder(state:ExplorerState,database:string,kind:import('../shared/saved-query').QueryEngine,mode:QueryMode){
+ const matches=(node:ExplorerNode|undefined):node is ExplorerNode=>!!node&&node.database===database&&isQueryFolder(node)&&folderQueryMode(node)===mode
+ return Object.values(state.children).flat().find(matches)||(matches(state.catalog)?state.catalog:queryFolder(database,kind,mode))
+}
 let querySerial=0
 function openQuery(id:string,database?:string,explicitMode?:QueryMode){
  const state=explorers[id],session=sessions.value.find(item=>item.id===id)
  if(!state||!session||!database||sessionBusy(state)||session.kind==='redis')return
  const mode=explicitMode||(session.kind==='mongodb'?(state.catalog?.database===database&&isQueryFolder(state.catalog)?folderQueryMode(state.catalog!):'mongo-find'):'sql')
- state.catalog=queryFolder(database,session.kind,mode)
+ state.catalog=actualQueryFolder(state,database,session.kind,mode)
  const node:ExplorerNode={id:JSON.stringify(['query-draft',database,mode,++querySerial]),kind:'saved-query',label:'未命名查询',database,queryMode:mode}
  openObject(state,node,mode==='sql'?'query':'data')
 }
@@ -301,7 +305,7 @@ function querySaved(id:string,tabId:string,value:QuerySummary){
  if(!state||!item)return
  item.node={...savedQueryNode(value),id:tabId}
  if(state.activeObject===tabId)state.selected=item.node
- const folder=queryFolder(value.database,value.kind,value.mode)
+ const folder=actualQueryFolder(state,value.database,value.kind,value.mode)
  void loadCatalog(id,folder,true)
 }
 async function catalogQueryAction(id:string,action:'copy'|'delete'|'export'|'export-sql'|'import'|'rename',node?:ExplorerNode,newName?:string){
@@ -371,7 +375,7 @@ async function toggleRoot(node: ExplorerNode,fromList=false) {
   if(!id||!state||sessionBusy(state))return
   if(!expandable(node)){
     if(node.kind==='keyspace'){state.selected=node;state.catalogVisible=false;return}
-    if(node.kind==='saved-query'&&node.database&&node.queryMode&&activeSession.value?.kind&&activeSession.value.kind!=='redis')state.catalog=queryFolder(node.database,activeSession.value.kind,node.queryMode)
+    if(node.kind==='saved-query'&&node.database&&node.queryMode&&activeSession.value?.kind&&activeSession.value.kind!=='redis')state.catalog=actualQueryFolder(state,node.database,activeSession.value.kind,node.queryMode)
     openObject(state,node);return
   }
   showCatalog(state,node)
