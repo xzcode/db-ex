@@ -2,7 +2,7 @@
 
 本地优先的桌面数据库工具，统一管理 **MySQL、MariaDB、MongoDB、Redis、SQLite、ClickHouse**。基于 Electron、Vue 3、TypeScript 与 Monaco，不依赖账号、云端服务或遥测。
 
-当前版本：**0.7.0 预览版**。M2–M5 的功能实现已接入；完整范围、验收证据和限制见 [路线图](docs/ROADMAP.md)。预览安装包与最终发行签名是不同的交付项。
+已发布版本：**0.7.0 预览版**；当前开发发行候选为 **0.7.1 预览版**（通过验收后发布）。M2–M5 的功能实现已接入；完整范围、验收证据和限制见 [路线图](docs/ROADMAP.md)。预览安装包与最终发行签名是不同的交付项。
 
 ## 功能
 
@@ -167,3 +167,8 @@ See [SQLite and preferences continuation](docs/SQLITE_AND_PREFERENCES.md) for th
 - Inline cell editing and current-page column assignment, staged changes, explicit save/discard, original-value conflict checks, atomic SQL batches where supported, and explicit nontransactional partial outcomes.
 - MongoDB index syntax help and removal of the deprecated MapReduce entry.
 - See [v0.7.0 release notes](docs/RELEASE_v0.7.0.md).
+
+## v0.7.1 Preview candidate
+
+- ClickHouse advanced management, MariaDB special objects, native SQL CLI, multi-window workspace recovery and the approved header logo.
+- [Release notes](docs/RELEASE_v0.7.1.md) · [M11 compatibility evidence](docs/M11_COMPATIBILITY.md). Publication requires the exact master CI and native installers.

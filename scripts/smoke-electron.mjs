@@ -12,17 +12,38 @@ async function packagedExecutable() {
 }
 const packaged = process.env.DB_EX_PACKAGED === '1'
 const userData = await mkdtemp(join(tmpdir(), 'dbex-smoke-'))
-let application
+let application,page
+const startupErrors=[]
+const observedPages=new WeakSet()
+function observePage(candidate){
+  if(observedPages.has(candidate))return
+  observedPages.add(candidate)
+  candidate.on('pageerror',error=>startupErrors.push(String(error.message).slice(0,1500)))
+  candidate.on('console',message=>{if(message.type()==='error')startupErrors.push(message.text().slice(0,1500))})
+  candidate.on('requestfailed',request=>startupErrors.push('Request failed: '+request.url().slice(0,300)+' · '+request.failure()?.errorText))
+  candidate.on('crash',()=>startupErrors.push('Renderer crashed'))
+}
+async function launch(){
+  const app=await electron.launch({
+    ...(packaged ? { executablePath: await packagedExecutable() } : {}),
+    args: [...(packaged ? [] : ['.']), '--disable-gpu', '--enable-logging=stderr', '--user-data-dir=' + userData],
+    env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' },
+    timeout: 60000,
+  })
+  app.on('window',observePage)
+  return app
+}
+async function ready(candidate){
+  observePage(candidate)
+  await candidate.waitForLoadState('domcontentloaded',{timeout:60000})
+  await candidate.locator('.desktop').waitFor({state:'visible',timeout:60000})
+  await candidate.waitForFunction(() => typeof window.dbex?.listConnections === 'function',undefined,{timeout:60000})
+  return candidate
+}
 try {
-application = await electron.launch({
-  ...(packaged ? { executablePath: await packagedExecutable() } : {}),
-  args: [...(packaged ? [] : ['.']), '--disable-gpu', '--user-data-dir=' + userData],
-  env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' },
-  timeout: 30000,
-})
-  const page = await application.firstWindow({ timeout: 30000 })
-  await page.waitForSelector('#app', { state: 'visible' })
-  await page.waitForFunction(() => typeof window.dbex?.listConnections === 'function')
+  application=await launch()
+  page=await application.firstWindow({timeout:60000})
+  await ready(page)
   const boundary = await page.evaluate(() => ({ node: typeof window.require, ipc: typeof window.dbex?.execute, title: document.title }))
   assert.equal(boundary.node, 'undefined')
   assert.equal(boundary.ipc, 'function')
@@ -37,6 +58,7 @@ application = await electron.launch({
   assert.equal(runtimeArtwork.size.width,1024)
   assert.equal(runtimeArtwork.size.height,1024)
   assert.equal(runtimeArtwork.dockAvailable,true)
+  await page.waitForFunction(()=>{const img=document.querySelector('img.brand-symbol');return img?.complete&&img.naturalWidth===64})
   const logo=await page.locator('img.brand-symbol').evaluate(img=>({width:img.naturalWidth,height:img.naturalHeight,loaded:img.complete}))
   assert.deepEqual(logo,{width:64,height:64,loaded:true})
   assert.equal(await page.evaluate(()=>window.dbex.workspaceWindowId),'primary')
@@ -98,7 +120,10 @@ application = await electron.launch({
     assert.notEqual(secondSession.id,isolated.id)
     assert.equal(await page.evaluate(async id=>{try{await window.dbex.roots(id);return false}catch{return true}},secondSession.id),true)
     const closed=second.waitForEvent('close')
-    await application.evaluate(({BrowserWindow},id)=>{const win=BrowserWindow.getAllWindows().find(w=>w.webContents.getLastWebPreferences()?.additionalArguments?.includes('--dbex-workspace='+id));if(!win)throw new Error('secondary window missing');win.close()},secondaryId)
+    // Electron may omit additionalArguments from getLastWebPreferences().
+    // Use Playwright's actual BrowserWindow handle for this exact renderer.
+    const secondaryWindow=await application.browserWindow(second)
+    await secondaryWindow.evaluate(win=>win.close())
     await closed
     assert.equal((await page.evaluate(id=>window.dbex.roots(id),isolated.id))[0].database,'main')
   }finally{await page.evaluate(id=>window.dbex.disconnect(id),isolated.id)}
@@ -142,6 +167,64 @@ application = await electron.launch({
   assert.equal(restored.saved.parameters,'["exact query fixture"]')
   assert.equal(restored.result.rows[0].value,'exact query fixture')
   assert(!(await readFile(join(userData,'saved-queries.secure.json'),'utf8')).includes('exact query fixture'))
+  // Exercise actual quit/restart, not a browser reload. Connect a saved
+  // fixture in each window and persist separate recovery drafts. No automatic SQL.
+  const restartProfile=await page.evaluate(async filePath=>window.dbex.saveConnection({name:'Workspace restart fixture',kind:'sqlite',host:'',port:0,filePath,ssh:{enabled:false},tls:{enabled:false}}),sqlitePath)
+  await page.reload()
+  await ready(page)
+  const rowFor=(target,id)=>target.locator('.connection-item[data-connection-id="'+id+'"]')
+  await rowFor(page,restartProfile.id).locator('.row-connect').click()
+  await rowFor(page,restartProfile.id).locator('.connection-indicator.online').waitFor()
+  const nextWindow=application.waitForEvent('window',{timeout:60000})
+  await page.evaluate(()=>window.dbex.newWorkspaceWindow())
+  const secondary=await ready(await nextWindow)
+  const restartId=await secondary.evaluate(()=>window.dbex.workspaceWindowId)
+  await rowFor(secondary,restartProfile.id).locator('.row-connect').click()
+  await rowFor(secondary,restartProfile.id).locator('.connection-indicator.online').waitFor()
+  const draftScope={connectionId:restartProfile.id,database:'main',entity:'fixture',kind:'sqlite-query'}
+  await page.evaluate(scope=>window.dbex.saveRecovery({...scope,text:'SELECT 101'}),draftScope)
+  await secondary.evaluate(scope=>window.dbex.saveRecovery({...scope,text:'SELECT 202'}),draftScope)
+  assert.equal((await page.evaluate(scope=>window.dbex.loadRecovery({...scope,text:''}),draftScope)).text,'SELECT 101')
+  assert.equal((await secondary.evaluate(scope=>window.dbex.loadRecovery({...scope,text:''}),draftScope)).text,'SELECT 202')
+  await page.evaluate(()=>{const p=JSON.parse(localStorage.getItem('dbex.preferences.v1')||'{}');p.startup='workspace';localStorage.setItem('dbex.preferences.v1',JSON.stringify(p))})
+  for(const [target,id] of [[page,'primary'],[secondary,restartId]]){
+    await target.waitForFunction(({id,profile})=>JSON.parse(localStorage.getItem(id==='primary'?'dbex.workspace.v1':'dbex.workspace.v1.'+id)||'{}').ids?.includes(profile),{id,profile:restartProfile.id})
+  }
+  await application.close()
+  application=undefined
+  const stored=JSON.parse(await readFile(join(userData,'workspace-windows.json'),'utf8'))
+  assert(stored.some(w=>w.id==='primary')&&stored.some(w=>w.id===restartId),'both native windows must be persisted')
+  application=await launch()
+  page=await ready(await application.firstWindow({timeout:60000}))
+  await rowFor(page,restartProfile.id).locator('.connection-indicator.online').waitFor({timeout:60000})
+  const deadline=Date.now()+60000
+  let restoredWindow
+  while(Date.now()<deadline&&!restoredWindow){
+    for(const candidate of application.windows()){
+      if(candidate===page||candidate.isClosed())continue
+      try{if(await candidate.evaluate(()=>window.dbex?.workspaceWindowId)===restartId){restoredWindow=candidate;break}}catch{}
+    }
+    if(!restoredWindow)await new Promise(resolve=>setTimeout(resolve,100))
+  }
+  assert(restoredWindow,'secondary workspace did not restore')
+  await ready(restoredWindow)
+  await rowFor(restoredWindow,restartProfile.id).locator('.connection-indicator.online').waitFor({timeout:60000})
+  const primarySessionId=await page.locator('.resource-list[data-active-session="true"]').getAttribute('data-resource-session')
+  const restoredSessionId=await restoredWindow.locator('.resource-list[data-active-session="true"]').getAttribute('data-resource-session')
+  assert(primarySessionId&&restoredSessionId&&primarySessionId!==restoredSessionId)
+  assert.equal(await page.locator('.tiny-badge.write,.tiny-badge:has-text("TX")').count(),0)
+  assert.equal(await restoredWindow.locator('.tiny-badge.write,.tiny-badge:has-text("TX")').count(),0)
+  assert.equal((await page.evaluate(scope=>window.dbex.loadRecovery({...scope,text:''}),draftScope)).text,'SELECT 101')
+  assert.equal((await restoredWindow.evaluate(scope=>window.dbex.loadRecovery({...scope,text:''}),draftScope)).text,'SELECT 202')
+  assert.equal(await restoredWindow.evaluate(async id=>{try{await window.dbex.roots(id);return false}catch{return true}},primarySessionId),true)
+  const restoredClosed=restoredWindow.waitForEvent('close')
+  await (await application.browserWindow(restoredWindow)).evaluate(win=>win.close())
+  await restoredClosed
+  await page.evaluate(async fixture=>{
+    await window.dbex.deleteConnection(fixture.id)
+    const p=JSON.parse(localStorage.getItem('dbex.preferences.v1')||'{}');p.startup='welcome';localStorage.setItem('dbex.preferences.v1',JSON.stringify(p))
+  },restartProfile)
+  console.log('Native workspace restart passed: two persisted windows, isolated sessions and drafts, no restored write access')
   const pageErrors = []
   page.on('pageerror', error => pageErrors.push(error.message))
   // Only test handlers are replaced, in this smoke process. Shipped application code has no mocks.
@@ -192,6 +275,14 @@ application = await electron.launch({
   assert.deepEqual(pageErrors, [])
   await page.screenshot({ path: 'electron-smoke.png', fullPage: true })
   console.log(`${packaged ? 'Packaged' : 'Built'} Electron smoke passed: desktop launch, sandbox, real preload IPC, Monaco and query UI`)
+} catch(error) {
+  console.error('Desktop smoke diagnostics:',JSON.stringify({errors:startupErrors.slice(-25)}))
+  if(page&&!page.isClosed()){
+    try{console.error('Renderer startup state:',await page.evaluate(()=>({url:location.href,readyState:document.readyState,bridge:typeof window.dbex,appChildren:document.querySelector('#app')?.childElementCount??-1})))}
+    catch{}
+    await page.screenshot({path:'electron-smoke.png',timeout:5000}).catch(()=>{})
+  }
+  throw error
 } finally {
   if (application) await application.close()
   await rm(userData, { recursive: true, force: true })
