@@ -57,6 +57,7 @@
       "package.json"
     ],
     "asar": true,
+    "asarUnpack": ["dist-electron/sqlite-worker.cjs"],
     "mac": {
       "target": [
         "dmg",

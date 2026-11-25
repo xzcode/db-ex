@@ -31,7 +31,10 @@ async function installBridge(page: Page) {
       async saveNativePreferences(value:any){localStorage.setItem('mock.native-preferences',JSON.stringify(value));return value},
       async logPath(){return '/mock/logs'},async openLogs(){calls.push({action:'openLogs'})},
       async pickTool(name:string){return '/opt/bin/'+name},async checkTool(_name:string,path:string){return path.startsWith('/opt/bin/')},
-      async saveRecovery(value:any){calls.push({action:'saveRecovery',value})},async loadRecovery(){return null},
+      async saveRecovery(value:any){calls.push({action:'saveRecovery',value});const key=JSON.stringify([value.connectionId,value.database,value.entity,value.kind]);const all=JSON.parse(localStorage.getItem('mock.recovery')||'{}');all[key]=value;localStorage.setItem('mock.recovery',JSON.stringify(all))},
+      async loadRecovery(value:any){const key=JSON.stringify([value.connectionId,value.database,value.entity,value.kind]);return JSON.parse(localStorage.getItem('mock.recovery')||'{}')[key]||null},
+      async deleteRecovery(value:any){const key=JSON.stringify([value.connectionId,value.database,value.entity,value.kind]);const all=JSON.parse(localStorage.getItem('mock.recovery')||'{}');delete all[key];localStorage.setItem('mock.recovery',JSON.stringify(all));calls.push({action:'deleteRecovery'})},
+      async clearRecovery(){localStorage.removeItem('mock.recovery')},
       async getSystemLanguage() { return navigator.language },
       async setLocale(locale: string) { calls.push({ action: 'setLocale', locale }) },
       async listConnections() { return configs },
@@ -773,4 +776,42 @@ test('unified preferences persist editor, record and external tool settings',asy
   await page.getByRole('button',{name:'偏好设置',exact:true}).click()
   await dialog.getByRole('button',{name:'外部工具',exact:true}).click()
   await expect(dialog.getByLabel('mongodump',{exact:true})).toHaveValue('/opt/bin/mongodump')
+})
+
+
+test('workspace restores the selected object and editor tab without executing a saved query or enabling writes',async({page})=>{
+ await connect(page,'MySQL Local');await openUsers(page)
+ await page.getByRole('button',{name:'SQL 编辑器',exact:true}).click()
+ await page.getByLabel('SQL 参数 JSON 数组').waitFor()
+ await expect.poll(()=>page.evaluate(()=>JSON.parse(localStorage.getItem('dbex.workspace.v1')||'{}').positions?.sql?.tab)).toBe('query')
+ await page.evaluate(()=>{const pref=JSON.parse(localStorage.getItem('dbex.preferences.v1')||'{}');pref.startup='workspace';pref.recoverySeconds=15;localStorage.setItem('dbex.preferences.v1',JSON.stringify(pref));const draft={connectionId:'sql',database:'app',entity:'users',kind:'mysql-query',text:JSON.stringify({sql:'SELECT 42 AS restored;',parameters:'[]'})};localStorage.setItem('mock.recovery',JSON.stringify({[JSON.stringify(['sql','app','users','mysql-query'])]:draft}))})
+ await page.reload()
+ await expect(page.locator('.resource-node.active')).toContainText('users')
+ await expect(page.locator('.workbench:visible .query-editor')).toBeVisible()
+ await page.getByRole('button',{name:'恢复草稿',exact:true}).click()
+ await expect(page.locator('.workbench:visible .query-editor .view-lines')).toContainText('SELECT 42 AS restored;')
+ await expect(page.getByRole('button',{name:'只读 · 启用写入',exact:true})).toBeVisible()
+ {
+   const writes=await page.evaluate(()=> (window as any).__dbexCalls.filter((call:any)=>call.action==='mysql.query'||call.action==='writeAccess'))
+   expect(writes).toEqual([])
+ }
+})
+
+test('saved record draft restores as an editor only after explicit write access',async({page})=>{
+ await page.evaluate(()=>{
+  localStorage.setItem('dbex.preferences.v1',JSON.stringify({recoverySeconds:15}))
+  const draft={connectionId:'sql',database:'app',entity:'users',kind:'record-edit',text:JSON.stringify({mode:'insert',text:'{"name":"Draft only","email":"draft@example.test"}'})}
+  localStorage.setItem('mock.recovery',JSON.stringify({[JSON.stringify(['sql','app','users','record-edit'])]:draft}))
+ })
+ await page.reload()
+ await connect(page,'MySQL Local');await openUsers(page)
+ await expect(page.getByText('发现未保存的记录编辑草稿',{exact:true})).toBeVisible()
+ await expect(page.getByRole('button',{name:'恢复草稿',exact:true})).toBeDisabled()
+ await page.getByRole('button',{name:'只读 · 启用写入',exact:true}).click()
+ await page.getByRole('button',{name:'恢复草稿',exact:true}).click()
+ await expect(page.getByRole('heading',{name:'新增记录',exact:true})).toBeVisible()
+ await expect(page.locator('.document-editor .view-lines')).toContainText('Draft only')
+ expect(await page.evaluate(()=> (window as any).__dbexCalls.filter((call:any)=>call.action==='mysql.insert'||call.action==='mysql.update'))).toEqual([])
+ await page.getByRole('dialog').getByRole('button',{name:'取消',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=>Object.keys(JSON.parse(localStorage.getItem('mock.recovery')||'{}')).length)).toBe(0)
 })

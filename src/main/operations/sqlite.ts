@@ -8,7 +8,7 @@ import { inspectSqliteSql } from './sqlite-policy'
 
 const quote=(name:string)=>'"'+resourceName(name).replaceAll('"','""')+'"'
 const target=(database:string,entity:string)=>{if(database!=='main')throw new Error('INVALID_OPERATION: 不支持的操作');return 'main.'+quote(entity)}
-const bind=(v:SqlValue):SQLInputValue=>typeof v==='boolean'?Number(v):v
+const bind=(v:SqlValue):SQLInputValue=>typeof v==='boolean'?BigInt(Number(v)):typeof v==='number'&&Number.isSafeInteger(v)?BigInt(v):v
 const storageType=(v:SQLOutputValue)=>v===null?'NULL':typeof v==='bigint'?'INTEGER':typeof v==='number'?'REAL':typeof v==='string'?'TEXT':'BLOB'
 type Field={name:string;type:string;notnull:bigint;pk:bigint;hidden:bigint;dflt_value:SQLOutputValue}
 export class SqliteOperations {
@@ -121,13 +121,22 @@ export class SqliteOperations {
         }
         case 'mysql.structure':{
           const fields=this.fields(op.database,op.entity)
-          return {columns:['name','type','nullable','key','extra','default'],rows:fields.slice(0,500).map(f=>({name:f.name,type:f.type,nullable:f.notnull?'NO':'YES',key:f.pk?'PRI':'',extra:f.hidden?'GENERATED/HIDDEN':'',default:displayCell(f.dflt_value)})),primaryKeys:this.keys(fields)}
+          const indexes=this.statement('SELECT name,"unique" AS unique_index FROM pragma_index_list(?,?) ORDER BY seq LIMIT 501').all(op.entity,op.database)
+          const indexFields=new Map<string,string[]>()
+          for(const index of indexes.slice(0,500)){
+            const indexName=String(index.name)
+            for(const column of this.statement('SELECT name FROM pragma_index_xinfo(?,?) WHERE "key"=1 LIMIT 501').all(indexName,op.database)){
+              if(typeof column.name!=='string')continue
+              const list=indexFields.get(column.name)||[];list.push(indexName+(index.unique_index?' (unique)':''));indexFields.set(column.name,list)
+            }
+          }
+          return {columns:['name','type','nullable','key','extra','default','indexes'],rows:fields.slice(0,500).map(f=>({name:f.name,type:f.type,nullable:f.notnull?'NO':'YES',key:f.pk?'PRI':'',extra:f.hidden?'GENERATED/HIDDEN':'',default:displayCell(f.dflt_value),indexes:displayCell((indexFields.get(f.name)||[]).join(', '))})),primaryKeys:this.keys(fields),truncated:fields.length>500||indexes.length>500}
         }
         case 'mysql.inspect':{
           const row=this.object(op.database,op.entity),fields=this.fields(op.database,op.entity)
           const indexes=this.statement("SELECT name,sql FROM main.sqlite_schema WHERE tbl_name=? AND type='index' ORDER BY name LIMIT 501").all(op.entity)
-          const definition=[row.sql,...indexes.map(i=>i.sql)].filter(v=>typeof v==='string').map(v=>String(v).trimEnd().replace(/;$/,'')+';').join('\n\n')
-          return {columns:[],rows:[],inspection:{kind:row.type==='view'?'view':'table',metrics:metrics(metric('字段数',fields.length),metric('索引数',indexes.length)),definition:Buffer.byteLength(definition)<=MAX_BYTES?definition:undefined}}
+          const definition=[row.sql,...indexes.slice(0,500).map(i=>i.sql)].filter(v=>typeof v==='string').map(v=>String(v).trimEnd().replace(/;$/,'')+';').join('\n\n')
+          return {columns:[],rows:[],inspection:{kind:row.type==='view'?'view':'table',metrics:metrics(metric('字段数',fields.length),metric('索引数',indexes.length)),definition:Buffer.byteLength(definition)<=MAX_BYTES&&indexes.length<=500?definition:undefined,definitionNote:Buffer.byteLength(definition)>MAX_BYTES||indexes.length>500?'DDL 不可用或超出读取上限。':undefined}}
         }
         case 'mysql.begin':
           if(this.transaction)throw new Error('INVALID_OPERATION: 当前有未提交事务。')

@@ -41,3 +41,22 @@ test('SQLite native online backup includes committed data',async()=>{
  try{await db.backupTo(dest);const copy=new DatabaseSync(dest,{readOnly:true});try{assert.equal(copy.prepare('SELECT id FROM t').get()?.id,7)}finally{copy.close()}}
  finally{db.close();rmSync(dir,{recursive:true,force:true})}
 })
+
+test('SQLite recognizes integer bindings, named indexes, exact Int64 and BLOB without exposing lossy edits',()=>{
+ const dir=mkdtempSync(join(tmpdir(),'dbex-sqlite-types-')),path=join(dir,'types.sqlite')
+ const seed=new DatabaseSync(path)
+ seed.exec("CREATE TABLE t(id INTEGER PRIMARY KEY, value, note TEXT); CREATE INDEX idx_note ON t(note); INSERT INTO t VALUES (1,9223372036854775807,'first'),(2,X'0001FF','second')")
+ seed.close()
+ const db=new SqliteOperations(path),read={writable:false,confirmed:false},write={writable:true,confirmed:true}
+ try{
+  const result=db.execute({action:'mysql.query',sql:'SELECT * FROM t ORDER BY id'},read)
+  assert.deepEqual(result.sqliteTypes?.map(row=>row[1]),['INTEGER','BLOB'])
+  assert.equal(result.rows[0]?.value,'9223372036854775807')
+  assert.equal(result.rows[1]?.value,'base64:AAH/')
+  assert.equal(result.rawRows,undefined)
+  const structure=db.execute({action:'mysql.structure',database:'main',entity:'t'},read)
+  assert.match(structure.rows.find(row=>row.name==='note')?.indexes||'',/idx_note/)
+  db.execute({action:'mysql.insert',database:'main',entity:'t',values:{id:3,value:42,note:'third'}},write)
+  assert.equal(db.execute({action:'mysql.query',sql:'SELECT typeof(value) AS type FROM t WHERE id=?',parameters:[3]},read).rows[0]?.type,'integer')
+ }finally{db.close();rmSync(dir,{recursive:true,force:true})}
+})

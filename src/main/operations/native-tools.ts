@@ -25,7 +25,7 @@ export function nativeToolCommand(task:NativeToolTask,config:ConnectionConfig,da
  safeName(database)
  if(config.kind==='mysql'){
    const contents=['[client]','host='+mysqlOption(config.host),'port='+config.port,'protocol=TCP','user='+mysqlOption(config.username||''),'password='+mysqlOption(config.password||'')].join('\n')+'\n'
-   const args=['--defaults-file='+credentials]
+   const args=['--defaults-file='+credentials,'--no-login-paths','--ssl-mode=DISABLED']
    if(task==='mysql-backup')args.push('--single-transaction','--skip-lock-tables','--no-tablespaces','--hex-blob','--',database)
    else args.push('--binary-mode','--local-infile=0','--database='+database)
    return {args,contents}
@@ -48,16 +48,18 @@ export function nativeToolCommand(task:NativeToolTask,config:ConnectionConfig,da
 function child(path:string,args:string[],options:{stdin?:number;stdout?:number;signal?:AbortSignal;timeout:number;capture?:boolean}):Promise<string>{
  return new Promise((resolve,reject)=>{
    if(options.signal?.aborted){reject(new Error('CANCELLED: 已取消操作'));return}
-   let output='',done=false
+   let output='',done=false,terminalError:Error|undefined
    const proc=spawn(path,args,{shell:false,windowsHide:true,stdio:[options.stdin??'ignore',options.capture?'pipe':options.stdout??'ignore',options.capture?'pipe':'ignore']})
    const finish=(error?:Error)=>{if(done)return;done=true;clearTimeout(timer);options.signal?.removeEventListener('abort',abort);error?reject(error):resolve(output.trim().slice(0,1000))}
-   const abort=()=>{proc.kill('SIGKILL');finish(new Error('CANCELLED: 已取消操作'))}
-   const timer=setTimeout(()=>{proc.kill('SIGKILL');finish(new Error('TIMEOUT: 操作超时'))},options.timeout)
+   const stop=(error:Error)=>{if(!terminalError){terminalError=error;proc.kill('SIGKILL')}}
+   const abort=()=>stop(new Error('CANCELLED: 已取消操作'))
+   const timer=setTimeout(()=>stop(new Error('TIMEOUT: 操作超时')),options.timeout)
    options.signal?.addEventListener('abort',abort,{once:true})
-   const collect=(chunk:Buffer)=>{output+=chunk.toString('utf8');if(output.length>32768){proc.kill('SIGKILL');finish(new Error('LIMIT_EXCEEDED: 外部工具'))}}
+   const collect=(chunk:Buffer)=>{if(terminalError)return;output+=chunk.toString('utf8');if(output.length>32768)stop(new Error('LIMIT_EXCEEDED: 外部工具'))}
    proc.stdout?.on('data',collect);proc.stderr?.on('data',collect)
-   proc.on('error',()=>finish(new Error('NATIVE_TOOL_FAILED: 外部工具执行失败。')))
-   proc.on('close',code=>finish(code===0?undefined:new Error('NATIVE_TOOL_FAILED: 外部工具执行失败。')))
+   proc.on('error',()=>{terminalError ||= new Error('NATIVE_TOOL_FAILED: 外部工具执行失败。')})
+   // Wait for the child to exit before closing handles or removing credentials.
+   proc.on('close',code=>finish(terminalError || (code===0?undefined:new Error('NATIVE_TOOL_FAILED: 外部工具执行失败。'))))
  })
 }
 export async function toolVersion(path:string){return child(path,['--version'],{capture:true,timeout:8000})}
@@ -82,6 +84,7 @@ export async function runNativeTool(path:string,task:NativeToolTask,config:Conne
      resultPath=join(outDir,'output');outputHandle=await open(resultPath,'wx',0o600)
    }
    await child(path,command.args,{stdin:inputHandle?.fd,stdout:outputHandle?.fd,signal,timeout:30*60*1000})
+   if(signal.aborted)throw new Error('CANCELLED: 已取消操作')
    await outputHandle?.close();outputHandle=undefined
    if(resultPath)await copyFile(resultPath,file,constants.COPYFILE_EXCL)
  }finally{

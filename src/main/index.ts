@@ -1,8 +1,8 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, shell, session as electronSession } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, shell, utilityProcess, session as electronSession } from 'electron'
 import { isLocale, resolveLocale, translate, localizeMessage, type Locale } from '../shared/i18n'
 import { constants } from 'node:fs'
 import { join, basename, extname, dirname } from 'node:path'
-import { readFile, stat, writeFile, mkdir, mkdtemp, copyFile, rm } from 'node:fs/promises'
+import { readFile, stat, writeFile, mkdir, mkdtemp, copyFile, rm, chmod } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 import type { ConnectionConfig, DatabaseOperation, FileImport, QuerySnippet } from '../shared/types'
 import { ConnectionStore } from './connections/store'
@@ -22,7 +22,10 @@ function getSystemLanguage(): string { return app.getPreferredSystemLanguages()[
 let currentLocale: Locale = 'en'
 const tr = (key: string, values: readonly unknown[] = []) => translate(currentLocale, key, values)
 const store = new ConnectionStore()
-const sessions = new SessionManager()
+const sessions = new SessionManager(modulePath=>{
+  const child=utilityProcess.fork(modulePath,[],{stdio:'ignore',serviceName:'DB EX SQLite'})
+  return {send:message=>child.postMessage(message),onMessage:callback=>{child.on('message',callback)},onExit:callback=>{child.once('exit',callback)},onError:callback=>{child.on('error',callback)},kill:()=>{child.kill()}}
+},app.isPackaged?join(process.resourcesPath,'app.asar.unpacked','dist-electron','sqlite-worker.cjs'):join(__dirname,'sqlite-worker.cjs'))
 const snippets = new SnippetStore()
 let quitting = false
 const development = !app.isPackaged && process.argv.includes('--dev')
@@ -183,7 +186,7 @@ function registerIpc(): void {
     if(answer.canceled||!answer.filePath)return false
     await confirm(win,'备份数据库',info.name+'\n'+answer.filePath+'\n'+tr('导出仅创建新文件，不覆盖现有文件。'))
     const dir=await mkdtemp(join(dirname(answer.filePath),'.dbex-sqlite-'))
-    try{const temp=join(dir,'backup.sqlite');await sessions.backupSqlite(id,temp);await copyFile(temp,answer.filePath,constants.COPYFILE_EXCL);return true}
+    try{const temp=join(dir,'backup.sqlite');await sessions.backupSqlite(id,temp);await chmod(temp,0o600);await copyFile(temp,answer.filePath,constants.COPYFILE_EXCL);return true}
     finally{await rm(dir,{recursive:true,force:true})}
   }))
   ipcMain.handle('sessions:native-tool',handler(async(win,id:string,task:NativeToolTask,database:string,entity?:string)=>{

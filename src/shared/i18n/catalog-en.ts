@@ -1023,4 +1023,6 @@ export const en: Readonly<Record<string, string>> = {
   "ROW_CONFLICT: 原始记录已变化，请刷新后重试": "ROW_CONFLICT: Original record changed. Refresh and retry.",
   "TIMEOUT: 操作超时": "TIMEOUT: Operation timed out.",
   "LIMIT_EXCEEDED: 外部工具": "LIMIT_EXCEEDED: External tool output too large.",
+  "SQLite 无法无损导出当前结果；请使用数据库备份。": "SQLite cannot export the current result without losing data. Use database backup instead.",
+  "发现未保存的记录编辑草稿": "Unsaved record editing draft found",
 }

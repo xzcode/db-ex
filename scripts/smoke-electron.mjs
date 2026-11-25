@@ -1,6 +1,6 @@
 import { _electron as electron } from 'playwright'
 import assert from 'node:assert/strict'
-import { access, readdir, mkdtemp, rm } from 'node:fs/promises'
+import { access, readdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve, join } from 'node:path'
 async function packagedExecutable() {
@@ -46,6 +46,27 @@ application = await electron.launch({
   await page.reload()
   await page.waitForFunction(() => document.querySelector('[data-color="#123abc"]'))
   await page.evaluate(id => window.dbex.deleteConnection(id), profile.saved.id)
+  // A real SQLite file via the shipped bridge and packaged child process.
+  // The fixture is a new empty file; no user database is touched.
+  const sqlitePath=join(userData,'sqlite-smoke.db')
+  await writeFile(sqlitePath,'',{flag:'wx',mode:0o600})
+  const sqlite=await page.evaluate(async filePath=>{
+    const config={name:'SQLite smoke',kind:'sqlite',host:'',port:0,filePath,ssh:{enabled:false},tls:{enabled:false}}
+    const session=await window.dbex.connectTemporary(config)
+    try{
+      const roots=await window.dbex.roots(session.id)
+      const data=await window.dbex.execute(session.id,{action:'mysql.query',sql:"SELECT 7 AS value, 'text' AS label"})
+      let readOnly=false
+      try{await window.dbex.execute(session.id,{action:'mysql.query',sql:'CREATE TABLE forbidden(id INTEGER)',confirmed:true})}catch{readOnly=true}
+      return {session,roots,data,readOnly}
+    }finally{await window.dbex.disconnect(session.id)}
+  },sqlitePath)
+  assert.equal(sqlite.session.kind,'sqlite')
+  assert.equal(sqlite.session.writable,false)
+  assert.equal(sqlite.roots[0].database,'main')
+  assert.equal(sqlite.data.rows[0].value,'7')
+  assert.deepEqual(sqlite.data.sqliteTypes[0],['INTEGER','TEXT'])
+  assert.equal(sqlite.readOnly,true)
   const pageErrors = []
   page.on('pageerror', error => pageErrors.push(error.message))
   // Only test handlers are replaced, in this smoke process. Shipped application code has no mocks.

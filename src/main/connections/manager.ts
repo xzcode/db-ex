@@ -14,7 +14,7 @@ import { validateConnection, validateId } from './validation'
 import { describeMongoConnectionError } from './mongo-diagnostics'
 import { mongoDirectConnection, mongoUriTlsEnabled } from './mongo-topology'
 import { secretValues } from './credentials'
-import { SqliteClient } from '../operations/sqlite-client'
+import { SqliteClient, type SqliteProcessFactory } from '../operations/sqlite-client'
 import { MysqlOperations } from '../operations/mysql'
 import { MongoOperations } from '../operations/mongodb'
 import { RedisOperations } from '../operations/redis'
@@ -45,6 +45,7 @@ export class SessionManager {
   private readonly sessions = new Map<string, LiveSession>()
   private pendingConnections = 0
   private generation = 0
+  constructor(private readonly sqliteProcessFactory?:SqliteProcessFactory,private readonly sqliteModulePath?:string){}
   private session(id: string): LiveSession {
     validateId(id)
     const result = this.sessions.get(id)
@@ -74,7 +75,7 @@ export class SessionManager {
       const [ca, cert, key] = loadTls ? await Promise.all([certificate(config.tls.caPath), certificate(config.tls.certPath), certificate(config.tls.keyPath)]) : []
       const tls: TlsConnectionOptions = { ca, cert, key, servername: config.tls.servername || undefined, rejectUnauthorized: true, minVersion: 'TLSv1.2' }
       switch (config.kind) {
-        case 'sqlite': { const operations=new SqliteClient(config.filePath!);driver={kind:'sqlite',operations};await operations.connect();break }
+        case 'sqlite': { const operations=new SqliteClient(config.filePath!,this.sqliteProcessFactory,this.sqliteModulePath);driver={kind:'sqlite',operations};await operations.connect();break }
         case 'mysql': {
           const stream = await transport.open(config.host, config.port)
           try {

@@ -415,5 +415,7 @@
   "确认执行外部工具？": "¿Ejecutar herramienta externa?",
   "外部工具当前仅支持普通直连。": "Las herramientas externas solo admiten conexiones directas por ahora.",
   "导入或恢复可能写入数据库，请确认文件来源及目标。": "La importación o restauración puede modificar la base. Verifica el origen y el destino.",
-  "导出仅创建新文件，不覆盖现有文件。": "La exportación crea un archivo nuevo y no sobrescribe archivos existentes."
+  "导出仅创建新文件，不覆盖现有文件。": "La exportación crea un archivo nuevo y no sobrescribe archivos existentes.",
+  "SQLite 无法无损导出当前结果；请使用数据库备份。": "No se puede exportar el resultado SQLite sin pérdida. Usa una copia de seguridad de la base.",
+  "发现未保存的记录编辑草稿": "Se encontró un borrador de edición de registro sin guardar"
 }

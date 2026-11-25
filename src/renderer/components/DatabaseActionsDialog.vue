@@ -102,6 +102,7 @@ async function submit(){
    }else if(props.mode==='export'){
      const response=await execute(mongo.value?{action:'mongo.find',...targetEntity,limit:500,sort:'{"_id":1}'}:{action:'mysql.browse',...targetEntity,filter:newBrowseFilter(),limit:500})
      if(disposed)return
+     if(props.session.kind==='sqlite'&&response.rows.length&&!response.rawRows)throw new Error('SQLite 无法无损导出当前结果；请使用数据库备份。')
      if(response.truncated||response.nextOffset!==undefined||(mongo.value&&response.documents?.length!==response.rows.length))throw new Error('对象数据超出完整导出上限，请使用分页导出或专用数据库工具。')
      const content=format.value==='json'?(mongo.value?'['+(response.documents||[]).join(',\n')+']':JSON.stringify(response.rawRows||response.rows,null,2)):csvFromRows(response.columns,response.rawRows||response.rows)
      if(await window.dbex.exportFile(cleanFile(database)+'-'+cleanFile(object.entity!)+'.'+format.value,content,format.value))notice.value='导出完成'
