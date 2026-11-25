@@ -1,7 +1,9 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { DbExAPI } from '../shared/types'
+import { windowChromeForPlatform } from '../shared/window-chrome'
 // Every bridge method is explicit. Renderer receives no filesystem, raw IPC or driver handles.
 const api: DbExAPI = {
+  windowChrome:windowChromeForPlatform(process.platform),
   getNativePreferences:()=>ipcRenderer.invoke('preferences:native-get'),
   saveNativePreferences:value=>ipcRenderer.invoke('preferences:native-save',value),
   pickTool:name=>ipcRenderer.invoke('preferences:pick-tool',name),
@@ -29,7 +31,7 @@ const api: DbExAPI = {
   testConnection: (config, clearSecrets) => ipcRenderer.invoke('connections:test', config, clearSecrets),
   disconnect: id => ipcRenderer.invoke('connections:disconnect', id),
   roots: id => ipcRenderer.invoke('explorer:roots', id),
-  children: (id, database, category) => ipcRenderer.invoke('explorer:children', id, database, category),
+  children: (id, database, category, withStatistics) => ipcRenderer.invoke('explorer:children', id, database, category, withStatistics),
   preview: (id, database, entity, offset) => ipcRenderer.invoke('explorer:preview', id, database, entity, offset),
   redisKeys: (id, cursor, pattern) => ipcRenderer.invoke('explorer:redis-keys', id, cursor, pattern),
   redisValue: (id, key) => ipcRenderer.invoke('explorer:redis-value', id, key),
@@ -38,6 +40,13 @@ const api: DbExAPI = {
   copyText: value => ipcRenderer.invoke('clipboard:copy-text', value),
   cancel: id => ipcRenderer.invoke('sessions:cancel', id),
   setWriteAccess: (id, enabled) => ipcRenderer.invoke('sessions:write-access', id, enabled),
+  listSavedQueries:(id,database,mode)=>ipcRenderer.invoke('query-objects:list',id,database,mode),
+  getSavedQuery:(id,database,queryId)=>ipcRenderer.invoke('query-objects:get',id,database,queryId),
+  saveQueryObject:(id,database,input)=>ipcRenderer.invoke('query-objects:save',id,database,input),
+  copySavedQuery:(id,database,queryId)=>ipcRenderer.invoke('query-objects:copy',id,database,queryId),
+  deleteSavedQuery:(id,database,queryId,revision)=>ipcRenderer.invoke('query-objects:delete',id,database,queryId,revision),
+  importSavedQuery:(id,database,mode)=>ipcRenderer.invoke('query-objects:import',id,database,mode),
+  exportSavedQuery:(id,database,queryId,format)=>ipcRenderer.invoke('query-objects:export',id,database,queryId,format),
   listSnippets: () => ipcRenderer.invoke('snippets:list'),
   saveSnippet: value => ipcRenderer.invoke('snippets:save', value),
   deleteSnippet: id => ipcRenderer.invoke('snippets:delete', id),

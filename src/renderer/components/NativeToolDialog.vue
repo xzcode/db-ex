@@ -5,11 +5,11 @@ import type {SessionInfo,ExplorerNode} from '../../shared/types'
 import type {NativeToolTask} from '../../shared/preferences'
 const props=defineProps<{session:SessionInfo;database:string}>()
 const emit=defineEmits<{close:[];session:[SessionInfo];disconnect:[]}>()
-const tasks=computed<NativeToolTask[]>(()=>props.session.kind==='mysql'?['mysql-backup','mysql-restore']:['mongo-backup','mongo-restore','mongo-export','mongo-import'])
-const names:Record<NativeToolTask,string>={'mysql-backup':'mysqldump','mysql-restore':'mysql','mongo-backup':'mongodump','mongo-restore':'mongorestore','mongo-export':'mongoexport','mongo-import':'mongoimport'}
-const labels:Record<NativeToolTask,string>={'mysql-backup':'备份数据库','mysql-restore':'恢复数据库','mongo-backup':'备份数据库','mongo-restore':'恢复数据库','mongo-export':'导出数据','mongo-import':'导入数据'}
+const tasks=computed<NativeToolTask[]>(()=>props.session.kind==='mysql'?['mysql-backup','mysql-restore']:props.session.kind==='mariadb'?['mariadb-backup','mariadb-restore']:['mongo-backup','mongo-restore','mongo-export','mongo-import'])
+const names:Record<NativeToolTask,string>={'mysql-backup':'mysqldump','mysql-restore':'mysql','mariadb-backup':'mariadb-dump','mariadb-restore':'mariadb','mongo-backup':'mongodump','mongo-restore':'mongorestore','mongo-export':'mongoexport','mongo-import':'mongoimport'}
+const labels:Record<NativeToolTask,string>={'mysql-backup':'备份数据库','mysql-restore':'恢复数据库','mariadb-backup':'备份数据库','mariadb-restore':'恢复数据库','mongo-backup':'备份数据库','mongo-restore':'恢复数据库','mongo-export':'导出数据','mongo-import':'导入数据'}
 const task=ref<NativeToolTask>(tasks.value[0]!),entity=ref(''),objects=ref<ExplorerNode[]>([]),busy=ref(false),error=ref(''),notice=ref('')
-const write=computed(()=>['mysql-restore','mongo-restore','mongo-import'].includes(task.value))
+const write=computed(()=>['mysql-restore','mariadb-restore','mongo-restore','mongo-import'].includes(task.value))
 const needsEntity=computed(()=>['mongo-import','mongo-export'].includes(task.value))
 async function act(fn:()=>Promise<void>){if(busy.value)return;busy.value=true;error.value='';notice.value='';try{await fn()}catch(reason){error.value=reason instanceof Error?reason.message:String(reason)}finally{busy.value=false}}
 onMounted(()=>{if(props.session.kind==='mongodb')void act(async()=>{objects.value=await window.dbex.children(props.session.id,props.database,'collections')})})

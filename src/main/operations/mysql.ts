@@ -2,6 +2,7 @@ import type { Connection } from 'mysql2/promise'
 import type { Connection as CoreConnection, FieldPacket, ResultSetHeader } from 'mysql2'
 import type { MysqlOperation, OperationResult, SqlRow, SqlValue } from '../../shared/types'
 import { checkAborted, databaseError, displayCell, emptyResult, MAX_BYTES, MAX_ROWS, MAX_VALUE_BYTES, page, requireWrite, resourceName, sqlRow, TIMEOUT_MS, type OperationContext } from './common'
+import { mysqlObjectCapabilities } from '../../shared/relational-capabilities'
 import { validateDatabaseName } from '../../shared/database-admin'
 import { compileMysqlFilter } from '../../shared/browse-filter'
 import { metric, metrics, mysqlFieldType, type ObjectInspection } from '../../shared/object-inspection'
@@ -15,7 +16,7 @@ interface QueryData {
   truncated: boolean
 }
 interface ColumnInfo { name: string; type: string; nullable: boolean; key: string; extra: string }
-interface Structure { columns: ColumnInfo[]; primaryKeys: string[]; indexes: Record<string, unknown>[]; engine: string }
+interface Structure { columns: ColumnInfo[]; primaryKeys: string[]; indexes: Record<string, unknown>[]; engine: string; tableType:string }
 
 /** One instance per physical connection; transactions cannot bleed between tabs. */
 export class MysqlOperations {
@@ -24,7 +25,7 @@ export class MysqlOperations {
   private transaction = false
   private closed = false
 
-  constructor(private readonly client: Connection) {
+  constructor(private readonly client: Connection, private readonly kind:'mysql'|'mariadb'='mysql') {
     // mysql2's promise wrapper exposes its underlying streaming connection.
     this.core = (client as unknown as { connection: CoreConnection }).connection
     if (!this.core) throw new Error('DRIVER_ERROR: MySQL 连接缺少流式查询接口')
@@ -82,7 +83,7 @@ export class MysqlOperations {
       case 'mysql.createDatabase': case 'mysql.dropDatabase': {
         requireWrite(context)
         if (this.transaction) throw new Error('TRANSACTION_ACTIVE: 当前已有未完成事务')
-        const database = quoteIdentifier(validateDatabaseName('mysql', operation.database))
+        const database = quoteIdentifier(validateDatabaseName(this.kind, operation.database))
         await this.query((operation.action === 'mysql.createDatabase' ? 'CREATE DATABASE ' : 'DROP DATABASE ') + database, [], signal, 1, false)
         return emptyResult(operation.action === 'mysql.createDatabase' ? '数据库已创建' : '数据库已删除')
       }
@@ -96,7 +97,7 @@ export class MysqlOperations {
           extra: column.extra, engine: structure.engine,
           indexes: structure.indexes.filter(index => index.Column_name === column.name).map(index => `${index.Key_name}${Number(index.Non_unique) === 0 ? ' (unique)' : ''}`).join(', '),
         }))
-        return { columns: ['name', 'type', 'nullable', 'key', 'extra', 'engine', 'indexes'], rows, primaryKeys: structure.primaryKeys }
+        return { columns: ['name', 'type', 'nullable', 'key', 'extra', 'engine', 'indexes'], rows, primaryKeys: structure.primaryKeys, objectCapabilities:mysqlObjectCapabilities(structure.tableType,structure.engine,structure.primaryKeys.length>0) }
       }
       case 'mysql.begin': {
         requireWrite(context)
@@ -186,11 +187,13 @@ export class MysqlOperations {
   private async inspectObject(database: string, entity: string, signal: AbortSignal): Promise<OperationResult> {
     const target = quoteIdentifier(database) + '.' + quoteIdentifier(entity)
     const inspection: ObjectInspection = { kind: 'table', metrics: [] }
+    let sequence=false
     try {
       const meta = await this.query('SELECT TABLE_TYPE, ENGINE, TABLE_ROWS, AVG_ROW_LENGTH, DATA_LENGTH, INDEX_LENGTH, DATA_FREE, AUTO_INCREMENT, TABLE_COLLATION, ROW_FORMAT, CREATE_TIME, UPDATE_TIME FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? LIMIT 1', [database, entity], signal, 1)
       const row = this.records(meta)[0]
       if (row) {
         inspection.kind = row.TABLE_TYPE === 'VIEW' ? 'view' : 'table'
+        sequence=this.kind==='mariadb'&&row.TABLE_TYPE==='SEQUENCE'
         inspection.metrics = metrics(metric('存储引擎', row.ENGINE), metric('记录数（估算）', row.TABLE_ROWS, 'estimate'), metric('平均记录大小', row.AVG_ROW_LENGTH, 'bytes'), metric('数据大小', row.DATA_LENGTH, 'bytes'), metric('索引的总大小', row.INDEX_LENGTH, 'bytes'), metric('空闲空间', row.DATA_FREE, 'bytes'), metric('自增值', row.AUTO_INCREMENT), metric('排序规则', row.TABLE_COLLATION), metric('行格式', row.ROW_FORMAT), metric('创建时间', row.CREATE_TIME), metric('更新时间', row.UPDATE_TIME))
       } else inspection.infoNote = '部分元数据不可用或无读取权限。'
     } catch (error) { checkAborted(signal); if (this.closed) throw error; inspection.infoNote = '部分元数据不可用或无读取权限。' }
@@ -200,9 +203,9 @@ export class MysqlOperations {
       if (row) inspection.metrics.push(...metrics(metric('字段数', row.column_count), metric('索引数', row.index_count)))
     } catch (error) { checkAborted(signal); if (this.closed) throw error; inspection.infoNote = '部分元数据不可用或无读取权限。' }
     try {
-      const ddl = await this.query('SHOW CREATE TABLE ' + target, [], signal, 1)
+      const ddl = await this.query((sequence?'SHOW CREATE SEQUENCE ':'SHOW CREATE TABLE ') + target, [], signal, 1)
       const row = this.records(ddl)[0]
-      const statement = row?.['Create Table'] ?? row?.['Create View']
+      const statement = row?.['Create Table'] ?? row?.['Create View'] ?? row?.['Create Sequence']
       if (typeof statement === 'string' && !ddl.truncated) {
         inspection.definition = statement.trimEnd().replace(/;$/, '') + ';'
         if (row?.['Create View'] !== undefined) inspection.kind = 'view'
@@ -219,14 +222,29 @@ export class MysqlOperations {
     const columns = records.map(row => ({
       name: String(row.Field), type: String(row.Type), nullable: row.Null === 'YES', key: String(row.Key), extra: String(row.Extra),
     }))
+    const engineData = await this.query('SELECT ENGINE,TABLE_TYPE FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? LIMIT 1', [database, entity], signal, 1)
+    const engine = String(engineData.values[0]?.[0] ?? '')
+    const tableType=String(engineData.values[0]?.[1]??'')
+    if(tableType==='VIEW'||tableType==='SEQUENCE')return {columns,primaryKeys:[],indexes:[],engine,tableType}
     const indexData = await this.query(`SHOW INDEX FROM ${target}`, [], signal, 500)
     if (indexData.truncated) throw new Error('LIMIT_EXCEEDED: 表索引过多')
     const indexes = this.records(indexData)
     const primaryKeys = indexes.filter(row => row.Key_name === 'PRIMARY')
       .sort((a, b) => Number(a.Seq_in_index) - Number(b.Seq_in_index)).map(row => String(row.Column_name))
-    const engineData = await this.query('SELECT ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? LIMIT 1', [database, entity], signal, 1)
-    const engine = String(engineData.values[0]?.[0] ?? '')
-    return { columns, primaryKeys, indexes, engine }
+    return { columns, primaryKeys, indexes, engine,tableType }
+  }
+
+  private assertRecordWrite(structure:Structure,operation:'insert'|'update'|'delete'|'import'):void {
+    // Preserve the existing MySQL behavior; for the new MariaDB adapter do
+    // not route sequence, view or system-versioned writes through generic CRUD.
+    if(this.kind!=='mariadb')return
+    const cap=mysqlObjectCapabilities(structure.tableType,structure.engine,structure.primaryKeys.length>0)
+    if(!cap[operation]){
+      if(operation==='import')throw new Error('TRANSACTION_REQUIRED: 批量导入仅支持 InnoDB 表，确保失败可以回滚')
+      if((operation==='update'||operation==='delete')&&cap.insert&&!structure.primaryKeys.length)throw new Error('NO_PRIMARY_KEY: 该表没有主键，不能安全进行单行修改或删除')
+      throw new Error('READ_ONLY: 请先启用当前会话的写入权限')
+    }
+    if(this.transaction&&!cap.transactional)throw new Error('TRANSACTION_REQUIRED: 批量导入仅支持 InnoDB 表，确保失败可以回滚')
   }
 
   private validateColumns(row: SqlRow, structure: Structure, changes: boolean): void {
@@ -234,7 +252,7 @@ export class MysqlOperations {
     for (const name of Object.keys(row)) {
       const column = known.get(name)
       if (!column) throw new Error('INVALID_INPUT: 数据包含不属于该表的字段')
-      if (changes && /\b(?:VIRTUAL|STORED) GENERATED\b/i.test(column.extra)) throw new Error('INVALID_INPUT: 不可手动修改生成列')
+      if (changes && /\b(?:VIRTUAL|STORED|PERSISTENT) GENERATED\b/i.test(column.extra)) throw new Error('INVALID_INPUT: 不可手动修改生成列')
     }
   }
 
@@ -242,6 +260,7 @@ export class MysqlOperations {
     requireWrite(context)
     const values = sqlRow(value, '新增记录')
     const structure = await this.structure(database, entity, signal)
+    this.assertRecordWrite(structure,'insert')
     this.validateColumns(values, structure, true)
     const affected = await this.insertRow(database, entity, values, signal)
     return emptyResult(`已新增 ${affected} 行${this.transaction ? '（事务尚未提交）' : ''}`, affected)
@@ -262,6 +281,7 @@ export class MysqlOperations {
     const key = sqlRow(operation.key, '主键')
     const original = sqlRow(operation.original, '原始记录')
     const structure = await this.structure(operation.database, operation.entity, signal)
+    this.assertRecordWrite(structure,operation.action==='mysql.update'?'update':'delete')
     if (!structure.primaryKeys.length) throw new Error('NO_PRIMARY_KEY: 该表没有主键，不能安全进行单行修改或删除')
     if (Object.keys(key).length !== structure.primaryKeys.length || structure.primaryKeys.some(name => !(name in key) || key[name] === null || key[name] !== original[name])) {
       throw new Error('INVALID_PRIMARY_KEY: 必须提供完整且与原始记录相符的主键')
@@ -304,6 +324,7 @@ export class MysqlOperations {
     const rows = operation.rows.map(row => sqlRow(row, '导入行'))
     if (Buffer.byteLength(JSON.stringify(rows)) > MAX_BYTES) throw new Error('LIMIT_EXCEEDED: 单批导入最大 2 MiB')
     const structure = await this.structure(operation.database, operation.entity, signal)
+    this.assertRecordWrite(structure,'import')
     if (structure.engine.toUpperCase() !== 'INNODB') throw new Error('TRANSACTION_REQUIRED: 批量导入仅支持 InnoDB 表，确保失败可以回滚')
     for (const row of rows) this.validateColumns(row, structure, true)
     const existingTransaction = this.transaction

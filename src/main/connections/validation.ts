@@ -1,3 +1,4 @@
+import { isMysqlFamily } from '../../shared/relational-capabilities'
 import { isIP } from 'node:net'
 import { isAbsolute } from 'node:path'
 import { normalizeAppearance } from '../../shared/connection-appearance'
@@ -79,7 +80,7 @@ function proxy(value: unknown): ProxyOptions | undefined {
 export function validateConnection(value: unknown, allowMissingSecrets = false): ConnectionConfig {
   const v = object(value, '连接')
   const name = text(v.name, '连接名称', 100, true)!
-  if (!['mysql', 'mongodb', 'redis', 'sqlite'].includes(String(v.kind))) throw new Error('INVALID_CONNECTION: 数据库类型错误')
+  if (!['mysql', 'mongodb', 'redis', 'sqlite','mariadb'].includes(String(v.kind))) throw new Error('INVALID_CONNECTION: 数据库类型错误')
   // Legacy profiles may contain an environment field; it is no longer used.
   const kind = v.kind as ConnectionConfig['kind']
   if(kind==='sqlite'){
@@ -134,7 +135,7 @@ export function validateConnection(value: unknown, allowMissingSecrets = false):
   if (kind === 'redis' && redisMode === 'sentinel' && !sentinelMaster) throw new Error('INVALID_CONNECTION: 请填写 Sentinel master 名称')
   const id = text(v.id, '连接 ID', 128)
   const tlsOptions = tls(v.tls)
-  if (!allowMissingSecrets && kind === 'mysql' && tlsOptions.enabled && isIP(tlsOptions.servername || target.host)) {
+  if (!allowMissingSecrets && isMysqlFamily(kind) && tlsOptions.enabled && isIP(tlsOptions.servername || target.host)) {
     throw new Error('TLS_IDENTITY_REQUIRED: MySQL TLS 连接请填写证书中的 DNS 名称（TLS / SSL → 证书主机名）；当前驱动不支持可靠校验仅有 IP 身份的证书')
   }
   return { id, name, kind, ...target, ...normalizeAppearance(v),

@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { t } from '../i18n'
+import type { ColumnAction } from '../../shared/column-actions'
+import type { SortRule } from '../../shared/browse-filter'
 import { preferences } from '../preferences'
 import { gridRowHeight } from '../../shared/preferences'
 import { bsonLabel, gridBsonType, type BsonTypeBranch, type BsonType } from '../../shared/bson-types'
@@ -20,6 +22,7 @@ const props = withDefaults(defineProps<{
   offset?: number
   bsonTypes?: BsonTypeBranch[]
   columnTypes?: string[]
+  relationalKind?: 'mysql'|'mariadb'
   sqliteTypes?: string[][]
   nullCells?: number[][]
   redisRowTypes?: string[]
@@ -28,8 +31,11 @@ const props = withDefaults(defineProps<{
   canEditDocument?: boolean
   canAddDocument?: boolean
   canFilterDocument?: boolean
+  active?:boolean
+  actionColumns?: string[]
+  columnSort?: SortRule[]
 }>(), { selected: -1, selectable: false, checked: () => [], offset: 0 })
-const emit = defineEmits<{ select: [index: number]; open: [index: number]; check: [index: number]; checkAll: []; documentEdit: [index: number]; documentView: [index: number]; documentAction: [action: 'add' | 'copy-value' | 'copy-document' | 'duplicate' | 'delete' | 'null' | 'empty' | 'filter', index: number, field?: string] }>()
+const emit = defineEmits<{ columnAction:[action:ColumnAction,field:string]; select: [index: number]; open: [index: number]; check: [index: number]; checkAll: []; documentEdit: [index: number]; documentView: [index: number]; documentAction: [action: 'add' | 'copy-value' | 'copy-document' | 'duplicate' | 'delete' | 'null' | 'empty' | 'filter', index: number, field?: string] }>()
 const mongo = computed(() => props.bsonTypes !== undefined)
 const rowHeight = computed(() => gridRowHeight(preferences.value,mongo.value))
 const headerHeight = computed(() => Math.max(mongo.value?28:34,preferences.value.records.fontSize+12))
@@ -44,6 +50,31 @@ let frame = 0
 let stopResize: (() => void) | undefined
 const rowMenu = ref<{ index: number; x: number; y: number; field?: string }>()
 const menuHost = ref<HTMLElement>()
+const columnMenu=ref<{field:string;x:number;y:number}>()
+const columnMenuHost=ref<HTMLElement>()
+const selectedColumn=ref('')
+const canUseColumn=(field:string)=>props.actionColumns?.includes(field)===true
+function directionFor(field:string){return props.columnSort?.find(rule=>rule.field===field)?.direction}
+function closeColumnMenu(){columnMenu.value=undefined}
+async function openColumnMenu(event:MouseEvent|KeyboardEvent,field:string){
+  if(!canUseColumn(field))return
+  event.preventDefault();event.stopPropagation();closeRowMenu();selectedColumn.value=field
+  const rect=(event.currentTarget as HTMLElement).getBoundingClientRect()
+  columnMenu.value={field,x:Math.max(4,Math.min(rect.right-195,window.innerWidth-212)),y:Math.max(4,rect.bottom+3)}
+  await nextTick()
+  if(columnMenu.value&&columnMenuHost.value){
+    columnMenu.value.y=Math.max(4,Math.min(columnMenu.value.y,window.innerHeight-columnMenuHost.value.getBoundingClientRect().height-4))
+    columnMenuHost.value.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus({preventScroll:true})
+  }
+}
+function columnAction(action:ColumnAction){
+  const field=columnMenu.value?.field
+  if(!field||!canUseColumn(field))return
+  closeColumnMenu();emit('columnAction',action,field)
+}
+watch(()=>props.columns.join('\u0000'),()=>{if(!props.columns.includes(selectedColumn.value))selectedColumn.value='';closeColumnMenu()})
+watch(()=>props.actionColumns,()=>{if(columnMenu.value&&!canUseColumn(columnMenu.value.field))closeColumnMenu()})
+watch(()=>props.active,value=>{if(value===false){closeColumnMenu();closeRowMenu()}})
 const menuDocument = computed(() => rowMenu.value ? props.documents?.[rowMenu.value.index] : undefined)
 const menuMetadata = computed(() => rowMenu.value ? props.bsonTypes?.[rowMenu.value.index] : undefined)
 const menuRaw = computed(() => menuDocument.value ? parseBsonDocument(menuDocument.value) : undefined)
@@ -55,6 +86,7 @@ function closeRowMenu() { rowMenu.value = undefined }
 async function openRowMenu(event: MouseEvent | KeyboardEvent, index: number) {
   if (!props.documentMenu || !props.documents?.[index]) return
   event.preventDefault(); event.stopPropagation()
+  closeColumnMenu()
   emit('select', index)
   const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
   const mouse = 'clientX' in event
@@ -78,9 +110,9 @@ function menuAction(action: 'view' | 'edit' | 'add' | 'copy-value' | 'copy-docum
   else if (action === 'view') emit('documentView', menu.index)
   else emit('documentAction', action, menu.index, menu.field)
 }
-function outside(event: PointerEvent) { if (rowMenu.value && !menuHost.value?.contains(event.target as Node)) closeRowMenu() }
-function escapeMenu(event: KeyboardEvent) { if (event.key === 'Escape') closeRowMenu() }
-watch(() => props.rows, closeRowMenu)
+function outside(event: PointerEvent) { if (rowMenu.value && !menuHost.value?.contains(event.target as Node)) closeRowMenu();if(columnMenu.value&&!columnMenuHost.value?.contains(event.target as Node))closeColumnMenu() }
+function escapeMenu(event: KeyboardEvent) { if (event.key === 'Escape'){closeRowMenu();closeColumnMenu()} }
+watch(() => props.rows,()=>{closeRowMenu();closeColumnMenu()})
 watch(() => props.documentMenu, closeRowMenu)
 const parsed = computed(() => props.documents?.map(parseBsonDocument) || [])
 const widths = ref<Record<string, number>>(Object.create(null))
@@ -105,7 +137,7 @@ function cellText(row: Record<string, unknown>, index: number, key: string): str
 const autoWidths = computed(() => {
   const out: Record<string, number> = Object.create(null)
   for (const column of props.columns) {
-    let width = Math.min(310, column.length * 8 + 22)
+    let width = Math.min(310, column.length * 8 + (props.actionColumns?.includes(column)?52:22))
     for (const row of cellRows.value.slice(0, 60)) {
       const cell = row[column]
       if (!cell) continue
@@ -150,12 +182,12 @@ const bottomSpace = computed(() => (props.rows.length - windowRange.value.end) *
 const columnCount = computed(() => props.columns.length + (props.selectable ? 2 : 1))
 
 function onScroll() {
-  closeRowMenu()
+  closeRowMenu();closeColumnMenu()
   if (frame) return
   frame = requestAnimationFrame(() => { frame = 0; scrollTop.value = scrollHost.value?.scrollTop || 0 })
 }
 onMounted(() => {
-  window.addEventListener('pointerdown', outside); window.addEventListener('keydown', escapeMenu); window.addEventListener('resize', closeRowMenu)
+  window.addEventListener('pointerdown', outside); window.addEventListener('keydown', escapeMenu); window.addEventListener('resize', closeRowMenu);window.addEventListener('resize',closeColumnMenu)
   if (!scrollHost.value) return
   observer = new ResizeObserver(() => { viewportHeight.value = scrollHost.value?.clientHeight || 0 })
   observer.observe(scrollHost.value)
@@ -165,7 +197,7 @@ watch(() => props.rows, () => {
   scrollTop.value = 0
   if (scrollHost.value) scrollHost.value.scrollTop = 0
 })
-onBeforeUnmount(() => { window.removeEventListener('pointerdown', outside); window.removeEventListener('keydown', escapeMenu); window.removeEventListener('resize', closeRowMenu); observer?.disconnect(); stopResize?.(); if (frame) cancelAnimationFrame(frame) })
+onBeforeUnmount(() => { window.removeEventListener('pointerdown', outside); window.removeEventListener('keydown', escapeMenu); window.removeEventListener('resize', closeRowMenu);window.removeEventListener('resize',closeColumnMenu); observer?.disconnect(); stopResize?.(); if (frame) cancelAnimationFrame(frame) })
 
 function cellType(row: Record<string, unknown>, index: number, key: string): BsonType | undefined {
   return cellRows.value[index]?.[key]?.type ?? (props.bsonTypes ? gridBsonType(row, props.bsonTypes[index], key) : undefined)
@@ -180,7 +212,7 @@ function gridType(row: Record<string, unknown>, index: number, key: string, colu
 function gridColor(row: Record<string, unknown>, index: number, key: string, column: number): string | undefined {
   const bson = cellType(row, index, key)
   if (bson) return activeTypeColor(bsonPalette.value, bson)
-  const kind = props.sqliteTypes?'sqlite':props.columnTypes ? 'mysql' : props.redisRowTypes ? 'redis' : undefined
+  const kind = props.sqliteTypes?'sqlite':props.columnTypes ? (props.relationalKind||'mysql') : props.redisRowTypes ? 'redis' : undefined
   const type = genericType(index, column)
   return kind && type && databasePalettes.value[kind].enabled ? databaseTypeColor(kind, databasePalettes.value[kind], type) : undefined
 }
@@ -188,7 +220,7 @@ function gridLabel(row: Record<string, unknown>, index: number, key: string, col
   const bson = cellType(row, index, key)
   return bson ? t(bsonLabel(bson)) : genericType(index, column) || ''
 }
-const showTypeLabels = computed(() => mongo.value ? bsonPalette.value.showLabels : props.sqliteTypes?databasePalettes.value.sqlite.showLabels:props.columnTypes ? databasePalettes.value.mysql.showLabels : props.redisRowTypes ? databasePalettes.value.redis.showLabels : false)
+const showTypeLabels = computed(() => mongo.value ? bsonPalette.value.showLabels : props.sqliteTypes?databasePalettes.value.sqlite.showLabels:props.columnTypes ? databasePalettes.value[props.relationalKind||'mysql'].showLabels : props.redisRowTypes ? databasePalettes.value.redis.showLabels : false)
 function display(value: unknown): string {
   if (value === null) return 'NULL'
   if (value === undefined) return '—'
@@ -205,7 +237,8 @@ function display(value: unknown): string {
       <colgroup v-if="mongo"><col style="width: 38px" /><col v-for="column in columns" :key="column" :style="{ width: columnWidth(column) + 'px' }" /></colgroup>
       <thead><tr>
         <th v-if="selectable" class="number-cell"><input type="checkbox" :aria-label="t('选择当前页')" :checked="rows.length > 0 && checked.length === rows.length" @change="emit('checkAll')" /></th>
-        <th class="number-cell">#</th><th v-for="column in columns" :key="column" :title="column"><span class="grid-column-title">{{ column }}</span><span v-if="mongo" class="grid-column-resize" role="separator" aria-orientation="vertical" :aria-label="t('调整列宽') + ': ' + column" :aria-valuemin="52" :aria-valuemax="1000" :aria-valuenow="columnWidth(column)" tabindex="0" @pointerdown.stop="resizeColumn($event, column)" @keydown.stop="resizeColumnKey($event, column)" @dblclick.stop="delete widths[column]"></span></th>
+        <th class="number-cell">#</th><th v-for="column in columns" :key="column" :title="column" :class="{'column-active':selectedColumn===column,'column-actionable':canUseColumn(column)}" :aria-sort="columnSort?.[0]?.field===column?(directionFor(column)===1?'ascending':'descending'):undefined" @click="canUseColumn(column)&&(selectedColumn=column)" @contextmenu="openColumnMenu($event,column)">
+          <div class="grid-heading-content"><span class="grid-column-title">{{ column }}</span><span v-if="directionFor(column)" class="column-sort-indicator" aria-hidden="true">{{ directionFor(column)===1?'↑':'↓' }}<small v-if="(columnSort?.length||0)>1">{{ (columnSort?.findIndex(rule=>rule.field===column)??0)+1 }}</small></span><button v-if="canUseColumn(column)" type="button" class="column-menu-trigger" :title="t('列操作')+': '+column" :aria-label="t('列操作')+': '+column" aria-haspopup="menu" :aria-expanded="columnMenu?.field===column" @click.stop="openColumnMenu($event,column)" @keydown.shift.f10.stop="openColumnMenu($event,column)">···</button></div><span v-if="mongo" class="grid-column-resize" role="separator" aria-orientation="vertical" :aria-label="t('调整列宽') + ': ' + column" :aria-valuemin="52" :aria-valuemax="1000" :aria-valuenow="columnWidth(column)" tabindex="0" @pointerdown.stop="resizeColumn($event, column)" @keydown.stop="resizeColumnKey($event, column)" @dblclick.stop="delete widths[column]"></span></th>
       </tr></thead>
       <tbody>
         <tr v-if="topSpace" class="virtual-spacer" aria-hidden="true"><td :colspan="columnCount" :style="{ height: topSpace + 'px' }"></td></tr>
@@ -213,7 +246,7 @@ function display(value: unknown): string {
           <td v-if="selectable" class="number-cell"><input type="checkbox" :aria-label="t('选择第 {0} 行', [item.index + 1])" :checked="checked.includes(item.index)" @click.stop @change="emit('check', item.index)" /></td>
           <td class="number-cell">{{ offset + item.index + 1 }}</td>
           <td v-for="(column, columnIndex) in columns" :key="column"
-            :class="{ 'null-cell': item.row[column] === null || !Object.hasOwn(item.row, column) || cellType(item.row, item.index, column) === 'Null' || cellType(item.row, item.index, column) === 'Undefined' || genericType(item.index, columnIndex) === 'NULL', 'has-bson-color': !!gridColor(item.row, item.index, column, columnIndex) }"
+            :class="{ 'column-active':selectedColumn===column&&canUseColumn(column), 'null-cell': item.row[column] === null || !Object.hasOwn(item.row, column) || cellType(item.row, item.index, column) === 'Null' || cellType(item.row, item.index, column) === 'Undefined' || genericType(item.index, columnIndex) === 'NULL', 'has-bson-color': !!gridColor(item.row, item.index, column, columnIndex) }"
             :data-mongo-field="documentMenu ? column : undefined"
             :data-bson-type="cellType(item.row, item.index, column)"
             :data-value-type="gridType(item.row, item.index, column, columnIndex)"
@@ -229,6 +262,13 @@ function display(value: unknown): string {
       </tbody>
     </table>
     <Teleport to="body">
+      <div v-if="columnMenu" ref="columnMenuHost" class="connection-context-menu grid-column-menu" role="menu" :style="{left:columnMenu.x+'px',top:columnMenu.y+'px'}" @contextmenu.prevent @pointerdown.stop>
+        <button class="context-action" type="button" role="menuitem" @click="columnAction('asc')"><span class="column-menu-symbol" aria-hidden="true">↑</span>{{ t('升序排序') }}</button>
+        <button class="context-action" type="button" role="menuitem" @click="columnAction('desc')"><span class="column-menu-symbol" aria-hidden="true">↓</span>{{ t('降序排序') }}</button>
+        <button class="context-action" type="button" role="menuitem" :disabled="!columnSort?.length" @click="columnAction('clear')"><span class="column-menu-symbol clear-sort" aria-hidden="true">⊖</span>{{ t('移除所有排序') }}</button>
+        <div class="context-menu-divider"></div>
+        <button class="context-action" type="button" role="menuitem" @click="columnAction('filter')"><span class="column-menu-symbol"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M3 4h18l-7 8v6l-4 2v-8z"/></svg></span>{{ t('添加筛选') }}</button>
+      </div>
       <div v-if="rowMenu" ref="menuHost" class="connection-context-menu mongo-row-menu" :style="{ left: rowMenu.x + 'px', top: rowMenu.y + 'px' }" @contextmenu.prevent @pointerdown.stop>
         <button class="context-action" type="button" @click="menuAction('view')">{{ t('查看文档') }}</button>
         <button class="context-action" type="button" :disabled="!menuCanEdit" @click="menuAction('edit')">{{ t('编辑文档') }}…</button>
@@ -270,4 +310,8 @@ function display(value: unknown): string {
 .configured-grid.data-table tbody tr:not(.virtual-spacer),.configured-grid.data-table tbody tr:not(.virtual-spacer) td { height:var(--record-height);box-sizing:border-box; }
 .configured-grid.data-table tbody tr:not(.virtual-spacer) td { font-size:var(--record-font-size);font-family:var(--record-font);padding-top:3px;padding-bottom:3px;line-height:calc(var(--record-font-size) + 4px); }
 .configured-grid.data-table tbody tr.record-stripe:not(.selected):not(:hover) td:not(.has-bson-color) { background:color-mix(in srgb,var(--panel-raised) 70%,var(--panel)); }
+</style>
+
+<style>
+.grid-heading-content{display:flex;align-items:center;gap:5px;min-width:0;white-space:nowrap}.grid-heading-content .grid-column-title{min-width:0;overflow:hidden;text-overflow:ellipsis;flex:1}.column-menu-trigger{width:23px;height:22px;flex:none;padding:0;border:0;border-radius:3px;background:transparent;color:var(--accent);font-size:17px;line-height:18px;font-weight:700;opacity:0;cursor:pointer}.column-actionable:hover .column-menu-trigger,.column-active .column-menu-trigger,.column-menu-trigger:focus-visible,.column-menu-trigger[aria-expanded=true]{opacity:1}.column-sort-indicator{flex:none;color:var(--accent);font-size:12px;font-weight:700}.column-sort-indicator small{font-size:9px}.data-table th.column-active{background:var(--selected);color:var(--text);box-shadow:inset 0 -2px var(--accent)}.data-table tbody td.column-active{background:color-mix(in srgb,var(--accent) 18%,var(--panel));}.data-table tbody tr.selected td.column-active{background:color-mix(in srgb,var(--accent) 28%,var(--panel));}.grid-column-menu{width:208px;z-index:85}.grid-column-menu .context-action{display:flex;align-items:center;gap:9px;padding:8px 10px}.column-menu-symbol{display:inline-flex;width:18px;justify-content:center;align-items:center;font-size:16px;color:var(--muted)}.column-menu-symbol.clear-sort{color:var(--danger)}
 </style>

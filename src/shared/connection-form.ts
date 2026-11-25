@@ -1,9 +1,10 @@
+import { isMysqlFamily } from './relational-capabilities'
 import type { ConnectionConfig, ConnectionDraft, DatabaseKind, Endpoint, SshOptions } from './types'
 
 export type EntryMode = 'fields' | 'uri'
 export type DatabaseAuthMode = 'none' | 'password'
-export const defaultPorts: Record<DatabaseKind, number> = { mysql: 3306, mongodb: 27017, redis: 6379, sqlite: 0 }
-export const databaseNames: Record<DatabaseKind, string> = { mysql: 'MySQL', mongodb: 'MongoDB', redis: 'Redis', sqlite: 'SQLite' }
+export const defaultPorts: Record<DatabaseKind, number> = { mysql: 3306, mariadb: 3306, mongodb: 27017, redis: 6379, sqlite: 0 }
+export const databaseNames: Record<DatabaseKind, string> = { mysql: 'MySQL', mariadb: 'MariaDB', mongodb: 'MongoDB', redis: 'Redis', sqlite: 'SQLite' }
 
 export function newSshHost(): SshOptions {
   return { enabled: true, host: '', port: 22, username: '', authMode: 'password', password: '', privateKeyPath: '', passphrase: '', agentSocket: '', hostFingerprint: '', jumps: [] }
@@ -11,7 +12,7 @@ export function newSshHost(): SshOptions {
 export function newConnectionConfig(kind: DatabaseKind): ConnectionConfig {
   return {
     name: '', kind, host: '127.0.0.1', port: defaultPorts[kind],
-    username: kind === 'mysql' ? 'root' : '', password: '', database: '', filePath: '', authSource: 'admin', redisDb: 0, uri: '',
+    username: isMysqlFamily(kind) ? 'root' : '', password: '', database: '', filePath: '', authSource: 'admin', redisDb: 0, uri: '',
     ssh: { ...newSshHost(), enabled: false }, tls: { enabled: false, caPath: '', certPath: '', keyPath: '', servername: '' },
     proxy: { enabled: false, type: 'socks5', host: '', port: 1080, username: '', password: '' },
     redisMode: 'standalone', nodes: [], mongoReplicaSet: '', mongoDirect: false, mongoTopology: 'auto', connectTimeoutMs: 12000,
@@ -21,7 +22,7 @@ export function initialEntry(draft?: ConnectionDraft): EntryMode {
   return draft?.config.kind === 'mongodb' && (draft.config.uri || draft.secretFields.includes('uri')) ? 'uri' : 'fields'
 }
 export function initialAuth(config: ConnectionConfig, draft?: ConnectionDraft): DatabaseAuthMode {
-  return config.kind === 'mysql' || config.username || config.password || draft?.secretFields.includes('password') ? 'password' : 'none'
+  return isMysqlFamily(config.kind) || config.username || config.password || draft?.secretFields.includes('password') ? 'password' : 'none'
 }
 function uriAuthority(uri: string): string | undefined {
   const authority = /^mongodb(?:\+srv)?:\/\/([^/?#\s]+)(?:[/?][^\r\n]*)?$/i.exec(uri.trim())?.[1]
@@ -82,7 +83,7 @@ export function prepareConnection(config: ConnectionConfig, options: FormOptions
     clear.add('uri')
     if (options.auth === 'password' && !value.username?.trim()) throw new Error('INVALID_CONNECTION: 请填写数据库用户名')
   }
-  if (value.kind !== 'mysql' && options.auth === 'none') {
+  if (!isMysqlFamily(value.kind) && options.auth === 'none') {
     value.username = ''; value.password = ''
     clear.add('password')
   }

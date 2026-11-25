@@ -1,4 +1,5 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, shell, utilityProcess, session as electronSession } from 'electron'
+import { windowChromeOptions } from '../shared/window-chrome'
 import { isLocale, resolveLocale, translate, localizeMessage, type Locale } from '../shared/i18n'
 import { constants } from 'node:fs'
 import { join, basename, extname, dirname } from 'node:path'
@@ -9,14 +10,15 @@ import { ConnectionStore } from './connections/store'
 import { SessionManager } from './connections/manager'
 import { validateId } from './connections/validation'
 import { SnippetStore } from './storage/snippets'
+import { SavedQueryStore } from './storage/saved-queries'
+import { decrypt,encrypt,readJson,writeJson } from './storage/secure-json'
+import { normalizeQueryScope,queryModeFor,portableQuery,readPortableQuery,type QueryMode,type SavedQuery,type QuerySave } from '../shared/saved-query'
 import { initNativePreferences, getNativePreferences, saveNativePreferences, checkTool, diagnosticDirectory, diagnostic, saveRecovery, loadRecovery, clearRecovery, deleteRecovery } from './storage/preferences'
 import { nativeTasks,runNativeTool,toolVersion } from './operations/native-tools'
 import { nativeToolTasks,toolNames, type ToolName,type NativeToolTask } from '../shared/preferences'
 import { parseSshConfig } from './connections/ssh-config'
-import { inspectSqliteSql } from './operations/sqlite-policy'
-import { inspectSql } from './operations/sql-policy'
+import { adapterOperationWrites } from './connections/adapters'
 import { validateMongoDocumentEdit } from './operations/mongodb'
-import { redisCommandWrites, validateRedisCommand } from './operations/redis'
 
 function getSystemLanguage(): string { return app.getPreferredSystemLanguages()[0] || app.getLocale() || 'en' }
 let currentLocale: Locale = 'en'
@@ -27,6 +29,19 @@ const sessions = new SessionManager(modulePath=>{
   return {send:message=>child.postMessage(message),onMessage:callback=>{child.on('message',callback)},onExit:callback=>{child.once('exit',callback)},onError:callback=>{child.on('error',callback)},kill:()=>{child.kill()}}
 },app.isPackaged?join(process.resourcesPath,'app.asar.unpacked','dist-electron','sqlite-worker.cjs'):join(__dirname,'sqlite-worker.cjs'))
 const snippets = new SnippetStore()
+const savedQueries=new SavedQueryStore({
+  async read(){
+    const file=await readJson<{version:number;encrypted:string}>('saved-queries.secure.json')
+    if(!file)return []
+    if(file.version!==1||typeof file.encrypted!=='string')throw new Error('查询记录格式不兼容')
+    return decrypt<SavedQuery[]>(file.encrypted)
+  },
+  write:values=>writeJson('saved-queries.secure.json',{version:1,encrypted:encrypt(values)})
+})
+function savedQueryScope(id:string,database:string){
+  const info=sessions.info(id)
+  return normalizeQueryScope({connectionId:info.connectionId,kind:info.kind,database})
+}
 let quitting = false
 const development = !app.isPackaged && process.argv.includes('--dev')
 const rendererUrl = development ? 'http://127.0.0.1:5173/' : pathToFileURL(join(__dirname, '../dist/index.html')).href
@@ -54,9 +69,7 @@ async function confirm(win: BrowserWindow, message: string, detail: string, acti
 function writes(op: DatabaseOperation, writable: boolean, kind:import('../shared/types').DatabaseKind): boolean {
   if (!op || typeof op !== 'object' || typeof op.action !== 'string') throw new Error('INVALID_OPERATION: 操作参数无效')
   if (Buffer.byteLength(JSON.stringify(op)) > 4 * 1024 * 1024) throw new Error('LIMIT_EXCEEDED: 操作参数最多4 MiB')
-  if (op.action === 'mysql.query') return (kind==='sqlite'?inspectSqliteSql(op.sql):inspectSql(op.sql,writable)).mode === 'write'
-  if (op.action === 'redis.command') return redisCommandWrites(validateRedisCommand(op.args))
-  return new Set(['mysql.createDatabase', 'mysql.dropDatabase', 'mongo.createDatabase', 'mongo.dropDatabase', 'mysql.insert', 'mysql.update', 'mysql.delete', 'mysql.import', 'mysql.begin', 'mysql.commit', 'mongo.insert', 'mongo.replace', 'mongo.delete', 'mongo.createIndex', 'mongo.dropIndex', 'redis.set', 'redis.mutate', 'redis.ttl', 'redis.delete']).has(op.action)
+  return adapterOperationWrites(kind,op,writable)
 }
 function operationDetail(id: string, op: DatabaseOperation): string {
   const info = sessions.info(id)
@@ -154,7 +167,7 @@ function registerIpc(): void {
   }))
   ipcMain.handle('connections:ssh-config', handler(async win => { const file = await openText(win, '选择 SSH config 文件', 1024 * 1024); return file ? parseSshConfig(file.text) : null }))
   ipcMain.handle('explorer:roots', handler((_win, id: string) => sessions.roots(id)))
-  ipcMain.handle('explorer:children', handler((_win, id: string, database: string, category?: import('../shared/mongo-catalog').MongoCategory) => sessions.children(id, database, category)))
+  ipcMain.handle('explorer:children', handler((_win, id: string, database: string, category?: import('../shared/mongo-catalog').MongoCategory, withStatistics?:boolean) => sessions.children(id, database, category, withStatistics)))
   ipcMain.handle('explorer:preview', handler((_win, id: string, database: string, entity: string, offset?: number) => sessions.preview(id, database, entity, offset)))
   ipcMain.handle('explorer:redis-keys', handler((_win, id: string, cursor?: string, pattern?: string) => sessions.redisKeys(id, cursor, pattern)))
   ipcMain.handle('explorer:redis-value', handler((_win, id: string, key: string) => sessions.redisValue(id, key)))
@@ -205,6 +218,31 @@ function registerIpc(): void {
     return true
   }))
   ipcMain.handle('sessions:cancel', handler((_win, id: string) => sessions.cancel(id)))
+  ipcMain.handle('query-objects:list',handler((_win,id:string,database:string,mode:QueryMode)=>savedQueries.list(savedQueryScope(id,database),mode)))
+  ipcMain.handle('query-objects:get',handler((_win,id:string,database:string,queryId:string)=>savedQueries.get(savedQueryScope(id,database),queryId)))
+  ipcMain.handle('query-objects:save',handler((_win,id:string,database:string,input:QuerySave)=>savedQueries.save(savedQueryScope(id,database),input)))
+  ipcMain.handle('query-objects:copy',handler((_win,id:string,database:string,queryId:string)=>savedQueries.copy(savedQueryScope(id,database),queryId)))
+  ipcMain.handle('query-objects:delete',handler(async(win,id:string,database:string,queryId:string,revision:string)=>{
+    const scope=savedQueryScope(id,database),item=await savedQueries.get(scope,queryId)
+    await confirm(win,'删除已保存的查询？',item.name+' @ '+database,'删除')
+    await savedQueries.remove(scope,queryId,revision)
+  }))
+  ipcMain.handle('query-objects:import',handler(async(win,id:string,database:string,mode:QueryMode)=>{
+    const scope=savedQueryScope(id,database);queryModeFor(scope.kind,mode)
+    const file=await openText(win,'导入查询',512*1024)
+    if(!file)return null
+    const isSql=extname(file.name).toLowerCase()==='.sql'
+    const draft=readPortableQuery(scope.kind,mode,file.text,basename(file.name,extname(file.name)).slice(0,100)||tr('未命名查询'),isSql)
+    return savedQueries.import(scope,draft)
+  }))
+  ipcMain.handle('query-objects:export',handler(async(win,id:string,database:string,queryId:string,format:'json'|'sql')=>{
+    const item=await savedQueries.get(savedQueryScope(id,database),queryId)
+    if(format!=='json'&&format!=='sql'||format==='sql'&&item.mode!=='sql')throw new Error('查询记录参数错误')
+    // Query files are intentionally portable plaintext; never include profile credentials.
+    await confirm(win,'导出查询文件（明文）？',tr(format==='sql'?'SQL 文件仅包含语句，不包含绑定参数。':'JSON 文件包含查询内容和参数，不包含连接凭据。'),'导出')
+    const name=item.name.replace(/[<>:"/\\|?*\u0000-\u001f]/g,'_').slice(0,100)||'query'
+    return saveText(win,name+(format==='sql'?'.sql':'.dbex-query.json'),format==='sql'?item.text:JSON.stringify(portableQuery(item),null,2),format==='sql'?'text':'json','导出查询')
+  }))
   ipcMain.handle('snippets:list', handler(() => snippets.list()))
   ipcMain.handle('snippets:save', handler((_win, value: Omit<QuerySnippet, 'id' | 'updatedAt'> & { id?: string }) => snippets.save(value)))
   ipcMain.handle('snippets:delete', handler((_win, id: string) => snippets.delete(id)))
@@ -214,6 +252,9 @@ function registerIpc(): void {
 function createWindow(): void {
   const win = new BrowserWindow({ title: 'DB EX', width: 1440, height: 900, minWidth: 1040, minHeight: 640,
     backgroundColor: '#111821', show: false,
+    // On macOS retain AppKit's real traffic-light controls and extend web content
+    // into the old title bar. Other operating systems keep their native frames.
+    ...windowChromeOptions(process.platform),
     webPreferences: { preload: join(__dirname, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, spellcheck: false },
   })
   const contentsId = win.webContents.id

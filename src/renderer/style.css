@@ -63,11 +63,24 @@ code, pre, kbd { font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', mon
 ::-webkit-scrollbar-thumb { background: var(--border); border: 2px solid transparent; background-clip: padding-box; border-radius: 5px; }
 .desktop { display: flex; flex-direction: column; height: 100dvh; min-width: 900px; }
 .topbar { height: 58px; flex: none; display: flex; align-items: center; justify-content: space-between; padding: 0 18px; background: var(--panel); border-bottom: 1px solid var(--border); }
+/* macOS: native traffic lights overlay the existing app bar, not a second bar.
+   Reserve their physical left-side space even in an RTL locale. */
+:root[data-window-chrome='mac-native-controls'] .topbar {
+  position: relative; padding-left: 100px; direction: ltr;
+  -webkit-app-region: drag; app-region: drag; user-select: none;
+}
+:root[data-window-chrome='mac-native-controls'] .topbar::before {
+  content: ''; position: absolute; top: 0; bottom: 0; left: 0; width: 90px;
+  -webkit-app-region: no-drag; app-region: no-drag;
+}
+:root[data-window-chrome='mac-native-controls'] .top-actions,
+:root[data-window-chrome='mac-native-controls'] .topbar :is(button,input,select,textarea,a,[role='button'],[contenteditable='true'],[data-no-drag]) {
+  -webkit-app-region: no-drag; app-region: no-drag;
+}
 .brand, .top-actions { display: flex; align-items: center; gap: 13px; }
 .brand-symbol { width: 31px; height: 31px; display: grid; place-content: center; background: var(--accent-button); color: #fff; font-size: 23px; border-radius: 4px; }
 .brand strong { letter-spacing: 1px; font-size: 19px; }
 .brand-subtitle { color: var(--muted); font-size: 10px; letter-spacing: 1.6px; margin-left: 5px; }
-.top-hint { color: var(--muted); font-size: 11px; }
 .btn { border: 1px solid transparent; background: none; padding: 7px 12px; display: inline-flex; justify-content: center; align-items: center; gap: 7px; line-height: 1.35; white-space: nowrap; }
 .btn.primary { background: var(--accent-button); border-color: var(--accent-button); color: #fff; }
 .btn.primary:hover:not(:disabled) { filter: brightness(1.1); }
@@ -135,8 +148,8 @@ code, pre, kbd { font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', mon
 .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .content-pane { min-width: 0; flex: 1; display: flex; min-height: 0; }
 .workbench { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
-.workbench-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 18px 20px 13px; flex: none; }
-.workbench-header h2 { font-size: 18px; margin-top: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40vw; }
+.workbench-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px; flex: none; }
+.workbench-header h2 { font-size: 15px; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40vw; }
 .eyebrow { display: block; font-size: 9px; letter-spacing: 1.5px; color: var(--muted); line-height: 1.7; }
 .header-tools { display: flex; align-items: center; gap: 7px; }
 .transaction-badge { padding: 5px 7px; background: var(--panel-raised); color: var(--warning); font-size: 11px; white-space: nowrap; }
@@ -247,7 +260,7 @@ kbd { color: #ffffffb0; font-size: 9px; }
 .history-list pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; color: var(--muted); max-height: 100px; overflow: hidden; margin-bottom: 0; }
 .history-actions { display: flex; flex-direction: column; gap: 5px; }
 @media (max-width: 1150px) {
-  .brand-subtitle, .top-hint, .parameter-line > span { display: none; }
+  .brand-subtitle, .parameter-line > span { display: none; }
   .workbench-header { padding: 12px; }
   .workbench-tabs { padding: 0 4px; }
   .workbench-tabs > button { padding: 11px 9px; font-size: 12px; }
@@ -259,7 +272,6 @@ kbd { color: #ffffffb0; font-size: 9px; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; } }
 
 /* Keep language controls aligned with the existing toolbar inputs. */
-.language-select { height: 32px; max-width: 168px; padding: 4px 8px; font-size: 12px; }
 .connection-actions { flex-shrink: 0; }
 .workbench-tabs { overflow-x: auto; }
 .workbench-tabs > button { white-space: nowrap; }
@@ -270,7 +282,6 @@ kbd { color: #ffffffb0; font-size: 9px; }
 .subtabs { overflow-x: auto; }
 .subtabs > button, .workbench-tabs > button { flex-shrink: 0; }
 .dialog-footer { flex-wrap: wrap; }
-.top-actions .top-hint { max-width: 195px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Arabic mirrors the workspace. Code, numeric values and result columns stay LTR. */
 .connection-item { border-left: none; border-inline-start: 3px solid transparent; }
 .connection-actions { right: auto; inset-inline-end: 4px; }
@@ -602,3 +613,17 @@ html[dir=rtl] .tree-chevron:not(.expanded) { transform: rotate(180deg); }
 .pref-tab-icon {font-size:24px;line-height:26px;font-weight:500;}
 .preferences-backdrop {z-index:100;}
 .preferences-tabs button {min-width:77px;padding:7px 9px;}
+
+.db-icon.mariadb,.db-small-icon.mariadb {color:#c99a73;background:rgba(201,154,115,.13);}
+
+.object-workspace {display:flex;flex:1;flex-direction:column;min-width:0;min-height:0;overflow:hidden}
+.object-tabbar {display:flex;align-items:stretch;overflow-x:auto;overflow-y:hidden;background:var(--panel-raised);border-bottom:1px solid var(--border);height:35px;flex:none}
+.object-list-tab,.object-tab {flex:none;display:flex;align-items:center;min-width:0;border:0;border-radius:0;border-inline-end:1px solid var(--border);border-top:2px solid transparent;background:transparent;color:var(--muted)}
+.object-list-tab {padding:0 16px;font-size:12px;font-weight:600}
+.object-tab {max-width:260px}
+.object-tab-main {display:flex;align-items:center;gap:6px;background:none;border:0;color:inherit;border-radius:0;min-width:0;padding:0 9px;height:100%;font-size:12px;text-align:start}
+.object-tab .tab-close {width:24px;height:27px;margin-inline-end:3px;flex:none}
+.object-tab.active,.object-list-tab.active {background:var(--panel);color:var(--text);border-top-color:var(--accent)}
+.object-tab.has-color {border-top-color:var(--connection-color,var(--accent))}
+.object-tab .catalog-object-icon {color:var(--accent);font-size:15px;flex:none}
+.object-dirty {color:var(--warning)}

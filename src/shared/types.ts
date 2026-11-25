@@ -2,7 +2,7 @@ import type { BsonTypeBranch } from './bson-types'
 import type { BrowseFilter } from './browse-filter'
 import type { ObjectInspection } from './object-inspection'
 
-export type DatabaseKind = 'mysql' | 'mongodb' | 'redis' | 'sqlite'
+export type DatabaseKind = 'mysql' | 'mongodb' | 'redis' | 'sqlite' | 'mariadb'
 export type SqlValue = string | number | boolean | null
 export type SqlRow = Record<string, SqlValue>
 
@@ -85,6 +85,7 @@ export interface SessionInfo {
   name: string
   kind: DatabaseKind
   displayHost: string
+  serverVersion?: string
   writable: boolean
   transaction: boolean
 }
@@ -93,9 +94,14 @@ import type { MongoCategory } from './mongo-catalog'
 export interface ExplorerNode {
   id: string
   label: string
-  kind: 'database' | 'table' | 'collection' | 'keyspace' | 'view' | 'mongo-category' | 'mongo-function' | 'mongo-indexes' | 'gridfs-bucket' | 'database-query'
+  kind: 'database' | 'table' | 'collection' | 'keyspace' | 'view' | 'mongo-category' | 'mongo-function' | 'mongo-indexes' | 'gridfs-bucket' | 'database-query' | 'query-folder' | 'saved-query'
   category?: MongoCategory
+  queryId?:string
+  queryRevision?:string
+  queryMode?:import('./saved-query').QueryMode
   readOnly?: boolean
+  objectType?: 'sequence' | 'system-versioned'
+  metrics?: import('./object-inspection').ObjectMetric[]
   database?: string
   entity?: string
 }
@@ -128,6 +134,7 @@ export interface OperationResult extends DataPreview {
   transaction?: boolean
   disconnected?: boolean
   primaryKeys?: string[]
+  objectCapabilities?: import('./relational-capabilities').RelationalObjectCapabilities
 }
 interface Confirmed { confirmed?: boolean }
 interface Entity { database: string; entity: string }
@@ -168,6 +175,7 @@ export type DatabaseOperation = MysqlOperation | MongoOperation | RedisOperation
 export interface QuerySnippet {
   /** Optional fields keep existing encrypted history files compatible. */
   mongoKind?: 'query' | 'aggregation'
+  parameters?:string
   entity?: string
   connectionId?: string
   id: string
@@ -182,6 +190,7 @@ export interface FileImport { name: string; text: string; format: 'csv' | 'json'
 export interface SshImportResult { hosts: { name: string; ssh: SshOptions }[]; warnings: string[] }
 export type ConnectionFileKind = 'certificate' | 'private-key' | 'sqlite' | 'sqlite-create'
 export interface DbExAPI {
+  readonly windowChrome:import('./window-chrome').WindowChrome
   getNativePreferences():Promise<import('./preferences').NativePreferences>
   saveNativePreferences(value:import('./preferences').NativePreferences):Promise<import('./preferences').NativePreferences>
   pickTool(name:import('./preferences').ToolName):Promise<string|null>
@@ -209,7 +218,7 @@ export interface DbExAPI {
   testConnection(config: ConnectionConfig, clearSecrets?: string[]): Promise<string>
   disconnect(sessionId: string): Promise<void>
   roots(sessionId: string): Promise<ExplorerNode[]>
-  children(sessionId: string, database: string, category?: MongoCategory): Promise<ExplorerNode[]>
+  children(sessionId: string, database: string, category?: MongoCategory, withStatistics?:boolean): Promise<ExplorerNode[]>
   preview(sessionId: string, database: string, entity: string, offset?: number): Promise<DataPreview>
   redisKeys(sessionId: string, cursor?: string, pattern?: string): Promise<DataPreview>
   redisValue(sessionId: string, key: string): Promise<DataPreview>
@@ -218,6 +227,13 @@ export interface DbExAPI {
   copyText(value: string): Promise<void>
   cancel(sessionId: string): Promise<void>
   setWriteAccess(sessionId: string, enabled: boolean): Promise<SessionInfo>
+  listSavedQueries(sessionId:string,database:string,mode:import('./saved-query').QueryMode):Promise<import('./saved-query').QuerySummary[]>
+  getSavedQuery(sessionId:string,database:string,id:string):Promise<import('./saved-query').SavedQuery>
+  saveQueryObject(sessionId:string,database:string,input:import('./saved-query').QuerySave):Promise<import('./saved-query').SavedQuery>
+  copySavedQuery(sessionId:string,database:string,id:string):Promise<import('./saved-query').SavedQuery>
+  deleteSavedQuery(sessionId:string,database:string,id:string,revision:string):Promise<void>
+  importSavedQuery(sessionId:string,database:string,mode:import('./saved-query').QueryMode):Promise<import('./saved-query').SavedQuery|null>
+  exportSavedQuery(sessionId:string,database:string,id:string,format:'json'|'sql'):Promise<boolean>
   listSnippets(): Promise<QuerySnippet[]>
   saveSnippet(snippet: Omit<QuerySnippet, 'id' | 'updatedAt'> & { id?: string }): Promise<QuerySnippet>
   deleteSnippet(id: string): Promise<void>

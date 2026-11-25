@@ -77,7 +77,7 @@ async function chooseFile(){
 async function submit(){
  if(!canSubmit.value)return
  await action(async()=>{
-   const kind=mongo.value?'mongodb':'mysql'
+   const kind=mongo.value?'mongodb':props.session.kind==='mariadb'?'mariadb':'mysql'
    const database=props.database
    if(props.mode==='create'){
      const db=validateDatabaseName(kind,name.value)

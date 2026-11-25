@@ -7,7 +7,7 @@ import type { SessionInfo, QuerySnippet, MongoOperation, OperationResult, Explor
 import CodeEditor from './CodeEditor.vue'
 import ResultGrid from './ResultGrid.vue'
 const props=defineProps<{session:SessionInfo;database:string;kind:'query'|'aggregation';busy:boolean;run:(op:MongoOperation)=>Promise<OperationResult>}>()
-const emit=defineEmits<{disconnect:[]}>()
+const emit=defineEmits<{disconnect:[];busyChange:[busy:boolean]}>()
 const entries=ref<QuerySnippet[]>([]), targets=ref<ExplorerNode[]>([])
 const selected=ref(''), name=ref(''), entity=ref('')
 const filter=ref('{}'),projection=ref('{}'),sort=ref('{}'),pipeline=ref('[\n  { "$limit": 100 }\n]')
@@ -16,6 +16,7 @@ const loading=ref(false),error=ref(''),notice=ref('')
 let disposed=false
 const applied=ref<Extract<MongoOperation,{action:'mongo.find'}>>()
 const busyAll=computed(()=>props.busy||loading.value)
+watch(busyAll,value=>emit('busyChange',value),{flush:'sync'})
 const saved=computed(()=>entries.value.filter(item=>item.kind==='mongodb' && item.database===props.database && item.favorite && (item.mongoKind||'aggregation')===props.kind && (!item.connectionId||item.connectionId===props.session.connectionId)))
 function fail(reason:unknown){error.value=reason instanceof Error?reason.message:String(reason)}
 async function refresh(){
@@ -108,7 +109,7 @@ onBeforeUnmount(()=>{disposed=true})
 </script>
 <template>
   <section class="workbench mongo-library">
-    <header class="workbench-header"><div><span class="eyebrow">MongoDB · {{ database }}</span><h2>{{ t(kind==='query'?'查询':'聚合管道') }}</h2></div><span class="muted-text">{{ t('只读对象') }}</span></header>
+    <header class="workbench-header"><div><h2>{{ t(kind==='query'?'查询':'聚合管道') }}</h2></div><span class="muted-text">{{ t('只读对象') }}</span></header>
     <div class="editor-toolbar"><button class="btn secondary small" type="button" :disabled="busyAll" @click="reset">{{ t('新增') }}</button><button class="btn secondary small" type="button" :disabled="busyAll" @click="refresh">{{ t('刷新') }}</button><button class="btn secondary small" type="button" :disabled="busyAll||!entity" @click="save">{{ t('保存') }}</button><button class="btn danger-text small" type="button" :disabled="busyAll||!selected" @click="remove">{{ t('删除') }}</button><span class="toolbar-spacer"></span><button class="btn primary" type="button" :disabled="busyAll||!entity" @click="runQuery()">{{ t(kind==='query'?'查询':'运行 Aggregation') }}</button><button v-if="busy" class="btn secondary small" @click="emit('disconnect')">{{ t('取消并断开') }}</button></div>
     <div v-if="error" class="inline-message error" role="alert">{{ localize(error) }}</div>
     <div v-if="notice" class="inline-message notice" role="status">{{ t(notice) }}</div>

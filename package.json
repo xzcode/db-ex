@@ -1,9 +1,9 @@
 {
   "name": "db-ex",
-  "version": "0.5.7",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
-  "description": "DB EX — local-first database explorer for MySQL, MongoDB, Redis and SQLite",
+  "description": "DB EX — local-first database explorer for MySQL, MariaDB, MongoDB, Redis and SQLite",
   "main": "dist-electron/main.cjs",
   "scripts": {
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && npm run build:main && npm run build:preload && electron . --dev\"",

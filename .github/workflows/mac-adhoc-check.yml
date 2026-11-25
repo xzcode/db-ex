@@ -7,6 +7,12 @@ on:
       - 'build/entitlements.mac.plist'
       - 'scripts/generate-icons.mjs'
       - 'scripts/verify-mac-package.sh'
+      - 'scripts/smoke-electron.mjs'
+      - 'src/main/index.ts'
+      - 'src/preload/index.ts'
+      - 'src/shared/window-chrome.ts'
+      - 'src/renderer/main.ts'
+      - 'src/renderer/style.css'
       - 'assets/db-ex-icon.svg'
       - '.github/workflows/mac-adhoc-check.yml'
   workflow_dispatch:

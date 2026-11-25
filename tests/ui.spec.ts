@@ -27,6 +27,7 @@ async function installBridge(page: Page) {
     const grid = (values: Record<string, string>[]) => ({ columns: Object.keys(values[0] || {}), rows: values })
     ;(window as any).__dbexCalls = calls
     ;(window as any).dbex = {
+      windowChrome:localStorage.getItem('mock.window-chrome')==='mac-native-controls'?'mac-native-controls':'native',
       async getNativePreferences(){return JSON.parse(localStorage.getItem('mock.native-preferences')||'{"tools":{},"diagnostics":false}')},
       async saveNativePreferences(value:any){localStorage.setItem('mock.native-preferences',JSON.stringify(value));return value},
       async logPath(){return '/mock/logs'},async openLogs(){calls.push({action:'openLogs'})},
@@ -52,7 +53,7 @@ async function installBridge(page: Page) {
       async children(id: string, database: string, category?: string) {
         if(id!=='mongo')return [{ id: database + '-users', label: 'users', database, entity: 'users', kind: 'table' }]
         if(!category)return [['collections','集合'],['views','视图'],['functions','函数'],['indexes','索引'],['mapReduce','MapReduce'],['pipelines','聚合管道'],['gridfs','GridFS 存储桶'],['queries','查询']].map(([key,label])=>({id:database+'-'+key,label,database,kind:'mongo-category',category:key}))
-        if(category==='collections')return [{id:database+'-users',label:'users',database,entity:'users',kind:'collection'}]
+        if(category==='collections')return [{id:database+'-users',label:'users',database,entity:'users',kind:'collection',metrics:[{label:'文档数',value:'10'},{label:'数据大小',value:'2048',format:'bytes'}]},...((window as any).__dbexCatalogFixture?[{id:database+'-audit',label:'audit',database,entity:'audit',kind:'collection',metrics:[{label:'文档数',value:'2'},{label:'数据大小',value:'100',format:'bytes'}]}]:[])]
         if(category==='views')return [{id:database+'-users-view',label:'users_view',database,entity:'users_view',kind:'view',readOnly:true}]
         if(category==='indexes')return [{id:database+'-users-indexes',label:'users',database,entity:'users',kind:'mongo-indexes'}]
         if(category==='gridfs')return [{id:database+'-fs',label:'fs',database,entity:'fs.files',kind:'gridfs-bucket',readOnly:true}]
@@ -87,6 +88,36 @@ async function installBridge(page: Page) {
       async copyText(value: string) { calls.push({ action: 'copyText', value }) },
       async validateMongoDocument(document: string, original?: string) { calls.push({ action: 'validateMongoDocument', document, original }) },
       async setWriteAccess(id: string, writable: boolean) { sessions[id] = { ...sessions[id], writable }; calls.push({ action: 'writeAccess', id, writable }); return sessions[id] },
+      async listSavedQueries(id:string,database:string,mode:string) {
+        return JSON.parse(localStorage.getItem('mock.query-objects')||'[]').filter((x:any)=>x.connectionId===id&&x.database===database&&x.mode===mode).map((x:any)=>({...x,bytes:new TextEncoder().encode(x.text+(x.parameters||'')).length}))
+      },
+      async getSavedQuery(id:string,database:string,queryId:string){
+        const item=JSON.parse(localStorage.getItem('mock.query-objects')||'[]').find((x:any)=>x.id===queryId&&x.connectionId===id&&x.database===database)
+        if(!item)throw new Error('missing query');return item
+      },
+      async saveQueryObject(id:string,database:string,input:any){
+        const all=JSON.parse(localStorage.getItem('mock.query-objects')||'[]')
+        const old=all.find((x:any)=>x.id===input.id&&x.connectionId===id&&x.database===database)
+        if(input.id&&(!old||old.revision!==input.revision))throw new Error('stale query')
+        const now=new Date().toISOString(),item={...input.draft,id:old?.id||crypto.randomUUID(),connectionId:id,kind:sessions[id].kind,database,createdAt:old?.createdAt||now,updatedAt:now,revision:crypto.randomUUID()}
+        localStorage.setItem('mock.query-objects',JSON.stringify([item,...all.filter((x:any)=>x.id!==item.id)]))
+        calls.push({action:'saveQueryObject',item});return item
+      },
+      async copySavedQuery(id:string,database:string,queryId:string){
+        const item=await (window as any).dbex.getSavedQuery(id,database,queryId)
+        const {name,mode,text,parameters,entity}=item
+        return (window as any).dbex.saveQueryObject(id,database,{draft:{name:name+' (2)',mode,text,parameters,entity}})
+      },
+      async deleteSavedQuery(id:string,database:string,queryId:string,revision:string){
+        const item=await (window as any).dbex.getSavedQuery(id,database,queryId)
+        if(item.revision!==revision)throw new Error('stale query')
+        const all=JSON.parse(localStorage.getItem('mock.query-objects')||'[]')
+        localStorage.setItem('mock.query-objects',JSON.stringify(all.filter((x:any)=>x.id!==queryId)))
+      },
+      async importSavedQuery(id:string,database:string,mode:string){
+        return (window as any).dbex.saveQueryObject(id,database,{draft:{name:'Imported query',mode,text:mode==='sql'?'SELECT ?':mode==='mongo-find'?JSON.stringify({filter:'{}',projection:'{}',sort:'{}'}):'[]',parameters:'[42]'}})
+      },
+      async exportSavedQuery(id:string,database:string,queryId:string,format:string){const item=await (window as any).dbex.getSavedQuery(id,database,queryId);calls.push({action:'exportSavedQuery',item,format});return true},
       async listSnippets() { return [...savedObjects] }, async saveSnippet(value: any) { const item={...value,id:value.id||String(savedObjects.length+1),updatedAt:new Date().toISOString()}; const index=savedObjects.findIndex(x=>x.id===item.id); if(index>=0)savedObjects[index]=item;else savedObjects.push(item);return item }, async deleteSnippet(id:string) { const index=savedObjects.findIndex(x=>x.id===id);if(index>=0)savedObjects.splice(index,1) },
       async importFile() { return { name: 'data.csv', format: 'csv', text: 'name,email\nEve,eve@example.test' } }, async exportFile(name: string, content: string, format: string) { calls.push({ action: 'export', name, content, format }); return true },
       async importConnections() { calls.push({ action: 'importConnections' }); return 2 }, async exportConnections(id?: string) { calls.push({ action: 'exportConnections', id }); return true },
@@ -154,7 +185,7 @@ test('MySQL query, guarded row edits, transactions, and CSV import use the typed
   await expect.poll(() => page.evaluate(() => (window as any).__dbexCalls.some((call: any) => call.action === 'mysql.query' && call.parameters?.[0] === 42))).toBe(true)
   await page.getByRole('button', { name: '只读 · 启用写入', exact: true }).click()
   await page.getByRole('button', { name: '开始事务', exact: true }).click()
-  await expect(page.getByText('事务进行中', { exact: true })).toBeVisible()
+  await expect(page.locator('.workbench:visible').getByText('事务进行中', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: '回滚', exact: true }).click()
   await page.getByRole('button', { name: '数据', exact: true }).click()
   await page.locator('.workbench:visible .data-table tbody tr').first().click()
@@ -329,8 +360,22 @@ test('connection backups export one or all profiles and import without a key pro
 })
 
 
+async function openLanguageSettings(page:Page,label:string){
+  await page.locator('.preferences-button').click()
+  const dialog=page.locator('.preferences-dialog')
+  const select=dialog.getByRole('combobox',{name:label,exact:true})
+  await expect(select).toBeVisible()
+  return {dialog,select}
+}
+async function chooseLanguage(page:Page,label:string,language:string,expected:string){
+  const {dialog,select}=await openLanguageSettings(page,label)
+  await select.selectOption(language)
+  await dialog.locator('[data-action="save-preferences"]').click()
+  await expect(dialog).toHaveCount(0)
+  await expect(page.locator('html')).toHaveAttribute('lang',expected)
+}
 test('English interface can switch live, persists and preserves connection identity', async ({ page }) => {
-  await page.getByRole('combobox', { name: '语言', exact: true }).selectOption('en')
+  await chooseLanguage(page,'语言','en','en')
   await expect(page.getByRole('button', { name: '+ New connection', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Import connections', exact: true })).toBeVisible()
   await expect(page.locator('.connection-item').filter({ hasText: 'MySQL Local' })).toBeVisible()
@@ -344,10 +389,10 @@ test('English interface can switch live, persists and preserves connection ident
   await expect(page.getByLabel('Enable SSH tunnel')).toBeVisible()
   await page.getByRole('button', { name: 'Close dialog' }).click()
   await page.reload()
-  await expect(page.getByRole('combobox', { name: 'Language', exact: true })).toHaveValue('en')
+  {const {dialog,select}=await openLanguageSettings(page,'Language');await expect(select).toHaveValue('en');await dialog.getByRole('button',{name:'Cancel',exact:true}).click()}
   await page.locator('.connection-item').filter({ hasText: 'MySQL Local' }).getByTitle('Connect', { exact: true }).click()
   await expect(page.getByRole('button', { name: 'SQL editor', exact: true })).toBeVisible()
-  await page.getByRole('combobox', { name: 'Language', exact: true }).selectOption('zh-CN')
+  await chooseLanguage(page,'Language','zh-CN','zh-CN')
   await expect(page.getByRole('button', { name: 'SQL 编辑器', exact: true })).toBeVisible()
 })
 
@@ -355,26 +400,24 @@ test('English interface can switch live, persists and preserves connection ident
 test.describe('system language default', () => {
   test.use({ locale: 'de-DE' })
   test('first launch follows system; selecting a language overrides it, system resets it', async ({ page }) => {
-    await expect(page.getByRole('combobox', { name: 'Sprache', exact: true })).toHaveValue('system')
-    await expect(page.getByRole('button', { name: '+ Neue Verbindung', exact: true })).toBeVisible()
+    const {dialog,select}=await openLanguageSettings(page,'Sprache');await expect(select).toHaveValue('system')
     await expect(page.locator('html')).toHaveAttribute('lang', 'de')
-    await page.getByRole('combobox', { name: 'Sprache', exact: true }).selectOption('ja')
+    await select.selectOption('ja');await dialog.locator('[data-action="save-preferences"]').click();await expect(dialog).toHaveCount(0)
     await expect(page.getByRole('button', { name: '＋ 新規接続', exact: true })).toBeVisible()
     await page.reload()
-    await expect(page.getByRole('combobox', { name: '言語', exact: true })).toHaveValue('ja')
-    await page.getByRole('combobox', { name: '言語', exact: true }).selectOption('system')
+    {const reopened=await openLanguageSettings(page,'言語');await expect(reopened.select).toHaveValue('ja');await reopened.select.selectOption('system');await reopened.dialog.locator('[data-action="save-preferences"]').click();await expect(reopened.dialog).toHaveCount(0)}
     await expect(page.getByRole('button', { name: '+ Neue Verbindung', exact: true })).toBeVisible()
   })
 })
 test('Arabic direction and all 14 language options are available', async ({ page }) => {
-  const select = page.getByRole('combobox', { name: '语言', exact: true })
+  const {dialog,select}=await openLanguageSettings(page,'语言')
   await expect(select.locator('option')).toHaveCount(15)
-  await select.selectOption('ar')
+  await select.selectOption('ar');await dialog.locator('[data-action="save-preferences"]').click();await expect(dialog).toHaveCount(0)
   await expect(page.locator('html')).toHaveAttribute('lang', 'ar')
   await expect(page.locator('html')).toHaveAttribute('dir', 'rtl')
   await expect(page.getByRole('button', { name: '+ اتصال جديد', exact: true })).toBeVisible()
   await expect(page.locator('.connection-item').filter({ hasText: 'MySQL Local' })).toBeVisible()
-  await page.getByRole('combobox', { name: 'اللغة', exact: true }).selectOption('zh-TW')
+  await chooseLanguage(page,'اللغة','zh-TW','zh-TW')
   await expect(page.locator('html')).toHaveAttribute('dir', 'ltr')
   await expect(page.getByRole('button', { name: '＋ 新建連線', exact: true })).toBeVisible()
 })
@@ -470,7 +513,7 @@ test('connection settings use optional custom groups and colors, not fixed envir
   })).toEqual({ environment: false, group: 'Project A / Region 100', color: '#4b88d9' })
   await expect(page.locator('.env-tag')).toHaveCount(0)
   await connect(page, 'MySQL Local')
-  await expect(page.locator('.workbench:visible .workbench-header .eyebrow')).toHaveText('MYSQL')
+  await expect(page.locator('.workbench:visible .workbench-header .eyebrow')).toHaveCount(0)
 })
 
 test('MongoDB row and cell menu copies exact values, prepares duplicate and field drafts, and filters by value', async ({ page }) => {
@@ -685,6 +728,8 @@ test('MongoDB classified explorer and saved query library',async({page})=>{
   await page.locator('[data-object-kind="gridfs-bucket"]').click()
   await expect(page.locator('.workbench:visible')).toContainText('GridFS 文件元数据浏览')
   await page.locator('[data-object-category="queries"]').click()
+  const catalog=page.locator('.object-list-panel:visible')
+  await catalog.getByRole('button',{name:/新建查询/}).click()
   const library=page.locator('.mongo-library:visible')
   await library.getByLabel('目标集合或视图',{exact:true}).selectOption('users')
   await library.getByLabel('名称',{exact:true}).fill('My saved query')
@@ -694,6 +739,7 @@ test('MongoDB classified explorer and saved query library',async({page})=>{
   await library.getByRole('button',{name:'查询',exact:true}).click()
   await expect(library.locator('.data-table')).toContainText('Ada')
   await page.locator('[data-object-category="pipelines"]').click()
+  await catalog.getByRole('button',{name:/新建查询/}).click()
   await library.getByLabel('目标集合或视图',{exact:true}).selectOption('users')
   await library.getByLabel('名称',{exact:true}).fill('My pipeline')
   await library.getByRole('button',{name:'保存',exact:true}).click()
@@ -701,8 +747,8 @@ test('MongoDB classified explorer and saved query library',async({page})=>{
   await library.getByRole('button',{name:'运行 Aggregation',exact:true}).click()
   await expect(library.locator('.data-table')).toContainText('Ada')
   await page.locator('[data-object-category="queries"]').click()
-  await expect(library.getByLabel('已保存对象').locator('option')).toHaveText(['未选择对象','My saved query'])
-  await library.getByLabel('已保存对象').selectOption({label:'My saved query'})
+  await expect(catalog.locator('tbody')).toContainText('My saved query')
+  await catalog.locator('tbody tr').filter({hasText:'My saved query'}).dblclick()
   await expect(library.getByLabel('Filter',{exact:true})).toHaveValue('{"score":{"$numberInt":"7"}}')
   await page.locator('[data-object-category="mapReduce"]').click()
   await expect(page.locator('.workbench:visible')).toContainText('MapReduce 已弃用')
@@ -814,4 +860,196 @@ test('saved record draft restores as an editor only after explicit write access'
  expect(await page.evaluate(()=> (window as any).__dbexCalls.filter((call:any)=>call.action==='mysql.insert'||call.action==='mysql.update'))).toEqual([])
  await page.getByRole('dialog').getByRole('button',{name:'取消',exact:true}).click()
  await expect.poll(()=>page.evaluate(()=>Object.keys(JSON.parse(localStorage.getItem('mock.recovery')||'{}')).length)).toBe(0)
+})
+
+test('MariaDB has its own connection form, persisted settings and backup tools',async({page})=>{
+ await page.getByRole('button',{name:'＋ 新建连接',exact:true}).click()
+ await page.getByRole('button',{name:'MariaDB',exact:true}).click()
+ await expect(page.getByLabel('端口',{exact:true})).toHaveValue('3306')
+ await expect(page.getByLabel('用户名',{exact:true})).toHaveValue('root')
+ await page.getByRole('button',{name:'测试连接',exact:true}).click()
+ await expect(page.getByRole('status').filter({hasText:'连接成功'})).toBeVisible()
+ expect(await page.evaluate(()=> (window as any).__dbexCalls.find((c:any)=>c.action==='testConnection')?.config.kind)).toBe('mariadb')
+ await page.getByRole('button',{name:'取消',exact:true}).click()
+ await page.getByRole('button',{name:'偏好设置',exact:true}).click()
+ const dialog=page.getByRole('dialog',{name:'偏好设置'})
+ await dialog.getByRole('button',{name:'记录',exact:true}).click()
+ await dialog.getByLabel('MariaDB',{exact:true}).selectOption('500')
+ await dialog.getByRole('button',{name:'外部工具',exact:true}).click()
+ await expect(dialog.getByLabel('mariadb-dump',{exact:true})).toBeVisible()
+ await dialog.getByRole('button',{name:'确认',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=>JSON.parse(localStorage.getItem('dbex.preferences.v1')||'{}').records?.mariadbPageSize)).toBe(500)
+})
+
+
+test('top toolbar contains settings only; language, theme and connection creation are centralized',async({page})=>{
+ const toolbar=page.locator('.top-actions')
+ await expect(toolbar.locator(':scope > *')).toHaveCount(1)
+ await expect(toolbar.getByRole('button',{name:'偏好设置',exact:true})).toBeVisible()
+ await expect(toolbar.locator('select')).toHaveCount(0)
+ await toolbar.getByRole('button',{name:'偏好设置',exact:true}).click()
+ const dialog=page.getByRole('dialog',{name:'偏好设置'})
+ const language=dialog.locator('[data-preference="language"]')
+ const theme=dialog.locator('[data-preference="theme"]')
+ await expect(language.locator('option')).toHaveCount(15)
+ await language.selectOption('en')
+ await theme.selectOption('light')
+ // Opening the existing connection form neither saves nor drops the settings draft.
+ await dialog.locator('[data-action="create-connection"]').click()
+ await expect(dialog).not.toBeVisible()
+ await expect(page.getByRole('heading',{name:'选择数据库类型'})).toBeVisible()
+ await page.getByRole('button',{name:'取消',exact:true}).click()
+ await expect(dialog).toBeVisible()
+ await expect(language).toHaveValue('en')
+ await expect(theme).toHaveValue('light')
+ await expect(page.locator('html')).toHaveAttribute('lang','zh-CN')
+ await dialog.locator('[data-action="save-preferences"]').click()
+ await expect(page.locator('html')).toHaveAttribute('lang','en')
+ await expect(page.locator('html')).toHaveAttribute('data-theme','light')
+ await page.reload()
+ await expect(page.locator('html')).toHaveAttribute('lang','en')
+ await expect(page.locator('html')).toHaveAttribute('data-theme','light')
+ await page.locator('.preferences-button').click()
+ await expect(page.locator('.preferences-dialog [data-preference="language"]')).toHaveValue('en')
+ await expect(page.locator('.preferences-dialog [data-preference="theme"]')).toHaveValue('light')
+})
+
+
+test('object catalog supports numeric column sorting, independent object tabs and query tabs',async({page})=>{
+ await page.evaluate(()=>{(window as any).__dbexCatalogFixture=true})
+ await connect(page,'Mongo Local')
+ await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ await page.locator('[data-object-category="collections"]').click()
+ const list=page.locator('.object-list-panel:visible')
+ await expect(list.locator('tbody tr').first()).toContainText('audit')
+ await list.getByRole('button',{name:'文档数'}).click()
+ await expect(list.locator('tbody tr').first()).toContainText('audit')
+ await list.getByRole('button',{name:'文档数'}).click()
+ await expect(list.locator('tbody tr').first()).toContainText('users')
+ await list.locator('tbody tr').filter({hasText:'users'}).dblclick()
+ await expect(page.locator('.workbench:visible .data-table')).toContainText('Ada')
+ await page.getByRole('button',{name:'查询条件',exact:true}).click()
+ const tabs=page.locator('.object-tabbar:visible')
+ await tabs.getByRole('button',{name:'对象',exact:true}).click()
+ await list.locator('tbody tr').filter({hasText:'audit'}).dblclick()
+ await expect(page.locator('.workbench:visible .workbench-header h2')).toHaveText('audit')
+ await expect(tabs.locator('.object-tab')).toHaveCount(2)
+ await tabs.locator('.object-tab-main').filter({hasText:'users@app'}).click()
+ await expect(page.locator('.workbench:visible .browse-filter-panel')).toBeVisible()
+ await expect(page.locator('.workbench:visible .workbench-header .eyebrow')).toHaveCount(0)
+ await tabs.getByRole('button',{name:'对象',exact:true}).click()
+ await list.getByRole('button',{name:/新建查询/}).click()
+ await expect(page.locator('.mongo-library:visible')).toBeVisible()
+ await expect(tabs.locator('.object-tab')).toHaveCount(3)
+ await tabs.getByRole('button',{name:'关闭 audit',exact:true}).click()
+ await expect(tabs.locator('.object-tab')).toHaveCount(2)
+})
+
+test('column menu sorts the complete database query, retains filters and supports a filter draft',async({page})=>{
+ await connect(page,'Mongo Local');await openUsers(page)
+ await page.getByRole('button',{name:'查询条件',exact:true}).click()
+ await page.getByRole('button',{name:'文本',exact:true}).click()
+ const panel=page.locator('.workbench:visible .browse-filter-panel')
+ await panel.locator('textarea').nth(0).fill('{"score":{"$gte":7}}')
+ await panel.locator('textarea').nth(1).fill('{"_id":1,"name":1}')
+ await panel.getByRole('button',{name:'查询',exact:true}).click()
+ const grid=page.locator('.workbench:visible .data-table')
+ await grid.getByRole('button',{name:'列操作: _id',exact:true}).click()
+ await page.getByRole('menuitem',{name:'降序排序',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((c:any)=>c.action==='mongo.find').at(-1))).toMatchObject({filter:'{"score":{"$gte":7}}',projection:'{"_id":1,"name":1}',sort:'{"_id":-1}',offset:0})
+ await grid.getByRole('button',{name:'列操作: name',exact:true}).click()
+ await page.getByRole('menuitem',{name:'升序排序',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((c:any)=>c.action==='mongo.find').at(-1)?.sort)).toBe('{"_id":-1,"name":1}')
+ await grid.getByRole('button',{name:'列操作: name',exact:true}).click()
+ await page.getByRole('menuitem',{name:'移除所有排序',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((c:any)=>c.action==='mongo.find').at(-1))).toMatchObject({filter:'{"score":{"$gte":7}}',projection:'{"_id":1,"name":1}',sort:'{}'})
+ const count=await page.evaluate(()=> (window as any).__dbexCalls.filter((c:any)=>c.action==='mongo.find').length)
+ await grid.getByRole('button',{name:'列操作: name',exact:true}).click()
+ await page.getByRole('menuitem',{name:'添加筛选',exact:true}).click()
+ await expect(panel.locator('textarea').nth(0)).toHaveValue('{"$and":[{"score":{"$gte":7}},{"name":{"$eq":""}}]}')
+ expect(await page.evaluate(()=> (window as any).__dbexCalls.filter((c:any)=>c.action==='mongo.find').length)).toBe(count)
+})
+
+
+test('named SQL query objects persist parameters, multiple editor tabs and catalog actions',async({page})=>{
+ await connect(page,'MySQL Local')
+ await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ await page.locator('[data-object-kind="query-folder"]').click()
+ const catalog=page.locator('.object-list-panel:visible')
+ await catalog.getByRole('button',{name:/新建查询/}).click()
+ const editor=page.locator('.saved-query-editor:visible')
+ await editor.getByLabel('名称',{exact:true}).fill('Find users')
+ await replaceEditor(page,'.saved-query-editor:visible .query-editor .monaco-editor','SELECT * FROM users WHERE id = ?')
+ await editor.getByLabel('SQL 参数 JSON 数组').fill('["9223372036854775807"]')
+ await editor.getByLabel('SQL 参数 JSON 数组').press('ControlOrMeta+s')
+ await expect(editor.getByRole('status')).toHaveText('保存成功')
+ await editor.getByRole('button',{name:'运行选中 / 全部',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((c:any)=>c.action==='mysql.query').at(-1))).toMatchObject({sql:'SELECT * FROM users WHERE id = ?',parameters:['9223372036854775807'],database:'app'})
+ const tabs=page.locator('.object-tabbar:visible')
+ await tabs.getByRole('button',{name:'对象',exact:true}).click()
+ await expect(catalog.locator('tbody')).toContainText('Find users')
+ await catalog.getByRole('button',{name:/新建查询/}).click()
+ await editor.getByLabel('名称',{exact:true}).fill('Second query')
+ await editor.getByRole('button',{name:'保存',exact:true}).click()
+ await expect(editor.getByRole('status')).toHaveText('保存成功')
+ await expect(tabs.locator('.object-tab')).toHaveCount(2)
+ await tabs.getByRole('button',{name:'对象',exact:true}).click()
+ await catalog.locator('tbody tr').filter({hasText:'Find users'}).click()
+ await catalog.getByRole('button',{name:'复制',exact:true}).click()
+ await expect(catalog.locator('tbody')).toContainText('Find users (2)')
+ await catalog.locator('tbody tr').filter({hasText:'Find users (2)'}).click()
+ await catalog.getByRole('button',{name:'重命名',exact:true}).click()
+ const rename=page.getByRole('dialog',{name:'重命名'})
+ await rename.getByLabel('名称',{exact:true}).fill('Renamed copy')
+ await rename.getByRole('button',{name:'确认',exact:true}).click()
+ await expect(catalog.locator('tbody')).toContainText('Renamed copy')
+ await catalog.locator('tbody tr').filter({hasText:'Renamed copy'}).click()
+ await catalog.getByRole('button',{name:'导出查询',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((c:any)=>c.action==='exportSavedQuery').at(-1)?.item.parameters)).toBe('["9223372036854775807"]')
+ await catalog.getByRole('button',{name:'删除',exact:true}).click()
+ await expect(catalog.locator('tbody')).not.toContainText('Renamed copy')
+ await catalog.getByRole('button',{name:'导入查询',exact:true}).click()
+ await expect(catalog.locator('tbody')).toContainText('Imported query')
+ await page.reload()
+ await connect(page,'MySQL Local')
+ await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ await page.locator('[data-object-kind="query-folder"]').click()
+ await catalog.locator('tbody tr').filter({hasText:'Find users'}).dblclick()
+ await expect(editor.getByLabel('SQL 参数 JSON 数组')).toHaveValue('["9223372036854775807"]')
+ await expect(editor.locator('.view-lines')).toContainText('SELECT')
+ expect(await page.evaluate(()=> (window as any).__dbexCalls.filter((c:any)=>c.action==='mysql.query').length)).toBe(0)
+})
+
+
+test('macOS integrated title bar reserves native controls and keeps preferences clickable',async({page})=>{
+ const root=page.locator('html'),bar=page.locator('.topbar'),settings=bar.getByRole('button',{name:'偏好设置',exact:true})
+ await expect(root).toHaveAttribute('data-window-chrome','native')
+ await expect(bar).toHaveCSS('padding-left','18px')
+ await page.evaluate(()=>localStorage.setItem('mock.window-chrome','mac-native-controls'))
+ await page.reload()
+ await expect(root).toHaveAttribute('data-window-chrome','mac-native-controls')
+ await expect(bar).toHaveCSS('padding-left','100px')
+ const regions=await bar.evaluate(el=>{
+   const css=(node:Element,pseudo?:string)=>{const style=getComputedStyle(node,pseudo);return style.getPropertyValue('app-region')||style.getPropertyValue('-webkit-app-region')}
+   return {bar:css(el),controls:css(el,'::before'),settings:css(el.querySelector('.preferences-button')!)}
+ })
+ expect(regions).toEqual({bar:'drag',controls:'no-drag',settings:'no-drag'})
+ await expect(bar.locator('.top-actions > *')).toHaveCount(1)
+ const layout=await bar.evaluate(el=>({brand:el.querySelector('.brand')!.getBoundingClientRect().left,bar:el.getBoundingClientRect().left}))
+ expect(layout.brand-layout.bar).toBeGreaterThanOrEqual(100)
+ await settings.click()
+ const prefs=page.getByRole('dialog',{name:'偏好设置'})
+ await prefs.locator('[data-preference="theme"]').selectOption('light')
+ await prefs.locator('[data-action="save-preferences"]').click()
+ await expect(root).toHaveAttribute('data-theme','light')
+ await expect(bar).toHaveCSS('background-color','rgb(255, 255, 255)')
+ await settings.click()
+ await prefs.locator('[data-preference="theme"]').selectOption('dark')
+ await prefs.locator('[data-action="save-preferences"]').click()
+ await expect(bar).toHaveCSS('background-color','rgb(29, 34, 43)')
+ // Physical left reservation must remain valid when locale direction is RTL.
+ await page.evaluate(()=>document.documentElement.dir='rtl')
+ await expect(bar).toHaveCSS('direction','ltr')
+ await settings.click()
+ await expect(prefs).toBeVisible()
 })

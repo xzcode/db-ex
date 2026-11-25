@@ -9,7 +9,8 @@ import { bsonTypes,bsonLabel,isBsonType } from '../../shared/bson-types'
 import { normalizeBsonPalette,newBsonPalette,typeColor } from '../../shared/bson-palette'
 import { databaseTypes,normalizeDatabasePalette,newDatabasePalette,databaseTypeColor,type DatabasePalette } from '../../shared/database-palette'
 import ConnectionColorPicker from './ConnectionColorPicker.vue'
-const emit=defineEmits<{close:[]}>()
+defineProps<{connectionBusy?:boolean}>()
+const emit=defineEmits<{close:[];createConnection:[]}>()
 const tabs=[['general','常规','⚙'],['tabs','选项卡','▣'],['completion','代码补全','⌨'],['editor','编辑器','✎'],['records','记录','▦'],['colors','数据类型配色','◉'],['recovery','自动恢复','↶'],['tools','外部工具','ENV'],['advanced','高级','⚒']] as const
 type Tab=typeof tabs[number][0]
 const tab=ref<Tab>('general')
@@ -18,10 +19,10 @@ const native=ref<NativePreferences>({tools:{},diagnostics:false})
 const status=ref<Partial<Record<ToolName,boolean>>>({})
 const versions=ref<Partial<Record<ToolName,string>>>({})
 const busy=ref(false), ready=ref(false),error=ref(''),notice=ref(''),logPath=ref('')
-const paletteKind=ref<'mongodb'|'mysql'|'redis'|'sqlite'>('mongodb')
-const palettes=ref<Record<'mongodb'|'mysql'|'redis'|'sqlite',DatabasePalette>>({
+const paletteKind=ref<'mongodb'|'mysql'|'redis'|'sqlite'|'mariadb'>('mongodb')
+const palettes=ref<Record<'mongodb'|'mysql'|'redis'|'sqlite'|'mariadb',DatabasePalette>>({
  mongodb:{...normalizeBsonPalette(bsonPalette.value),overrides:{...bsonPalette.value.overrides}},
- mysql:normalizeDatabasePalette('mysql',databasePalettes.value.mysql),redis:normalizeDatabasePalette('redis',databasePalettes.value.redis),sqlite:normalizeDatabasePalette('sqlite',databasePalettes.value.sqlite)
+ mysql:normalizeDatabasePalette('mysql',databasePalettes.value.mysql),mariadb:normalizeDatabasePalette('mariadb',databasePalettes.value.mariadb),redis:normalizeDatabasePalette('redis',databasePalettes.value.redis),sqlite:normalizeDatabasePalette('sqlite',databasePalettes.value.sqlite)
 })
 const activePalette=computed(()=>palettes.value[paletteKind.value])
 const activeTypes=computed<readonly string[]>(()=>paletteKind.value==='mongodb'?bsonTypes:databaseTypes(paletteKind.value))
@@ -56,7 +57,7 @@ function customColorsChanged(){if(draft.value.editor.customColors)draft.value.ed
 async function save(){await action(async()=>{
  await window.dbex.saveNativePreferences(normalizeNativePreferences(native.value))
  savePreferences(normalizePreferences(draft.value))
- saveBsonPalette(normalizeBsonPalette(palettes.value.mongodb));saveDatabasePalette('mysql',palettes.value.mysql);saveDatabasePalette('redis',palettes.value.redis);saveDatabasePalette('sqlite',palettes.value.sqlite)
+ saveBsonPalette(normalizeBsonPalette(palettes.value.mongodb));saveDatabasePalette('mysql',palettes.value.mysql);saveDatabasePalette('mariadb',palettes.value.mariadb);saveDatabasePalette('redis',palettes.value.redis);saveDatabasePalette('sqlite',palettes.value.sqlite)
  emit('close')
 })}
 onMounted(()=>{void action(async()=>{native.value=normalizeNativePreferences(await window.dbex.getNativePreferences());logPath.value=await window.dbex.logPath();ready.value=true})})
@@ -71,8 +72,12 @@ onMounted(()=>{void action(async()=>{native.value=normalizeNativePreferences(awa
         <div v-if="notice" class="inline-message notice" role="status">{{ localize(notice) }}</div>
         <template v-if="tab==='general'">
           <div class="pref-section-title">{{ t('外观') }}</div>
-          <label class="pref-row"><span>{{ t('语言') }}</span><select v-model="draft.language" :aria-label="t('语言')"><option value="system">{{ t('跟随系统') }}</option><option v-for="language in languages" :key="language.locale" :value="language.locale">{{ language.label }}</option></select></label>
-          <label class="pref-row"><span>{{ t('主题') }}</span><select v-model="draft.theme" :aria-label="t('主题')"><option value="system">{{ t('跟随系统') }}</option><option value="light">{{ t('浅色主题') }}</option><option value="dark">{{ t('深色主题') }}</option></select></label>
+          <label class="pref-row"><span>{{ t('语言') }}</span><select v-model="draft.language" data-preference="language" :aria-label="t('语言')"><option value="system">{{ t('跟随系统') }}</option><option v-for="language in languages" :key="language.locale" :value="language.locale">{{ language.label }}</option></select></label>
+          <label class="pref-row"><span>{{ t('主题') }}</span><select v-model="draft.theme" data-preference="theme" :aria-label="t('主题')"><option value="system">{{ t('跟随系统') }}</option><option value="light">{{ t('浅色主题') }}</option><option value="dark">{{ t('深色主题') }}</option></select></label>
+          <div class="pref-section-title">{{ t('连接列表') }}</div>
+          <div class="pref-row"><span></span><div><button class="btn secondary" type="button" data-action="create-connection" :disabled="busy||connectionBusy" @click="emit('createConnection')">{{ t('＋ 新建连接') }}</button></div></div>
+          <div class="pref-section-title">{{ t('本地数据') }}</div>
+          <p class="helper">{{ t('本地优先 · 内置加密') }}</p>
         </template>
         <template v-else-if="tab==='tabs'">
           <label class="pref-row"><span>{{ t('启动画面') }}</span><select v-model="draft.startup" :aria-label="t('启动画面')"><option value="welcome">{{ t('欢迎') }}</option><option value="lastConnection">{{ t('重新打开上次连接') }}</option><option value="workspace">{{ t('恢复工作区') }}</option></select></label>
@@ -103,6 +108,7 @@ onMounted(()=>{void action(async()=>{native.value=normalizeNativePreferences(awa
         <template v-else-if="tab==='records'">
           <div class="pref-section-title">{{ t('默认每页记录数') }}</div>
           <label class="pref-row"><span>MySQL</span><select v-model.number="draft.records.mysqlPageSize" aria-label="MySQL"><option v-for="size in [100,200,500]" :key="size" :value="size">{{ size }}</option></select></label>
+          <label class="pref-row"><span>MariaDB</span><select v-model.number="draft.records.mariadbPageSize" aria-label="MariaDB"><option v-for="size in [100,200,500]" :key="size" :value="size">{{ size }}</option></select></label>
           <label class="pref-row"><span>MongoDB</span><select v-model.number="draft.records.mongoPageSize" aria-label="MongoDB"><option v-for="size in [100,200,500]" :key="size" :value="size">{{ size }}</option></select></label>
           <label class="pref-row"><span>SQLite</span><select v-model.number="draft.records.sqlitePageSize" aria-label="SQLite"><option v-for="size in [100,200,500]" :key="size" :value="size">{{ size }}</option></select></label><div class="pref-section-title">{{ t('结果表格') }}</div>
           <label class="pref-row"><span>{{ t('字体') }}</span><select v-model="draft.records.fontFamily" :aria-label="t('字体')"><option v-for="font in gridFonts" :key="font" :value="font">{{ font==='default'?t('默认字体'):font }}</option></select></label>
@@ -113,7 +119,7 @@ onMounted(()=>{void action(async()=>{native.value=normalizeNativePreferences(awa
           <p class="helper">{{ t('每页数量适用于新打开的数据对象；现有读取上限和写入确认保持不变。') }}</p>
         </template>
         <template v-else-if="tab==='colors'">
-          <label class="pref-row"><span>{{ t('数据库类型') }}</span><select v-model="paletteKind" :aria-label="t('数据库类型')"><option value="mongodb">MongoDB</option><option value="mysql">MySQL</option><option value="redis">Redis</option><option value="sqlite">SQLite</option></select></label>
+          <label class="pref-row"><span>{{ t('数据库类型') }}</span><select v-model="paletteKind" :aria-label="t('数据库类型')"><option value="mongodb">MongoDB</option><option value="mysql">MySQL</option><option value="mariadb">MariaDB</option><option value="redis">Redis</option><option value="sqlite">SQLite</option></select></label>
           <label class="checkbox-row"><input v-model="activePalette.enabled" type="checkbox" /> {{ t('按类型着色') }}</label><label class="checkbox-row"><input v-model="activePalette.showLabels" type="checkbox" /> {{ t('显示类型标记') }}</label>
           <div class="inspector-type-list"><button v-for="type in activeTypes" :key="type" type="button" :class="['bson-type-option',{selected:activeType===type}]" @click="selectedType=type"><span class="type-swatch" :style="{background:paletteColor(type)||'transparent'}"></span><span>{{ paletteLabel(type) }}</span><small>{{ paletteColor(type)?.toUpperCase()||'—' }}</small></button></div>
           <strong>{{ paletteLabel(activeType) }}</strong><ConnectionColorPicker :model-value="paletteColor(activeType)" group-label="数据类型配色" @update:model-value="activePalette.overrides[activeType]=$event||null" /><button class="btn secondary small" @click="delete activePalette.overrides[activeType]">{{ t('恢复此类型默认颜色') }}</button>
@@ -134,7 +140,7 @@ onMounted(()=>{void action(async()=>{native.value=normalizeNativePreferences(awa
           <div class="pref-section-title">{{ t('本地数据') }}</div><p class="helper">{{ t('所有设置保存在本机，不需要账户或云服务。') }}</p>
         </template>
       </div>
-      <footer class="dialog-footer"><button class="btn secondary pref-reset" :disabled="busy||!ready" @click="reset">{{ t('还原默认值') }}</button><button class="btn secondary" :disabled="busy" @click="emit('close')">{{ t('取消') }}</button><button class="btn primary" :disabled="busy||!ready" @click="save">{{ t('确认') }}</button></footer>
+      <footer class="dialog-footer"><button class="btn secondary pref-reset" :disabled="busy||!ready" @click="reset">{{ t('还原默认值') }}</button><button class="btn secondary" :disabled="busy" @click="emit('close')">{{ t('取消') }}</button><button class="btn primary" data-action="save-preferences" :disabled="busy||!ready" @click="save">{{ t('确认') }}</button></footer>
     </section>
   </div>
 </template>

@@ -21,6 +21,6 @@ export function savePreferences(value:AppPreferences){preferences.value=normaliz
 export function setTheme(value:AppPreferences['theme']){savePreferences({...preferences.value,theme:value})}
 watch(languagePreference,language=>{if(preferences.value.language!==language){preferences.value.language=language;persist()}})
 watch(()=>preferences.value.theme,applyTheme,{immediate:true})
-// Existing language selector remains the authoritative compatibility value
-// until preferences are explicitly saved, including upgrades.
+// Keep the legacy language storage key compatible when migrating old profiles.
+// Language selection now lives exclusively in the preferences dialog.
 preferences.value.language=languagePreference.value

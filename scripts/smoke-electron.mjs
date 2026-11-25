@@ -1,6 +1,6 @@
 import { _electron as electron } from 'playwright'
 import assert from 'node:assert/strict'
-import { access, readdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { access, readdir, mkdtemp, rm, writeFile, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve, join } from 'node:path'
 async function packagedExecutable() {
@@ -32,6 +32,24 @@ application = await electron.launch({
   assert.equal(preferences.sandbox, true)
   assert.equal(preferences.contextIsolation, true)
   assert.equal(preferences.nodeIntegration, false)
+  // Real desktop chrome contract: macOS has native traffic-light placement;
+  // Windows and Linux retain the native frame and do not reserve that space.
+  const expectedChrome=process.platform==='darwin'?'mac-native-controls':'native'
+  await page.waitForFunction(expected=>document.documentElement.dataset.windowChrome===expected,expectedChrome)
+  if(process.platform==='darwin'){
+    const nativeButtons=await application.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].getWindowButtonPosition())
+    assert.deepEqual(nativeButtons,{x:16,y:22})
+    const chrome=await page.locator('.topbar').evaluate(el=>{
+      const css=node=>{const style=getComputedStyle(node);return style.getPropertyValue('app-region')||style.getPropertyValue('-webkit-app-region')}
+      return {padding:getComputedStyle(el).paddingLeft,drag:css(el),button:css(el.querySelector('.preferences-button')),brand:el.querySelector('.brand').getBoundingClientRect().left-el.getBoundingClientRect().left}
+    })
+    assert.equal(chrome.padding,'100px')
+    assert.equal(chrome.drag,'drag')
+    assert.equal(chrome.button,'no-drag')
+    assert(chrome.brand>=100)
+  }else{
+    assert.equal(await page.locator('.topbar').evaluate(el=>getComputedStyle(el).paddingLeft),'18px')
+  }
   // Exercise the real encrypted store and metadata-only bridge before fixture handlers.
   const profile = await page.evaluate(async () => {
     const saved = await window.dbex.saveConnection({ name: 'Appearance smoke', kind: 'mysql', host: 'localhost', port: 3306, username: 'test', password: 'synthetic-smoke-password', ssh: { enabled: false }, tls: { enabled: false } })
@@ -67,6 +85,29 @@ application = await electron.launch({
   assert.equal(sqlite.data.rows[0].value,'7')
   assert.deepEqual(sqlite.data.sqliteTypes[0],['INTEGER','TEXT'])
   assert.equal(sqlite.readOnly,true)
+  // Exercise the actual packaged preload, scoped saved-query IPC and on-disk encryption.
+  const queryFixture=await page.evaluate(async filePath=>{
+    const profile=await window.dbex.saveConnection({name:'Saved query smoke',kind:'sqlite',host:'',port:0,filePath,ssh:{enabled:false},tls:{enabled:false}})
+    const session=await window.dbex.connectSaved(profile.id)
+    try{
+      const saved=await window.dbex.saveQueryObject(session.id,'main',{draft:{name:'Saved smoke',mode:'sql',text:'SELECT ? AS value',parameters:'["exact query fixture"]'}})
+      return {profileId:profile.id,queryId:saved.id}
+    }finally{await window.dbex.disconnect(session.id)}
+  },sqlitePath)
+  await page.reload()
+  const restored=await page.evaluate(async fixture=>{
+    const session=await window.dbex.connectSaved(fixture.profileId)
+    try{
+      const list=await window.dbex.listSavedQueries(session.id,'main','sql')
+      const saved=await window.dbex.getSavedQuery(session.id,'main',fixture.queryId)
+      const result=await window.dbex.execute(session.id,{action:'mysql.query',database:'main',sql:saved.text,parameters:JSON.parse(saved.parameters)})
+      return {list,saved,result}
+    }finally{await window.dbex.disconnect(session.id);await window.dbex.deleteConnection(fixture.profileId)}
+  },queryFixture)
+  assert.equal(restored.list[0].name,'Saved smoke')
+  assert.equal(restored.saved.parameters,'["exact query fixture"]')
+  assert.equal(restored.result.rows[0].value,'exact query fixture')
+  assert(!(await readFile(join(userData,'saved-queries.secure.json'),'utf8')).includes('exact query fixture'))
   const pageErrors = []
   page.on('pageerror', error => pageErrors.push(error.message))
   // Only test handlers are replaced, in this smoke process. Shipped application code has no mocks.
@@ -81,26 +122,34 @@ application = await electron.launch({
     for (const [name, handler] of Object.entries(handlers)) { ipcMain.removeHandler(name); ipcMain.handle(name, handler) }
   })
   await page.reload()
-  // Fresh profiles follow the actual OS language. Use the native language
-  // selector to choose the test locale instead of relying on the runner's
-  // language, and verify both locale switching and persistence in the package.
-  const select = page.locator('.language-select')
-  await select.waitFor({ state: 'visible' })
-  assert.equal(await select.inputValue(), 'system')
-  assert.equal(await select.locator('option').count(), 15)
-  const systemLocale = await page.evaluate(() => window.dbex.getSystemLanguage())
-  assert.equal(typeof systemLocale, 'string')
-  assert(systemLocale.length > 0)
-  const systemLang = await page.locator('html').getAttribute('lang')
-  assert(systemLang)
+  // The top toolbar exposes settings only. Language changes go through the
+  // real preferences dialog and must persist after reload.
+  assert.equal(await page.locator('.top-actions > *').count(), 1)
+  const settings=page.locator('.preferences-button')
+  const prefs=page.locator('.preferences-dialog')
+  const select=prefs.locator('[data-preference="language"]')
+  const save=prefs.locator('[data-action="save-preferences"]')
+  await settings.click()
+  await select.waitFor({state:'visible'})
+  assert.equal(await select.inputValue(),'system')
+  assert.equal(await select.locator('option').count(),15)
+  const systemLocale=await page.evaluate(()=>window.dbex.getSystemLanguage())
+  assert.equal(typeof systemLocale,'string')
+  assert(systemLocale.length>0)
+  assert(await page.locator('html').getAttribute('lang'))
   await select.selectOption('en')
-  await page.waitForFunction(() => document.documentElement.lang === 'en')
-  await page.getByRole('button', { name: '+ New connection', exact: true }).waitFor({ state: 'visible' })
+  await save.click()
+  await page.waitForFunction(()=>document.documentElement.lang==='en')
+  await page.getByRole('button',{name:'+ New connection',exact:true}).waitFor({state:'visible'})
+  await settings.click()
   await select.selectOption('zh-CN')
-  await page.waitForFunction(() => document.documentElement.lang === 'zh-CN')
+  await save.click()
+  await page.waitForFunction(()=>document.documentElement.lang==='zh-CN')
   await page.reload()
-  await page.waitForFunction(() => document.documentElement.lang === 'zh-CN')
-  assert.equal(await select.inputValue(), 'zh-CN')
+  await page.waitForFunction(()=>document.documentElement.lang==='zh-CN')
+  await settings.click()
+  assert.equal(await select.inputValue(),'zh-CN')
+  await prefs.getByRole('button',{name:'取消',exact:true}).click()
   await page.locator('.connection-item').filter({ hasText: 'Smoke MySQL' }).getByTitle('连接', { exact: true }).click()
   await page.getByRole('button', { name: 'SQL 编辑器', exact: true }).click()
   await page.locator('.query-editor .monaco-editor').waitFor({ state: 'visible' })
