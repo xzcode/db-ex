@@ -180,6 +180,15 @@ export interface FileImport { name: string; text: string; format: 'csv' | 'json'
 export interface SshImportResult { hosts: { name: string; ssh: SshOptions }[]; warnings: string[] }
 export type ConnectionFileKind = 'certificate' | 'private-key'
 export interface DbExAPI {
+  getNativePreferences():Promise<import('./preferences').NativePreferences>
+  saveNativePreferences(value:import('./preferences').NativePreferences):Promise<import('./preferences').NativePreferences>
+  pickTool(name:import('./preferences').ToolName):Promise<string|null>
+  checkTool(name:import('./preferences').ToolName,path:string):Promise<boolean>
+  logPath():Promise<string>
+  openLogs():Promise<void>
+  saveRecovery(value:import('./preferences').RecoveryDraft):Promise<void>
+  loadRecovery(value:import('./preferences').RecoveryDraft):Promise<import('./preferences').RecoveryDraft|null>
+  clearRecovery():Promise<void>
   pickConnectionFile(kind: ConnectionFileKind): Promise<string | null>
   getSystemLanguage(): Promise<string>
   setLocale(locale: import('./i18n').Locale): Promise<void>

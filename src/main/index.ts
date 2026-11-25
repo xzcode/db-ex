@@ -1,13 +1,15 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, session as electronSession } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, shell, session as electronSession } from 'electron'
 import { isLocale, resolveLocale, translate, localizeMessage, type Locale } from '../shared/i18n'
 import { join, basename, extname } from 'node:path'
-import { readFile, stat, writeFile } from 'node:fs/promises'
+import { readFile, stat, writeFile, mkdir } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 import type { ConnectionConfig, DatabaseOperation, FileImport, QuerySnippet } from '../shared/types'
 import { ConnectionStore } from './connections/store'
 import { SessionManager } from './connections/manager'
 import { validateId } from './connections/validation'
 import { SnippetStore } from './storage/snippets'
+import { initNativePreferences, getNativePreferences, saveNativePreferences, checkTool, diagnosticDirectory, diagnostic, saveRecovery, loadRecovery, clearRecovery } from './storage/preferences'
+import { toolNames, type ToolName } from '../shared/preferences'
 import { parseSshConfig } from './connections/ssh-config'
 import { inspectSql } from './operations/sql-policy'
 import { validateMongoDocumentEdit } from './operations/mongodb'
@@ -77,6 +79,20 @@ async function saveText(win: BrowserWindow, name: string, content: string, forma
   return true
 }
 function registerIpc(): void {
+  ipcMain.handle('preferences:native-get', handler(()=>getNativePreferences()))
+  ipcMain.handle('preferences:native-save', handler((_win,value:unknown)=>saveNativePreferences(value)))
+  ipcMain.handle('preferences:pick-tool', handler(async(win,name:ToolName)=>{
+    if(!toolNames.includes(name))throw new Error('INVALID_TOOL_PATH: 请输入可执行文件的绝对路径')
+    const result=await dialog.showOpenDialog(win,{title:tr('选择可执行文件')+' · '+name,properties:['openFile']})
+    return result.canceled?null:result.filePaths[0]||null
+  }))
+  ipcMain.handle('preferences:check-tool',handler((_win,name:ToolName,path:unknown)=>checkTool(name,path)))
+  ipcMain.handle('preferences:log-path',handler(()=>diagnosticDirectory()))
+  ipcMain.handle('preferences:open-logs',handler(async()=>{const dir=diagnosticDirectory();await mkdir(dir,{recursive:true,mode:0o700});const error=await shell.openPath(dir);if(error)throw new Error('无法打开日志目录')}))
+  ipcMain.handle('recovery:save',handler((_win,value:unknown)=>saveRecovery(value)))
+  ipcMain.handle('recovery:load',handler((_win,value:unknown)=>loadRecovery(value)))
+  ipcMain.handle('recovery:clear',handler(()=>clearRecovery()))
+
   ipcMain.handle('connections:pick-file', handler(async (win, kind: unknown) => {
     if (kind !== 'certificate' && kind !== 'private-key') throw new Error('INVALID_FILE_KIND')
     const all = { name: tr('所有文件'), extensions: ['*'] }
@@ -132,7 +148,9 @@ function registerIpc(): void {
       if (!info.writable || !('confirmed' in operation) || operation.confirmed !== true) throw new Error('WRITE_CONFIRMATION_REQUIRED: 请先解锁会话，并主动确认写入')
       await confirm(win, operation.action === 'mongo.dropDatabase' || operation.action === 'mysql.dropDatabase' ? '确认永久删除整个数据库？' : '确认执行数据库写操作？', operationDetail(id, operation))
     }
-    return sessions.execute(id, operation)
+    const start=Date.now()
+    try { const result=await sessions.execute(id,operation);diagnostic(operation.action,'ok',Date.now()-start);return result }
+    catch(error){diagnostic(operation.action,'error',Date.now()-start);throw error}
   }))
   ipcMain.handle('clipboard:copy-text', handler((_win, value: unknown) => {
     if (typeof value !== 'string' || Buffer.byteLength(value, 'utf8') > 2 * 1024 * 1024) throw new Error('LIMIT_EXCEEDED: 剪贴板文本过大')
@@ -166,6 +184,8 @@ app.whenReady().then(async () => {
   electronSession.defaultSession.setPermissionCheckHandler(() => false)
   electronSession.defaultSession.on('will-download', event => event.preventDefault())
   await store.init()
+  // Preferences are optional; a corrupt preferences file must not prevent opening existing connections.
+  await initNativePreferences().catch(()=>{})
   registerIpc()
   createWindow()
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })

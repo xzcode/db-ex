@@ -95,7 +95,7 @@ async function submit(){
      return
    }
    if(!target.value?.entity)return
-   const object=target.value, targetEntity={database,entity:object.entity}
+   const object=target.value, targetEntity={database,entity:object.entity!}
    if(props.mode==='import'){
      const response=await execute(mongo.value?{action:'mongo.insert',...targetEntity,documents:importDocuments.value,confirmed:true}:{action:'mysql.import',...targetEntity,rows:importRows.value,confirmed:true})
      if(!disposed){notice.value=response.message||'导入完成';importDocuments.value=[];importRows.value=[];fileName.value=''}
