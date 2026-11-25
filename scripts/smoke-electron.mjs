@@ -34,7 +34,7 @@ application = await electron.launch({
   assert.equal(preferences.nodeIntegration, false)
   // Exercise the real encrypted store and metadata-only bridge before fixture handlers.
   const profile = await page.evaluate(async () => {
-    const saved = await window.dbex.saveConnection({ name: 'Appearance smoke', kind: 'mysql', environment: 'development', host: 'localhost', port: 3306, username: 'test', password: 'synthetic-smoke-password', ssh: { enabled: false }, tls: { enabled: false } })
+    const saved = await window.dbex.saveConnection({ name: 'Appearance smoke', kind: 'mysql', host: 'localhost', port: 3306, username: 'test', password: 'synthetic-smoke-password', ssh: { enabled: false }, tls: { enabled: false } })
     const updated = await window.dbex.updateConnectionAppearance(saved.id, { color: '#123abc', group: 'Smoke Group' })
     const draft = await window.dbex.editConnection(saved.id)
     return { saved, updated, draft }
@@ -50,7 +50,7 @@ application = await electron.launch({
   page.on('pageerror', error => pageErrors.push(error.message))
   // Only test handlers are replaced, in this smoke process. Shipped application code has no mocks.
   await application.evaluate(({ ipcMain }) => {
-    const fixture = { id: 'smoke', name: 'Smoke MySQL', kind: 'mysql', environment: 'testing', host: 'localhost', port: 3306, sshEnabled: false, tlsEnabled: false }
+    const fixture = { id: 'smoke', name: 'Smoke MySQL', kind: 'mysql', host: 'localhost', port: 3306, sshEnabled: false, tlsEnabled: false }
     const handlers = {
       'connections:list': () => [fixture],
       'connections:connect-saved': () => ({ ...fixture, displayHost: 'localhost', writable: false, transaction: false }),

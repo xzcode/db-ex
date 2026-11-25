@@ -10,7 +10,7 @@ export function newSshHost(): SshOptions {
 }
 export function newConnectionConfig(kind: DatabaseKind): ConnectionConfig {
   return {
-    name: '', kind, environment: 'development', host: '127.0.0.1', port: defaultPorts[kind],
+    name: '', kind, host: '127.0.0.1', port: defaultPorts[kind],
     username: kind === 'mysql' ? 'root' : '', password: '', database: '', authSource: 'admin', redisDb: 0, uri: '',
     ssh: { ...newSshHost(), enabled: false }, tls: { enabled: false, caPath: '', certPath: '', keyPath: '', servername: '' },
     proxy: { enabled: false, type: 'socks5', host: '', port: 1080, username: '', password: '' },

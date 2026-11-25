@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { t } from '../i18n'
 import { bsonLabel, childType, typeName, type BsonType, type BsonTypeTree } from '../../shared/bson-types'
+import { formatBsonValue } from '../../shared/bson-display'
 import { activeTypeColor } from '../../shared/bson-palette'
 import { bsonPalette } from '../bson-preferences'
 const props = defineProps<{ document: string; metadata?: BsonTypeTree }>()
@@ -24,9 +25,7 @@ const preview = computed(() => {
       // Do not treat an EJSON wrapper as a document based on its keys. Only
       // BSON metadata authorizes expansion as an actual document or array.
       const expandable = (type === 'Document' || type === 'Array') && child !== null && typeof child === 'object'
-      let text: string
-      if (expandable) text = type === 'Array' && Array.isArray(child) ? '[' + child.length + ']' : '{' + Object.keys(child as object).length + '}'
-      else { const serialized = JSON.stringify(child); text = serialized === undefined ? String(child) : serialized }
+      const text = formatBsonValue(type, child, t)
       rows.push({ key, path: identity, type, value: text.length > 4096 ? text.slice(0, 4096) + '…' : text, depth, expandable, open: open.has(identity) })
       if (expandable && open.has(identity) && depth < 64) walk(child, node, nextPath, depth + 1)
       if (expandable && open.has(identity) && depth >= 64) limited = true

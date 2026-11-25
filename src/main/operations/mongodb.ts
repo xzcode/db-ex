@@ -84,6 +84,21 @@ function documentEjson(text: string, label: string): Document {
   return document
 }
 
+/** Shared by the read-only validation command and the actual replacement. */
+function checkedReplacement(originalText: string, replacementText: string): { original: Document; replacement: Document } {
+  const original = documentEjson(originalText, '原始文档')
+  const replacement = documentEjson(replacementText, '替换文档')
+  if (!Object.hasOwn(original, '_id') || !Object.hasOwn(replacement, '_id') || BSON.EJSON.stringify(replacement._id, { relaxed: false }) !== BSON.EJSON.stringify(original._id, { relaxed: false })) {
+    throw new Error('IMMUTABLE_ID: 替换文档必须保留原来的 _id')
+  }
+  return { original, replacement }
+}
+/** Validate without connecting to a database or changing its state. */
+export function validateMongoDocumentEdit(text: string, original?: string): void {
+  const document = original === undefined ? documentEjson(text, '新增文档') : checkedReplacement(original, text).replacement
+  try { BSON.serialize(document) } catch { throw new Error('INVALID_DOCUMENT: 文档 BSON 类型无效') }
+}
+
 /** Compare the complete old document as a literal, so missing/new fields cause a conflict. */
 export function optimisticFilter(original: Document): Document {
   if (!Object.hasOwn(original, '_id')) throw new Error('MISSING_ID: 修改或删除前必须读取包含 _id 的完整文档')
@@ -169,11 +184,7 @@ export class MongoOperations {
       }
       case 'mongo.replace': {
         requireWrite(context)
-        const original = documentEjson(operation.original, '原始文档')
-        const replacement = documentEjson(operation.document, '替换文档')
-        if (!Object.hasOwn(replacement, '_id') || BSON.EJSON.stringify(replacement._id, { relaxed: false }) !== BSON.EJSON.stringify(original._id, { relaxed: false })) {
-          throw new Error('IMMUTABLE_ID: 替换文档必须保留原来的 _id')
-        }
+        const { original, replacement } = checkedReplacement(operation.original, operation.document)
         const result = await collection.replaceOne(optimisticFilter(original), replacement, { ...options, upsert: false })
         if (result.matchedCount !== 1) throw new Error('EDIT_CONFLICT: 文档已被修改、删除或原始文档不完整，请刷新后重试')
         return emptyResult(`已替换 ${result.modifiedCount} 份文档`, result.modifiedCount)

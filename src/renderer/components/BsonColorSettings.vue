@@ -28,7 +28,7 @@ function save() { saveBsonPalette(draft.value); emit('close') }
           <h3>{{ t(bsonLabel(selected)) }}</h3>
           <div class="bson-sample" :class="{ 'has-bson-color': draft.enabled && !!selectedColor }" :style="draft.enabled && selectedColor ? { '--bson-color': selectedColor } : {}"><span v-if="draft.showLabels" class="bson-type-label">{{ t(bsonLabel(selected)) }}</span><span class="bson-sample-text">{{ t('预览') }}</span></div>
           <ConnectionColorPicker :model-value="selectedColor" group-label="BSON 数据类型" @update:model-value="changeColor" />
-          <button class="btn secondary small" type="button" @click="resetType">{{ t('恢复此类型默认颜色') }} · {{ defaultBsonColors[selected].toUpperCase() }}</button>
+          <button class="btn secondary small" type="button" @click="resetType">{{ t('恢复此类型默认颜色') }} · {{ defaultBsonColors[selected]?.toUpperCase() || '—' }}</button>
           <p class="helper">{{ t('配色仅影响显示，不修改数据库数据。') }}</p>
         </div>
       </div>

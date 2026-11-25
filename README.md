@@ -2,7 +2,7 @@
 
 本地优先的桌面数据库工具，统一管理 **MySQL、MongoDB、Redis**。基于 Electron、Vue 3、TypeScript 与 Monaco，不依赖账号、云端服务或遥测。
 
-当前版本：**0.5.5 预览版**。M2–M5 的功能实现已接入；完整范围、验收证据和限制见 [路线图](docs/ROADMAP.md)。预览安装包与最终发行签名是不同的交付项。
+当前版本：**0.5.6 预览版**。M2–M5 的功能实现已接入；完整范围、验收证据和限制见 [路线图](docs/ROADMAP.md)。预览安装包与最终发行签名是不同的交付项。
 
 ## 功能
 
@@ -18,7 +18,7 @@
 
 ### 写入保护
 
-新会话默认只读。启用写入需要主进程原生确认，每次实际写入再确认目标连接、环境、资源与操作。MySQL 使用参数绑定和只读事务保护；表格修改必须携带实际主键与完整原始记录。MongoDB 使用完整原文档做原子冲突检测。数据库只读账号仍是服务端权限边界。
+新会话默认只读。启用写入需要主进程原生确认，每次实际写入再确认目标连接、地址、资源与操作。MySQL 使用参数绑定和只读事务保护；表格修改必须携带实际主键与完整原始记录。MongoDB 使用完整原文档做原子冲突检测。数据库只读账号仍是服务端权限边界。
 
 取消操作会断开当前会话。未提交的 MySQL 事务回滚；已自动提交或已发给服务器的写操作不能承诺撤销，重连后核对结果再决定是否重试。
 
@@ -130,3 +130,11 @@ The navigation pane supports right-click connection colors, nine presets, a nati
 ## v0.5.5 Preview
 
 MongoDB results distinguish per-value BSON types (including numeric widths, explicit null and missing fields). Double-click a row to view an expandable typed document tree or raw canonical EJSON; editing remains a separate action. The `BSON type colors` control supports per-type colors, no-color, labels, reset and local preference persistence. Connection and BSON palettes share 36 presets, native color selection, hex input and 12 recent custom colors.
+
+## v0.5.6 Preview
+
+Removed the fixed Development / Testing / Production environment classification. Organize connections by freely named groups and custom colors. All database sessions still start read-only, and writes require explicit confirmation of the target connection and address. Previous saved profiles and backups remain readable; the obsolete environment field is ignored.
+
+MongoDB now uses a compact, typed spreadsheet-style value grid: scalar values without canonical EJSON wrappers, per-cell backgrounds, collapsed-by-default filters, resizable columns and 200 rows per page by default (100/200/500 selectable). Array/document summaries open the typed document viewer. Raw EJSON remains available for exact viewing, editing and JSON export; CSV export is unchanged.
+
+The MongoDB row context menu supports document viewing/editing/creation/duplication/deletion, exact value copying, full EJSON copying, field drafts for NULL/empty strings and typed value filtering. The document editor understands a non-executable BSON constructor grammar and provides local Validate and Update actions; the original EJSON editing option and write confirmation remain available.

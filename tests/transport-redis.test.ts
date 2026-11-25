@@ -13,7 +13,7 @@ import type { ConnectionTransport } from '../src/main/connections/transport'
 import type { ConnectionConfig } from '../src/shared/types'
 
 function config(overrides: Partial<ConnectionConfig> = {}): ConnectionConfig {
-  return { name: 'test', kind: 'redis', environment: 'testing', host: 'redis.internal', port: 6379, ssh: { enabled: false, host: '', port: 22, username: '', authMode: 'agent' }, tls: { enabled: false }, connectTimeoutMs: 1000, ...overrides }
+  return { name: 'test', kind: 'redis', host: 'redis.internal', port: 6379, ssh: { enabled: false, host: '', port: 22, username: '', authMode: 'agent' }, tls: { enabled: false }, connectTimeoutMs: 1000, ...overrides }
 }
 function resp(value: unknown): string {
   if (value === null) return '$-1\r\n'

@@ -1,7 +1,6 @@
 import type { BsonTypeBranch } from './bson-types'
 
 export type DatabaseKind = 'mysql' | 'mongodb' | 'redis'
-export type EnvironmentKind = 'development' | 'testing' | 'production'
 export type SqlValue = string | number | boolean | null
 export type SqlRow = Record<string, SqlValue>
 
@@ -42,7 +41,6 @@ export interface ConnectionConfig extends ConnectionAppearance {
   id?: string
   name: string
   kind: DatabaseKind
-  environment: EnvironmentKind
   host: string
   port: number
   username?: string
@@ -70,7 +68,6 @@ export interface SavedConnection extends ConnectionAppearance {
   id: string
   name: string
   kind: DatabaseKind
-  environment: EnvironmentKind | 'unknown'
   locked?: boolean
   host: string
   port: number
@@ -84,7 +81,6 @@ export interface SessionInfo {
   connectionId?: string
   name: string
   kind: DatabaseKind
-  environment: EnvironmentKind
   displayHost: string
   writable: boolean
   transaction: boolean
@@ -181,6 +177,8 @@ export interface DbExAPI {
   redisKeys(sessionId: string, cursor?: string, pattern?: string): Promise<DataPreview>
   redisValue(sessionId: string, key: string): Promise<DataPreview>
   execute(sessionId: string, operation: DatabaseOperation): Promise<OperationResult>
+  validateMongoDocument(document: string, original?: string): Promise<void>
+  copyText(value: string): Promise<void>
   cancel(sessionId: string): Promise<void>
   setWriteAccess(sessionId: string, enabled: boolean): Promise<SessionInfo>
   listSnippets(): Promise<QuerySnippet[]>

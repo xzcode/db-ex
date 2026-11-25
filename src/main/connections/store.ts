@@ -38,7 +38,7 @@ export class ConnectionStore {
   }
   list(): SavedConnection[] {
     return [...this.entries.values()].map(entry => this.legacyLocked.has(entry.id)
-      ? { id: entry.id, name: entry.name, kind: entry.kind, environment: 'unknown', host: '旧版配置待迁移', port: 0, sshEnabled: false, tlsEnabled: false, locked: true }
+      ? { id: entry.id, name: entry.name, kind: entry.kind, host: '旧版配置待迁移', port: 0, sshEnabled: false, tlsEnabled: false, locked: true }
       : this.summarize(entry.id, this.get(entry.id)))
   }
   get(id: string): ConnectionConfig {
@@ -53,7 +53,7 @@ export class ConnectionStore {
     return validateConnection(mergeConnectionSecrets(incoming, previous, clear), true)
   }
   summarize(id: string, config: ConnectionConfig): SavedConnection {
-    return { id, name: config.name, kind: config.kind, environment: config.environment,
+    return { id, name: config.name, kind: config.kind,
       ...connectionDisplayEndpoint(config), color: config.color, group: config.group, sshEnabled: config.ssh.enabled,
       tlsEnabled: config.tls.enabled, proxyEnabled: Boolean(config.proxy?.enabled) }
   }

@@ -79,7 +79,7 @@ export function validateConnection(value: unknown, allowMissingSecrets = false):
   const v = object(value, '连接')
   const name = text(v.name, '连接名称', 100, true)!
   if (!['mysql', 'mongodb', 'redis'].includes(String(v.kind))) throw new Error('INVALID_CONNECTION: 数据库类型错误')
-  if (!['development', 'testing', 'production'].includes(String(v.environment))) throw new Error('INVALID_CONNECTION: 环境类型错误')
+  // Legacy profiles may contain an environment field; it is no longer used.
   const kind = v.kind as ConnectionConfig['kind']
   const uri = text(v.uri, 'MongoDB URI', 8192)
   if (uri) {
@@ -131,7 +131,7 @@ export function validateConnection(value: unknown, allowMissingSecrets = false):
   if (!allowMissingSecrets && kind === 'mysql' && tlsOptions.enabled && isIP(tlsOptions.servername || target.host)) {
     throw new Error('TLS_IDENTITY_REQUIRED: MySQL TLS 连接请填写证书中的 DNS 名称（TLS / SSL → 证书主机名）；当前驱动不支持可靠校验仅有 IP 身份的证书')
   }
-  return { id, name, kind, environment: v.environment as ConnectionConfig['environment'], ...target, ...normalizeAppearance(v),
+  return { id, name, kind, ...target, ...normalizeAppearance(v),
     username: text(v.username, '数据库用户名', 512), password: text(v.password, '数据库密码', 8192),
     database: text(v.database, '数据库名称', 200), authSource: text(v.authSource, '认证数据库', 200), redisDb, uri,
     ssh: ssh(v.ssh, false, allowMissingSecrets), tls: tlsOptions, proxy: proxy(v.proxy), redisMode: redisMode as ConnectionConfig['redisMode'], nodes,

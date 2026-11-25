@@ -126,7 +126,7 @@ export class SessionManager {
         }
       }
       if (generation !== this.generation) throw new Error('SESSION_CLOSED: 窗口已关闭，本次连接已取消')
-      const info: SessionInfo = { id: randomUUID(), connectionId, name: config.name, kind: config.kind, environment: config.environment,
+      const info: SessionInfo = { id: randomUUID(), connectionId, name: config.name, kind: config.kind,
         displayHost: connectionDisplayEndpoint(config).host, writable: false, transaction: false }
       this.sessions.set(info.id, { info, driver, transport, config })
       return { ...info }

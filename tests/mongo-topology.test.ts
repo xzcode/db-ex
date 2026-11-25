@@ -50,7 +50,7 @@ test('real MongoDB replica discovery and primary change keep the same session on
   let control: MongoClient | undefined
   let adminConnected = false
   const config: ConnectionConfig = {
-    name: 'isolated MongoDB replica topology test', kind: 'mongodb', environment: 'testing',
+    name: 'isolated MongoDB replica topology test', kind: 'mongodb', 
     host: '127.0.0.1', port: ports[0], database,
     nodes: ports.map(port => ({ host: '127.0.0.1', port })), mongoReplicaSet: 'dbex-rs',
     ssh: noSsh, tls: { enabled: false }, connectTimeoutMs: 8000,

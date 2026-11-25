@@ -21,7 +21,7 @@ async function installBridge(page: Page) {
       { id: 'mongo', name: 'Mongo Local', kind: 'mongodb', host: '127.0.0.1', port: 27017 },
       { id: 'redis', name: 'Redis Local', kind: 'redis', host: '127.0.0.1', port: 6379 },
       { id: 'sql2', name: 'MySQL Other', kind: 'mysql', host: '127.0.0.2', port: 3306 },
-    ].map(value => ({ ...value, environment: 'development', sshEnabled: false, tlsEnabled: false }))
+    ].map(value => ({ ...value, sshEnabled: false, tlsEnabled: false }))
     const grid = (values: Record<string, string>[]) => ({ columns: Object.keys(values[0] || {}), rows: values })
     ;(window as any).__dbexCalls = calls
     ;(window as any).dbex = {
@@ -58,6 +58,8 @@ async function installBridge(page: Page) {
         return { columns: [], rows: [], affectedRows: 1, message: '操作已完成' }
       },
       async cancel(id: string) { calls.push({ action: 'cancel', id }) },
+      async copyText(value: string) { calls.push({ action: 'copyText', value }) },
+      async validateMongoDocument(document: string, original?: string) { calls.push({ action: 'validateMongoDocument', document, original }) },
       async setWriteAccess(id: string, writable: boolean) { sessions[id] = { ...sessions[id], writable }; calls.push({ action: 'writeAccess', id, writable }); return sessions[id] },
       async listSnippets() { return [] }, async saveSnippet(value: any) { return { ...value, id: 'snippet', updatedAt: new Date().toISOString() } }, async deleteSnippet() {},
       async importFile() { return { name: 'data.csv', format: 'csv', text: 'name,email\nEve,eve@example.test' } }, async exportFile(name: string, content: string, format: string) { calls.push({ action: 'export', name, content, format }); return true },
@@ -137,17 +139,32 @@ test('MySQL query, guarded row edits, transactions, and CSV import use the typed
   await expect.poll(() => page.evaluate(() => (window as any).__dbexCalls.some((call: any) => call.action === 'mysql.import' && call.rows[0].name === 'Eve'))).toBe(true)
 })
 
-test('MongoDB edits preserve canonical EJSON and disable editing projected documents', async ({ page }) => {
+test('MongoDB right-click document editor uses typed syntax, validates locally and preserves canonical EJSON', async ({ page }) => {
   await connect(page, 'Mongo Local'); await openUsers(page)
+  const row = page.locator('.workbench:visible .data-table tbody tr').first()
+  await row.click({ button: 'right' })
+  await expect(page.locator('.mongo-row-menu').getByRole('button', { name: '编辑文档…' })).toBeDisabled()
+  await page.keyboard.press('Escape')
   await page.getByRole('button', { name: '只读 · 启用写入', exact: true }).click()
-  await page.locator('.workbench:visible .data-table tbody tr').first().click()
-  await page.getByRole('button', { name: '编辑', exact: true }).click()
-  await expect(page.locator('.document-editor')).toContainText('$oid')
-  await page.getByRole('button', { name: '审阅并保存', exact: true }).click()
-  await expect.poll(() => page.evaluate(() => (window as any).__dbexCalls.some((call: any) => call.action === 'mongo.replace' && call.original.includes('$oid') && call.document.includes('$date') && call.confirmed))).toBe(true)
+  await row.click({ button: 'right' })
+  await page.locator('.mongo-row-menu').getByRole('button', { name: '编辑文档…' }).click()
+  const editor = page.getByRole('dialog', { name: '编辑文档' })
+  await expect(editor.locator('.document-editor')).toContainText('ObjectId')
+  await expect(editor.locator('.document-editor')).toContainText('Int32')
+  await expect(editor.locator('.document-editor')).toContainText('Long')
+  await replaceEditor(page, '.document-editor .monaco-editor', '{"_id":ObjectId("64b000000000000000000001"),"name":"Ada Updated","createdAt":ISODate("2023-11-14T22:13:20.000Z"),"score":Int32("7"),"long":Long("9223372036854775807")}')
+  await editor.getByRole('button', { name: '验证', exact: true }).click()
+  await expect(editor.getByRole('status')).toHaveText('文档验证通过')
+  await expect.poll(() => page.evaluate(() => (window as any).__dbexCalls.some((call: any) => call.action === 'validateMongoDocument' && JSON.parse(call.document).long.$numberLong === '9223372036854775807'))).toBe(true)
+  await expect.poll(() => page.evaluate(() => (window as any).__dbexCalls.filter((call: any) => call.action === 'mongo.replace').length)).toBe(0)
+  await editor.getByRole('button', { name: '更新', exact: true }).click()
+  await expect.poll(() => page.evaluate(() => (window as any).__dbexCalls.some((call: any) => call.action === 'mongo.replace' && call.original.includes('$oid') && call.document.includes('$date') && JSON.parse(call.document).name === 'Ada Updated' && call.confirmed))).toBe(true)
+  await page.getByRole('button', { name: '查询条件', exact: true }).click()
   await page.getByLabel('Projection', { exact: true }).fill('{"name":1}')
   await page.getByRole('button', { name: '查询', exact: true }).click()
-  await page.locator('.workbench:visible .data-table tbody tr').first().click()
+  await row.click({ button: 'right' })
+  await expect(page.locator('.mongo-row-menu').getByRole('button', { name: '编辑文档…' })).toBeDisabled()
+  await page.keyboard.press('Escape')
   await expect(page.getByRole('button', { name: '编辑', exact: true })).toBeDisabled()
 })
 
@@ -371,7 +388,13 @@ test('connection context colors, custom colors, grouping and live tab highlighti
 test('MongoDB uses per-value BSON colors, nested document types and saved custom preferences', async ({ page }) => {
   await connect(page, 'Mongo Local'); await openUsers(page)
   const grid = page.locator('.workbench:visible .data-table').first()
-  await expect(grid.locator('tr[data-row-index="0"] [data-bson-type="Int32"]')).toContainText('Int32')
+  await expect(grid.locator('tr[data-row-index="0"] [data-bson-type="Int32"]')).toHaveText('7')
+  await expect(grid.locator('tr[data-row-index="0"] [data-bson-type="ObjectId"]')).toHaveText('64b000000000000000000001')
+  await expect(grid.locator('tr[data-row-index="0"] [data-bson-type="Document"]')).toHaveText('(Document) 1 个字段')
+  await expect(grid.locator('tr[data-row-index="0"] [data-bson-type="Date"]')).toHaveText('2023-11-14 22:13:20.000 UTC')
+  await expect(grid.locator('.bson-type-label')).toHaveCount(0)
+  await expect(page.getByLabel('Projection', { exact: true })).toHaveCount(0)
+  await expect(page.locator('.mongo-query-summary')).toContainText('.limit(200)')
   await expect(grid.locator('tr[data-row-index="1"] [data-bson-type="String"]').filter({ hasText: '7' })).toBeVisible()
   await expect(grid.locator('tr[data-row-index="2"] [data-bson-type="Double"]')).toBeVisible()
   await expect(grid.locator('tr[data-row-index="0"] [data-bson-type="Null"]')).toContainText('NULL')
@@ -398,5 +421,53 @@ test('MongoDB uses per-value BSON colors, nested document types and saved custom
   await page.getByRole('button', { name: 'BSON 类型配色', exact: true }).click()
   await page.getByRole('dialog', { name: 'BSON 类型配色' }).getByRole('button', { name: '恢复全部默认颜色' }).click()
   await page.getByRole('dialog', { name: 'BSON 类型配色' }).getByRole('button', { name: '保存', exact: true }).click()
-  await expect(page.locator('.workbench:visible [data-bson-type="Int32"]')).toHaveAttribute('data-bson-color', '#4b88d9')
+  await expect(page.locator('.workbench:visible [data-bson-type="Int32"]')).toHaveAttribute('data-bson-color', '#4da96b')
+})
+
+test('connection settings use optional custom groups and colors, not fixed environments', async ({ page }) => {
+  await page.getByRole('button', { name: '＋ 新建连接', exact: true }).click()
+  await page.getByRole('button', { name: 'MySQL', exact: true }).click()
+  await page.getByLabel('连接名称', { exact: true }).fill('Region 100')
+  await page.getByRole('button', { name: '高级设置', exact: true }).click()
+  await expect(page.getByLabel('环境', { exact: true })).toHaveCount(0)
+  await page.getByLabel('分组名称', { exact: true }).fill('Project A / Region 100')
+  await page.getByRole('button', { name: '蓝色', exact: true }).click()
+  await page.getByRole('button', { name: '保存', exact: true }).click()
+  await expect.poll(() => page.evaluate(() => {
+    const call = (window as any).__dbexCalls.filter((item: any) => item.action === 'saveConnection').at(-1)
+    if (!call) return null
+    return { environment: Object.hasOwn(call.config, 'environment'), group: call.config.group, color: call.config.color }
+  })).toEqual({ environment: false, group: 'Project A / Region 100', color: '#4b88d9' })
+  await expect(page.locator('.env-tag')).toHaveCount(0)
+  await connect(page, 'MySQL Local')
+  await expect(page.locator('.workbench:visible .workbench-header .eyebrow')).toHaveText('MYSQL')
+})
+
+test('MongoDB row and cell menu copies exact values, prepares duplicate and field drafts, and filters by value', async ({ page }) => {
+  await connect(page, 'Mongo Local'); await openUsers(page)
+  const row = page.locator('.workbench:visible .data-table tbody tr[data-row-index="0"]')
+  const cell = row.locator('[data-mongo-field="score"]')
+  const menu = page.locator('.mongo-row-menu')
+  await cell.click({ button: 'right' })
+  await menu.getByRole('button', { name: '复制字段值', exact: true }).click()
+  await expect.poll(() => page.evaluate(() => (window as any).__dbexCalls.find((c: any) => c.action === 'copyText')?.value)).toBe('7')
+  await cell.click({ button: 'right' })
+  await menu.getByRole('button', { name: '复制完整文档', exact: true }).click()
+  await expect.poll(() => page.evaluate(() => (window as any).__dbexCalls.filter((c: any) => c.action === 'copyText').at(-1)?.value)).toContain('$numberInt')
+  await page.getByRole('button', { name: '只读 · 启用写入', exact: true }).click()
+  await cell.click({ button: 'right' })
+  await menu.getByRole('button', { name: '复制为新文档…', exact: true }).click()
+  const draft = page.getByRole('dialog', { name: '新增记录' })
+  await expect(draft.locator('.document-editor')).toContainText('Int32')
+  await expect(draft.locator('.document-editor')).not.toContainText('"_id"')
+  await draft.getByRole('button', { name: '取消', exact: true }).click()
+  await cell.click({ button: 'right' })
+  await menu.getByRole('button', { name: '设为 NULL', exact: true }).click()
+  const edit = page.getByRole('dialog', { name: '编辑文档' })
+  await expect(edit.locator('.document-editor')).toContainText('null')
+  await edit.getByRole('button', { name: '取消', exact: true }).click()
+  await expect.poll(() => page.evaluate(() => (window as any).__dbexCalls.filter((c: any) => ['mongo.insert','mongo.replace','mongo.delete'].includes(c.action)).length)).toBe(0)
+  await cell.click({ button: 'right' })
+  await menu.getByRole('button', { name: '按此值筛选', exact: true }).click()
+  await expect(page.getByLabel('Filter', { exact: true })).toHaveValue('{"score":{"$eq":{"$numberInt":"7"}}}')
 })

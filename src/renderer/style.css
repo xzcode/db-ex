@@ -90,7 +90,6 @@ code, pre, kbd { font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', mon
 .saved-list { overflow-y: auto; min-height: 90px; max-height: 57%; flex: 1; }
 .connection-item { position: relative; display: flex; gap: 10px; align-items: flex-start; padding: 13px 12px; border-left: 3px solid transparent; border-bottom: 1px solid var(--border-soft); }
 .connection-item:hover { background: var(--panel-raised); }
-.connection-item.production { border-left-color: #c87558; }
 .db-icon { display: grid; place-content: center; width: 30px; height: 32px; flex: none; font-size: 24px; color: #80a9f8; }
 .db-icon.mongodb, .db-small-icon.mongodb { color: #73c8a7; }
 .db-icon.redis, .db-small-icon.redis { color: #ed8c8f; }
@@ -99,8 +98,6 @@ code, pre, kbd { font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', mon
 .connection-description strong { font-size: 12px; line-height: 1.7; }
 .connection-description small { color: var(--muted); font-size: 10px; }
 .connection-meta { display: flex; align-items: center; gap: 7px; font-size: 9px; color: var(--muted); margin-top: 7px; }
-.env-tag { border: 1px solid var(--border); padding: 1px 4px; border-radius: 2px; font-size: 9px; letter-spacing: .5px; }
-.env-tag.production { color: var(--warning); border-color: var(--warning); }
 .connection-actions { display: flex; flex-direction: column; position: absolute; right: 4px; top: 5px; background: var(--panel); opacity: 0; }
 .connection-item:hover .connection-actions, .connection-item:focus-within .connection-actions { opacity: 1; }
 .connection-actions .ghost-icon { width: 23px; height: 23px; font-size: 13px; }
@@ -276,7 +273,6 @@ kbd { color: #ffffffb0; font-size: 9px; }
 .top-actions .top-hint { max-width: 195px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Arabic mirrors the workspace. Code, numeric values and result columns stay LTR. */
 .connection-item { border-left: none; border-inline-start: 3px solid transparent; }
-.connection-item.production { border-inline-start-color: #c87558; }
 .connection-actions { right: auto; inset-inline-end: 4px; }
 .active-item, .resource-node { text-align: start; }
 .child-node { padding-left: 10px; padding-inline-start: 38px; }
@@ -332,7 +328,7 @@ html[dir=rtl] .choice-arrow { transform: scaleX(-1); }
 .connection-dialog-footer .btn { min-height: 34px; }
 
 /* Navicat-inspired navigation hierarchy. Colors mark connection identity,
-   not permissions; production and read/write badges remain independent. */
+   not permissions; read/write badges remain independent. */
 .connection-sidebar .sidebar-label { padding: 11px 12px 8px; letter-spacing: .3px; }
 .sidebar-heading-actions { display: flex; align-items: center; gap: 4px; }
 .connection-sidebar .saved-list { max-height: none; min-height: 100px; flex: 1 1 auto; padding: 3px 6px 8px; }
@@ -352,7 +348,6 @@ html[dir=rtl] .choice-arrow { transform: scaleX(-1); }
 .connection-tree .row-menu { font-size: 16px; opacity: .7; }
 .connection-tree .connection-actions .ghost-icon { width: 20px; height: 23px; }
 .connection-tree .connection-item.is-selected { background: var(--selected); box-shadow: inset 0 0 0 1px var(--border); }
-.connection-tree .connection-item.production:not(.has-color) { border-inline-start-color: #c87558; }
 .connection-tree .connection-item.has-color { border-inline-start-color: var(--connection-color); background: color-mix(in srgb, var(--connection-color) 16%, var(--panel)); }
 .connection-tree .connection-item.has-color:hover, .connection-tree .connection-item.has-color.is-selected { background: color-mix(in srgb, var(--connection-color) 26%, var(--panel)); }
 .connection-group { margin-top: 7px; }
@@ -427,3 +422,40 @@ html[dir=rtl] .tree-chevron:not(.expanded) { transform: rotate(180deg); }
 .bson-expand, .bson-expand-spacer { width: 19px; height: 17px; flex: none; }
 .bson-tree-value { max-width: 500px; }
 .bson-raw-document { flex: 1; min-height: 0; overflow: auto; padding: 16px 22px; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.7 'SFMono-Regular', Consolas, monospace; margin: 0; text-align: left; }
+
+/* Compact desktop-style MongoDB browsing: the grid is the primary surface. */
+.mongo-workbench .workbench-header { padding: 8px 12px 6px; }
+.mongo-workbench .workbench-header > div:first-child { display: flex; align-items: baseline; gap: 9px; min-width: 0; }
+.mongo-workbench .workbench-header h2 { margin: 0; font-size: 15px; }
+.mongo-workbench .workbench-header .eyebrow { font-size: 9px; }
+.mongo-workbench .workbench-header .btn { font-size: 11px; padding: 5px 8px; }
+.mongo-workbench .workbench-tabs > button { padding: 8px 10px; font-size: 12px; }
+.mongo-workbench .editor-toolbar { padding: 5px 8px; gap: 5px; }
+.mongo-workbench .editor-toolbar .btn { font-size: 11px; padding: 5px 8px; }
+.mongo-workbench .mongo-filters { padding: 6px 8px; gap: 6px; flex: none; }
+.mongo-workbench .mongo-filters textarea { min-height: 34px; resize: vertical; }
+.mongo-workbench .active-filter { color: var(--accent); border-color: var(--accent); }
+.mongo-workbench .result-footer { padding: 4px 8px; min-height: 33px; gap: 8px; }
+.mongo-query-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 10px monospace; }
+.result-page-controls { flex: none; align-items: center; }
+.result-page-controls select { font-size: 11px; padding: 3px 5px; }
+.mongo-grid tbody tr:nth-child(even):not(.selected) td:not(.has-bson-color) { background: color-mix(in srgb, var(--panel-raised) 45%, var(--panel)); }
+.mongo-grid td.has-bson-color { box-shadow: none; background: color-mix(in srgb, var(--bson-color) 32%, var(--panel)); color: var(--text); }
+.mongo-grid tr:hover td.has-bson-color { background: color-mix(in srgb, var(--bson-color) 38%, var(--panel)); }
+.mongo-grid tr.selected td.has-bson-color { background: color-mix(in srgb, var(--bson-color) 38%, var(--selected)); box-shadow: inset 0 1px var(--accent), inset 0 -1px var(--accent); }
+.mongo-grid .null-cell { color: var(--muted); font-style: normal; }
+.mongo-grid .bson-type-label { margin-inline-end: 5px; line-height: 12px; }
+.bson-document-table .bson-tree-value { font-family: inherit; }
+
+.mongo-row-menu { width: 210px; z-index: 80; }
+.context-edit-help { margin: 4px 8px; color: var(--muted); font-size: 10px; line-height: 1.4; }
+.mongo-edit-dialog { width: 850px; height: min(740px, 88dvh); }
+.mongo-edit-dialog .dialog-header { padding: 12px 18px; }
+.mongo-edit-dialog .dialog-header h2 { font-size: 16px; }
+.mongo-edit-mode { display: flex; align-items: center; gap: 8px; padding: 6px 14px; border-bottom: 1px solid var(--border-soft); }
+.mongo-edit-dialog .dialog-footer { padding: 10px 14px; }
+.mongo-edit-dialog .document-editor { min-height: 200px; direction: ltr; }
+
+.mongo-row-menu { width: 248px; max-height: calc(100dvh - 8px); overflow-y: auto; }
+.mongo-row-menu .context-action { padding: 6px 9px; }
+.context-menu-divider { height: 1px; background: var(--border-soft); margin: 3px 2px; }
