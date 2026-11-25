@@ -5,6 +5,8 @@ import { readFile, stat } from 'node:fs/promises'
 import type { ConnectionOptions as TlsConnectionOptions } from 'node:tls'
 import type { ConnectionConfig, DatabaseOperation, DataPreview, ExplorerNode, OperationResult, SessionInfo } from '../../shared/types'
 import { createTransport, type ConnectionTransport } from './transport'
+import {openVerifiedNativeTlsForward} from './native-tls-forward'
+import type {NativeRoute} from '../operations/native-tools'
 import { validateConnection, validateId } from './validation'
 import { mongoUriTlsEnabled } from './mongo-topology'
 import { secretValues } from './credentials'
@@ -18,6 +20,7 @@ interface LiveSession {
   config: ConnectionConfig
   driver: AdapterSession
   transport: ConnectionTransport
+  tls: TlsConnectionOptions
   controller?: AbortController
 }
 async function certificate(path?: string): Promise<Buffer | undefined> {
@@ -63,7 +66,7 @@ export class SessionManager {
       if (generation !== this.generation) throw new Error('SESSION_CLOSED: 窗口已关闭，本次连接已取消')
       const info: SessionInfo = { id: randomUUID(), connectionId, name: config.name, kind: config.kind,
         displayHost: connectionDisplayEndpoint(config).host, serverVersion:driver.serverVersion, writable: false, transaction: false }
-      this.sessions.set(info.id, { info, driver, transport, config })
+      this.sessions.set(info.id, { info, driver, transport, config, tls })
       return { ...info }
     } catch (error) {
       if (driver) await driver.close().catch(() => {})
@@ -130,11 +133,16 @@ export class SessionManager {
     const controller=new AbortController();session.controller=controller
     try{return await work(session.config,controller.signal)}finally{session.controller=undefined}
   }
-  async routedExternal<T>(id:string,write:boolean,work:(config:ConnectionConfig,signal:AbortSignal,route?:{host:string;port:number})=>Promise<T>){
+  async routedExternal<T>(id:string,write:boolean,work:(config:ConnectionConfig,signal:AbortSignal,route?:NativeRoute)=>Promise<T>){
     const session=this.session(id)
     return this.external(id,write,async(config,signal)=>{
-      if((config.ssh.enabled||config.proxy?.enabled)&&config.tls.enabled)throw new Error('NATIVE_TOOL_CONNECTION: 不支持此原生工具连接方式。')
-      const route=config.ssh.enabled||config.proxy?.enabled?await session.transport.forward(config.host,config.port):undefined
+      const routed=config.ssh.enabled||config.proxy?.enabled
+      if(routed&&config.tls.enabled){
+        if(config.kind!=='mongodb'||config.uri||config.nodes?.length||config.mongoReplicaSet||config.mongoTopology==='discover')throw new Error('NATIVE_TOOL_CONNECTION: 不支持此原生工具连接方式。')
+        const forward=await openVerifiedNativeTlsForward(session.transport,config.host,config.port,session.tls,signal)
+        try{return await work(config,signal,forward.route)}finally{await forward.close()}
+      }
+      const route=routed?await session.transport.forward(config.host,config.port):undefined
       return work(config,signal,route)
     })
   }

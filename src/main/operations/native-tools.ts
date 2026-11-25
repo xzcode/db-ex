@@ -22,14 +22,16 @@ function safeName(value:string, collection=false){
  return value
 }
 function mysqlOption(value:string){if(/[\u0000-\u001f]/.test(value))throw new Error('INVALID_CONNECTION: 数据库类型错误');return '"'+value.replaceAll('\\','\\\\').replaceAll('"','\\"')+'"'}
-export type NativeRoute={host:string;port:number}
+export type NativeRoute={host:string;port:number;tlsVerified?:true}
 export function nativeToolCommand(task:NativeToolTask,config:ConnectionConfig,database:string,entity:string|undefined,credentials:string,input:string,route?:NativeRoute){
  const spec=nativeTasks[task]
  const routed=config.ssh.enabled||config.proxy?.enabled
  const unsupported=()=>new Error('NATIVE_TOOL_CONNECTION: 不支持此原生工具连接方式。')
  if(!spec||spec.kind!==config.kind||config.uri||config.nodes?.length||config.mongoReplicaSet||config.mongoTopology==='discover')throw unsupported()
- if(routed&&(!route||route.host!=='127.0.0.1'||!Number.isInteger(route.port)||route.port<1||route.port>65535||config.tls.enabled)||!routed&&route)throw unsupported()
- if(config.tls.enabled&&(config.tls.servername&&config.tls.servername!==config.host||config.kind==='mongodb'&&(config.tls.certPath||config.tls.keyPath)))throw unsupported()
+ if(routed&&(!route||route.host!=='127.0.0.1'||!Number.isInteger(route.port)||route.port<1||route.port>65535||config.tls.enabled&&!(config.kind==='mongodb'&&route.tlsVerified))||!routed&&route)throw unsupported()
+ if(route?.tlsVerified&&(!routed||!config.tls.enabled||config.kind!=='mongodb'))throw unsupported()
+ const localTls=config.tls.enabled&&!route?.tlsVerified
+ if(localTls&&(config.tls.servername&&config.tls.servername!==config.host||config.kind==='mongodb'&&(config.tls.certPath||config.tls.keyPath)))throw unsupported()
  const endpoint=route||config
  safeName(database)
  if(isMysqlFamily(config.kind)){
@@ -41,9 +43,9 @@ export function nativeToolCommand(task:NativeToolTask,config:ConnectionConfig,da
  }
  const auth=config.username?encodeURIComponent(config.username)+':'+encodeURIComponent(config.password||'')+'@':''
  const host=endpoint.host.includes(':')?'['+endpoint.host+']':endpoint.host
- const uri='mongodb://'+auth+host+':'+endpoint.port+'/?directConnection=true'+(config.tls.enabled?'&tls=true':'')+(config.username?'&authSource='+encodeURIComponent(config.authSource||'admin'):'')
+ const uri='mongodb://'+auth+host+':'+endpoint.port+'/?directConnection=true'+(localTls?'&tls=true':'')+(config.username?'&authSource='+encodeURIComponent(config.authSource||'admin'):'')
  const contents='uri: '+JSON.stringify(uri)+'\n'
- const args=['--config='+credentials,...(config.tls.enabled?['--ssl',...(config.tls.caPath?['--sslCAFile='+config.tls.caPath]:[])]:[])]
+ const args=['--config='+credentials,...(localTls?['--ssl',...(config.tls.caPath?['--sslCAFile='+config.tls.caPath]:[])]:[])]
  if(task==='mongo-backup')args.push('--db='+database,'--archive')
  else if(task==='mongo-restore')args.push('--archive='+input,'--nsInclude='+database+'.*','--stopOnError')
  else{

@@ -145,6 +145,8 @@ interface Entity { database: string; entity: string }
 export interface SqlGridEdit {key:SqlRow;original:SqlRow;changes:SqlRow}
 export interface MongoGridEdit {original:string;document:string}
 export type MysqlOperation =
+  | ({action:'mariadb.object';view:'sequence'|'history'|'partitions';limit?:number;offset?:number} & Entity)
+  | ({action:'mariadb.sequenceRestart';value:string} & Entity & Confirmed)
   | ({ action: 'mysql.query'; database?: string; sql: string; parameters?: SqlValue[]; limit?: number; offset?: number } & Confirmed)
   | ({ action: 'mysql.structure' | 'mysql.inspect' } & Entity)
   | ({ action: 'mysql.createDatabase' | 'mysql.dropDatabase'; database: string } & Confirmed)
@@ -179,10 +181,10 @@ export type RedisOperation =
   | ({ action: 'redis.delete'; keys: string[] } & Confirmed)
   | ({ action: 'redis.command'; args: string[] } & Confirmed)
   | { action: 'redis.nodes' }
-export type ClickHouseManagementView = 'partitions' | 'mutations' | 'replicas' | 'queries'
+export type ClickHouseManagementView = 'partitions' | 'mutations' | 'replicas' | 'queries' | 'topology' | 'replicationQueue'
 export type ClickHouseChange =
-  | {kind:'update';field:string;match:string;column:string;value:string}
-  | {kind:'delete';field:string;match:string}
+  | {kind:'update';field:string;match:string;column:string;value:string;lightweight?:boolean}
+  | {kind:'delete';field:string;match:string;lightweight?:boolean}
   | {kind:'killMutation';mutationId:string}
   | {kind:'dropPartition'|'detachPartition'|'attachPartition';partitionId:string}
   | {kind:'backup';disk:string;file:string}
@@ -216,8 +218,12 @@ export interface QuerySnippet {
 export interface FileImport { name: string; text: string; format: 'csv' | 'json' | 'text' }
 export interface SshImportResult { hosts: { name: string; ssh: SshOptions }[]; warnings: string[] }
 export type ConnectionFileKind = 'certificate' | 'private-key' | 'sqlite' | 'sqlite-create'
+export interface NativeCliSnapshot {output:string;status:string;running:boolean;closed:boolean}
 export interface DbExAPI {
   readonly windowChrome:import('./window-chrome').WindowChrome
+  readonly workspaceWindowId:string
+  newWorkspaceWindow():Promise<boolean>
+  restoreWorkspaceWindows(restore:boolean):Promise<void>
   getNativePreferences():Promise<import('./preferences').NativePreferences>
   saveNativePreferences(value:import('./preferences').NativePreferences):Promise<import('./preferences').NativePreferences>
   pickTool(name:import('./preferences').ToolName):Promise<string|null>
@@ -225,6 +231,10 @@ export interface DbExAPI {
   toolVersion(name:import('./preferences').ToolName,path:string):Promise<string>
   backupSqlite(id:string):Promise<boolean>
   runNativeTool(id:string,task:import('./preferences').NativeToolTask,database:string,entity?:string):Promise<boolean>
+  startNativeCli(id:string,database:string):Promise<void>
+  readNativeCli(id:string):Promise<NativeCliSnapshot>
+  sendNativeCli(id:string,sql:string):Promise<void>
+  stopNativeCli(id:string):Promise<void>
   logPath():Promise<string>
   openLogs():Promise<void>
   saveRecovery(value:import('./preferences').RecoveryDraft):Promise<void>

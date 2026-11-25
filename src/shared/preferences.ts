@@ -1,5 +1,6 @@
 import type { LanguagePreference } from './i18n'
 import { isLanguagePreference } from './i18n'
+import {isWorkspaceWindowId,PRIMARY_WORKSPACE} from './workspace-windows'
 export const toolNames=['mongosh','mongodump','mongorestore','mongoimport','mongoexport','mysql','mysqldump','mariadb','mariadb-dump','redis-cli','sqlite3'] as const
 export type ToolName=typeof toolNames[number]
 export const nativeToolTasks=['mysql-backup','mysql-restore','mariadb-backup','mariadb-restore','mongo-backup','mongo-restore','mongo-export','mongo-import'] as const
@@ -51,10 +52,10 @@ export function normalizeNativePreferences(value:unknown):NativePreferences{
 }
 export function pageSizeFor(p:AppPreferences,kind:string){return kind==='clickhouse'?p.records.clickhousePageSize:kind==='mongodb'?p.records.mongoPageSize:kind==='sqlite'?p.records.sqlitePageSize:kind==='mariadb'?p.records.mariadbPageSize:p.records.mysqlPageSize}
 export function gridRowHeight(p:AppPreferences,mongo:boolean){return Math.max(p.records.rowHeight||(mongo?26:34),p.records.fontSize+10)}
-export interface RecoveryDraft { connectionId:string; database:string; entity:string; kind:'mysql-query'|'mariadb-query'|'sqlite-query'|'mongo-pipeline'|'mongo-query'|'redis-command'|'record-edit'|'saved-query'; text:string; updatedAt?:string }
+export interface RecoveryDraft { windowId?:string; connectionId:string; database:string; entity:string; kind:'mysql-query'|'mariadb-query'|'sqlite-query'|'mongo-pipeline'|'mongo-query'|'redis-command'|'record-edit'|'saved-query'; text:string; updatedAt?:string }
 export function normalizeRecoveryDraft(input:unknown):RecoveryDraft{
  const v=obj(input)
  if(typeof v.connectionId!=='string'||!/^[a-zA-Z0-9_-]{1,128}$/.test(v.connectionId)||typeof v.database!=='string'||v.database.length>200||typeof v.entity!=='string'||v.entity.length>200||!['mysql-query','mariadb-query','sqlite-query','mongo-pipeline','mongo-query','redis-command','record-edit','saved-query'].includes(String(v.kind))||typeof v.text!=='string'||v.text.length>100000)throw new Error('INVALID_RECOVERY: 查询草稿参数无效')
- return {connectionId:v.connectionId,database:v.database,entity:v.entity,kind:v.kind as RecoveryDraft['kind'],text:v.text}
+ return {...(isWorkspaceWindowId(v.windowId)&&v.windowId!==PRIMARY_WORKSPACE?{windowId:v.windowId}:{}),connectionId:v.connectionId,database:v.database,entity:v.entity,kind:v.kind as RecoveryDraft['kind'],text:v.text}
 }
-export function recoveryKey(input:Pick<RecoveryDraft,'connectionId'|'database'|'entity'|'kind'>){return JSON.stringify([input.connectionId,input.database,input.entity,input.kind])}
+export function recoveryKey(input:Pick<RecoveryDraft,'connectionId'|'database'|'entity'|'kind'|'windowId'>){return JSON.stringify([...(input.windowId&&input.windowId!==PRIMARY_WORKSPACE?[input.windowId]:[]),input.connectionId,input.database,input.entity,input.kind])}

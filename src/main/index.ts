@@ -1,7 +1,9 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, shell, utilityProcess, nativeImage, session as electronSession } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, shell, utilityProcess, nativeImage, screen, session as electronSession } from 'electron'
 import { windowChromeOptions } from '../shared/window-chrome'
 import { isLocale, resolveLocale, translate, localizeMessage, type Locale } from '../shared/i18n'
 import { constants } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { normalizeWorkspaceWindows,PRIMARY_WORKSPACE,type WorkspaceWindow } from '../shared/workspace-windows'
 import { join, basename, extname, dirname } from 'node:path'
 import { readFile, stat, writeFile, mkdir, mkdtemp, copyFile, rm, chmod } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
@@ -11,9 +13,10 @@ import { SessionManager } from './connections/manager'
 import { validateId } from './connections/validation'
 import { SnippetStore } from './storage/snippets'
 import { SavedQueryStore } from './storage/saved-queries'
-import { decrypt,encrypt,readJson,writeJson } from './storage/secure-json'
+import { decrypt,encrypt,readJson,writeJson,SerialWrites } from './storage/secure-json'
 import { normalizeQueryScope,queryModeFor,portableQuery,readPortableQuery,type QueryMode,type SavedQuery,type QuerySave } from '../shared/saved-query'
 import { initNativePreferences, getNativePreferences, saveNativePreferences, checkTool, diagnosticDirectory, diagnostic, saveRecovery, loadRecovery, clearRecovery, deleteRecovery } from './storage/preferences'
+import { NativeCliProcess,cliStatement,cliToolFor,prepareNativeCli } from './operations/native-cli'
 import { nativeTasks,runNativeTool,toolVersion } from './operations/native-tools'
 import { nativeToolTasks,toolNames, type ToolName,type NativeToolTask } from '../shared/preferences'
 import { parseSshConfig } from './connections/ssh-config'
@@ -47,6 +50,31 @@ let quitting = false
 const development = !app.isPackaged && process.argv.includes('--dev')
 const rendererUrl = development ? 'http://127.0.0.1:5173/' : pathToFileURL(join(__dirname, '../dist/index.html')).href
 const windows = new Set<number>()
+const windowIds=new Map<number,string>(),sessionOwners=new Map<string,number>()
+const nativeClis=new Map<string,NativeCliProcess>(),nativeCliJobs=new Map<string,Promise<unknown>>()
+const windowWrites=new SerialWrites()
+let savedWindows:WorkspaceWindow[]=[],startupWindowId=PRIMARY_WORKSPACE,windowRestoreStarted=false,windowSaveTimer:ReturnType<typeof setTimeout>|undefined
+function liveWindows(){return normalizeWorkspaceWindows(BrowserWindow.getAllWindows().filter(w=>!w.isDestroyed()&&windowIds.has(w.webContents.id)).map(w=>({id:windowIds.get(w.webContents.id),bounds:w.getNormalBounds()})))}
+async function persistWindows(){const snapshot=liveWindows();if(snapshot.length)await windowWrites.run(()=>writeJson('workspace-windows.json',snapshot))}
+function scheduleWindows(){if(quitting||!windowRestoreStarted)return;if(windowSaveTimer)clearTimeout(windowSaveTimer);windowSaveTimer=setTimeout(()=>{void persistWindows().catch(()=>{})},350)}
+async function ownedConnect(win:BrowserWindow,config:ConnectionConfig,connectionId?:string){
+ const owner=win.webContents.id,info=await sessions.connect(config,connectionId)
+ if(!windows.has(owner)||quitting){await sessions.disconnect(info.id);throw new Error('SESSION_CLOSED: 会话已关闭，请重新连接')}
+ sessionOwners.set(info.id,owner);return info
+}
+function assertOwner(win:BrowserWindow,id:string){
+ if(sessionOwners.get(id)!==win.webContents.id)throw new Error('SESSION_CLOSED: 会话已关闭，请重新连接')
+ try{sessions.info(id)}catch(error){sessionOwners.delete(id);throw error}
+}
+function sessionHandler<T extends unknown[]>(fn:(win:BrowserWindow,id:string,...args:T)=>Promise<unknown>|unknown){
+ return handler((win,id:string,...args:T)=>{assertOwner(win,id);return fn(win,id,...args)})
+}
+async function disconnectOwned(id:string){
+ sessionOwners.delete(id);nativeClis.get(id)?.stop();nativeClis.delete(id)
+ try{await sessions.disconnect(id)}finally{await nativeCliJobs.get(id)?.catch(()=>{});nativeCliJobs.delete(id)}
+}
+async function closeWindowSessions(owner:number){await Promise.allSettled([...sessionOwners].filter(([,w])=>w===owner).map(([id])=>disconnectOwned(id)))}
+
 function safeError(error: unknown): Error {
   const original = error instanceof Error ? error.message : '操作失败'
   if (error instanceof SyntaxError) return new Error('格式无效，请检查 JSON / BSON / SQL 输入')
@@ -76,7 +104,7 @@ function operationDetail(id: string, op: DatabaseOperation): string {
   const info = sessions.info(id)
   const target = 'entity' in op ? `${op.database}.${op.entity}` : 'initialCollection' in op ? `${op.database}.${op.initialCollection}` : 'database' in op ? op.database || '' : 'key' in op ? op.key : 'keys' in op ? tr('{0} 个已选择的Key', [op.keys.length]) : ''
   const count = 'edits' in op ? '\n' + tr('修改 {0} 条选中记录', [op.edits.length]) : 'rows' in op ? '\n' + tr('导入 {0} 行', [op.rows.length]) : 'documents' in op ? '\n' + tr('写入 {0} 个文档', [op.documents.length]) : ''
-  const sql = (op.action === 'mysql.query'||op.action==='clickhouse.query') ? `\n\n${op.sql.slice(0, 1500)}` : op.action==='clickhouse.change' ? '\n\n'+JSON.stringify(op.change,null,2).slice(0,8192) : op.action === 'redis.command' ? '\n' + tr('命令：') + ' ' + op.args[0] : ''
+  const sql = (op.action === 'mysql.query'||op.action==='clickhouse.query') ? `\n\n${op.sql.slice(0, 1500)}` : op.action==='mariadb.sequenceRestart' ? '\nRESTART WITH '+op.value : op.action==='clickhouse.change' ? '\n\n'+JSON.stringify(op.change,null,2).slice(0,8192) : op.action === 'redis.command' ? '\n' + tr('命令：') + ' ' + op.args[0] : ''
   return `${tr('连接：')} ${info.name}\n${tr('地址：')} ${info.displayHost}\n${tr('操作：')} ${op.action}${target ? '\n' + tr('目标：') + ' ' + target : ''}${count}\n${tr(info.transaction ? '当前有未提交事务。' : '本操作可能立即持久化。')}${sql}`
 }
 async function openText(win: BrowserWindow, title: string, limit = 4 * 1024 * 1024): Promise<FileImport | null> {
@@ -99,6 +127,13 @@ async function saveText(win: BrowserWindow, name: string, content: string, forma
   return true
 }
 function registerIpc(): void {
+  ipcMain.handle('workspace:new-window',handler(()=>{if(windows.size>=8)throw new Error('LIMIT_EXCEEDED: 最多打开8个工作区窗口');createWindow(randomUUID());return true}))
+  ipcMain.handle('workspace:restore-windows',handler((win,restore:unknown)=>{
+    if(typeof restore!=='boolean'||windowIds.get(win.webContents.id)!==startupWindowId||windowRestoreStarted)return
+    windowRestoreStarted=true
+    if(restore)for(const item of savedWindows)if(item.id!==startupWindowId&&windows.size<8&&!Array.from(windowIds.values()).includes(item.id))createWindow(item.id,item.bounds)
+    scheduleWindows()
+  }))
   ipcMain.handle('preferences:native-get', handler(()=>getNativePreferences()))
   ipcMain.handle('preferences:native-save', handler((_win,value:unknown)=>saveNativePreferences(value)))
   ipcMain.handle('preferences:pick-tool', handler(async(win,name:ToolName)=>{
@@ -114,9 +149,9 @@ function registerIpc(): void {
   }))
   ipcMain.handle('preferences:log-path',handler(()=>diagnosticDirectory()))
   ipcMain.handle('preferences:open-logs',handler(async()=>{const dir=diagnosticDirectory();await mkdir(dir,{recursive:true,mode:0o700});const error=await shell.openPath(dir);if(error)throw new Error('无法打开日志目录')}))
-  ipcMain.handle('recovery:save',handler((_win,value:unknown)=>saveRecovery(value)))
-  ipcMain.handle('recovery:load',handler((_win,value:unknown)=>loadRecovery(value)))
-  ipcMain.handle('recovery:delete',handler((_win,value:unknown)=>deleteRecovery(value)))
+  ipcMain.handle('recovery:save',handler((win,value:unknown)=>saveRecovery({...(value&&typeof value==='object'?value:{}),windowId:windowIds.get(win.webContents.id)})))
+  ipcMain.handle('recovery:load',handler((win,value:unknown)=>loadRecovery({...(value&&typeof value==='object'?value:{}),windowId:windowIds.get(win.webContents.id)})))
+  ipcMain.handle('recovery:delete',handler((win,value:unknown)=>deleteRecovery({...(value&&typeof value==='object'?value:{}),windowId:windowIds.get(win.webContents.id)})))
   ipcMain.handle('recovery:clear',handler(()=>clearRecovery()))
 
   ipcMain.handle('connections:pick-file', handler(async (win, kind: unknown) => {
@@ -154,31 +189,31 @@ function registerIpc(): void {
     await confirm(win, '保存已独立核验的 SSH 主机指纹？', `SSH: ${config.ssh.host}:${config.ssh.port}\nSHA-256: ${fingerprint}\n${tr('请先与可信来源核对，指纹不符时不要继续。')}`, '已核验，保存')
     await store.trustHostKey(id, fingerprint)
   }))
-  ipcMain.handle('connections:connect-saved', handler((_win, id: string) => sessions.connect(store.get(id), id)))
-  ipcMain.handle('connections:connect-temporary', handler((_win, config: ConnectionConfig, clearSecrets?: string[]) => sessions.connect(store.resolve(config, clearSecrets))))
+  ipcMain.handle('connections:connect-saved', handler((win, id: string) => ownedConnect(win,store.get(id), id)))
+  ipcMain.handle('connections:connect-temporary', handler((win, config: ConnectionConfig, clearSecrets?: string[]) => ownedConnect(win,store.resolve(config, clearSecrets))))
   ipcMain.handle('connections:test', handler(async (_win, config: ConnectionConfig, clearSecrets?: string[]) => {
     const info = await sessions.connect(store.resolve(config, clearSecrets))
     try { return `连接成功：${info.kind} · ${info.displayHost}` } finally { await sessions.disconnect(info.id) }
   }))
-  ipcMain.handle('connections:disconnect', handler((_win, id: string) => sessions.disconnect(id)))
+  ipcMain.handle('connections:disconnect', sessionHandler((_win, id: string) => disconnectOwned(id)))
   ipcMain.handle('connections:import', handler(async win => { const file = await openText(win, '导入 DB EX 连接备份', 16 * 1024 * 1024); if (!file) return 0; return store.importConnections(JSON.parse(file.text)) }))
   ipcMain.handle('connections:export', handler((win, id?: string) => {
     if (id !== undefined) validateId(id)
     return saveText(win, id ? 'db-ex-connection.json' : 'db-ex-connections.json', JSON.stringify(store.exportConnections(id), null, 2), 'json', '导出 DB EX 连接备份（含加密凭据）', 16 * 1024 * 1024)
   }))
   ipcMain.handle('connections:ssh-config', handler(async win => { const file = await openText(win, '选择 SSH config 文件', 1024 * 1024); return file ? parseSshConfig(file.text) : null }))
-  ipcMain.handle('explorer:roots', handler((_win, id: string) => sessions.roots(id)))
-  ipcMain.handle('explorer:children', handler((_win, id: string, database: string, category?: import('../shared/mongo-catalog').MongoCategory, withStatistics?:boolean) => sessions.children(id, database, category, withStatistics)))
-  ipcMain.handle('explorer:preview', handler((_win, id: string, database: string, entity: string, offset?: number) => sessions.preview(id, database, entity, offset)))
-  ipcMain.handle('explorer:redis-keys', handler((_win, id: string, cursor?: string, pattern?: string) => sessions.redisKeys(id, cursor, pattern)))
-  ipcMain.handle('explorer:redis-value', handler((_win, id: string, key: string) => sessions.redisValue(id, key)))
-  ipcMain.handle('sessions:write-access', handler(async (win, id: string, enabled: boolean) => {
+  ipcMain.handle('explorer:roots', sessionHandler((_win, id: string) => sessions.roots(id)))
+  ipcMain.handle('explorer:children', sessionHandler((_win, id: string, database: string, category?: import('../shared/mongo-catalog').MongoCategory, withStatistics?:boolean) => sessions.children(id, database, category, withStatistics)))
+  ipcMain.handle('explorer:preview', sessionHandler((_win, id: string, database: string, entity: string, offset?: number) => sessions.preview(id, database, entity, offset)))
+  ipcMain.handle('explorer:redis-keys', sessionHandler((_win, id: string, cursor?: string, pattern?: string) => sessions.redisKeys(id, cursor, pattern)))
+  ipcMain.handle('explorer:redis-value', sessionHandler((_win, id: string, key: string) => sessions.redisValue(id, key)))
+  ipcMain.handle('sessions:write-access', sessionHandler(async (win, id: string, enabled: boolean) => {
     if (typeof enabled !== 'boolean') throw new Error('权限参数无效')
     const info = sessions.info(id)
     if (enabled && !info.writable) await confirm(win, tr('允许修改 {0} 的数据？', [info.name]), `${tr('地址：')} ${info.displayHost}\n${tr('本会话将允许执行写操作，断开连接后恢复只读。数据库账号权限仍然有效。')}`, '解锁此会话')
     return sessions.setWriteAccess(id, enabled)
   }))
-  ipcMain.handle('sessions:execute', handler(async (win, id: string, operation: DatabaseOperation) => {
+  ipcMain.handle('sessions:execute', sessionHandler(async (win, id: string, operation: DatabaseOperation) => {
     const info = sessions.info(id)
     if (writes(operation, info.writable, info.kind)) {
       if (!info.writable || !('confirmed' in operation) || operation.confirmed !== true) throw new Error('WRITE_CONFIRMATION_REQUIRED: 请先解锁会话，并主动确认写入')
@@ -193,7 +228,7 @@ function registerIpc(): void {
     clipboard.writeText(value)
   }))
   ipcMain.handle('mongo:validate-document', handler((_win, document: string, original?: string) => validateMongoDocumentEdit(document, original)))
-  ipcMain.handle('sessions:sqlite-backup',handler(async(win,id:string)=>{
+  ipcMain.handle('sessions:sqlite-backup',sessionHandler(async(win,id:string)=>{
     const info=sessions.info(id)
     if(info.kind!=='sqlite'||info.transaction)throw new Error('INVALID_OPERATION: 不支持的操作')
     const answer=await dialog.showSaveDialog(win,{title:tr('备份数据库'),defaultPath:'backup.sqlite',filters:[{name:'SQLite',extensions:['sqlite','sqlite3','db']}]})
@@ -203,7 +238,7 @@ function registerIpc(): void {
     try{const temp=join(dir,'backup.sqlite');await sessions.backupSqlite(id,temp);await chmod(temp,0o600);await copyFile(temp,answer.filePath,constants.COPYFILE_EXCL);return true}
     finally{await rm(dir,{recursive:true,force:true})}
   }))
-  ipcMain.handle('sessions:native-tool',handler(async(win,id:string,task:NativeToolTask,database:string,entity?:string)=>{
+  ipcMain.handle('sessions:native-tool',sessionHandler(async(win,id:string,task:NativeToolTask,database:string,entity?:string)=>{
     if(!nativeToolTasks.includes(task))throw new Error('INVALID_OPERATION: 不支持的操作')
     const spec=nativeTasks[task],info=sessions.info(id)
     if(info.kind!==spec.kind)throw new Error('INVALID_OPERATION: 操作与连接类型不匹配')
@@ -218,7 +253,41 @@ function registerIpc(): void {
     await sessions.routedExternal(id,spec.write,(config,signal,route)=>runNativeTool(executable,task,config,database,entity,file,signal,route))
     return true
   }))
-  ipcMain.handle('sessions:clickhouse-transfer',handler(async(win,id:string,input:import('../shared/types').ClickHouseTransfer)=>{
+  ipcMain.handle('sessions:cli-start',sessionHandler(async(win,id,database:string)=>{
+    const info=sessions.info(id),tool=cliToolFor(info.kind)
+    if(!tool||!info.writable||info.transaction||nativeClis.has(id))throw new Error('INVALID_OPERATION: Native CLI requires write-enabled idle session')
+    const path=getNativePreferences().tools[tool]
+    if(!path||!await checkTool(tool,path))throw new Error('INVALID_TOOL_PATH: 请输入可执行文件的绝对路径')
+    await confirm(win,'确认打开原生数据库 CLI？',info.name+' · '+info.displayHost+'\n'+database+'\n'+tr('独立原生会话；关闭会话不会撤销已提交的操作。'))
+    assertOwner(win,id)
+    if(nativeClis.has(id))throw new Error('SESSION_BUSY: 当前连接正在执行操作')
+    const cli=new NativeCliProcess(info.kind,text=>sessions.redact(text))
+    nativeClis.set(id,cli)
+    await new Promise<void>((resolve,reject)=>{
+      const job=sessions.routedExternal(id,true,async(config,signal,route)=>{
+        const prepared=await prepareNativeCli(config,database,route)
+        try{await cli.start(path,prepared.args,signal);resolve();await cli.finished}
+        catch(error){cli.stop();reject(error);throw error}
+        finally{await prepared.cleanup()}
+      }).catch(error=>{nativeClis.delete(id);reject(error)})
+      nativeCliJobs.set(id,job)
+      void job.finally(()=>{if(nativeCliJobs.get(id)===job)nativeCliJobs.delete(id)})
+    })
+  }))
+  ipcMain.handle('sessions:cli-read',sessionHandler((_win,id)=>{const cli=nativeClis.get(id);if(!cli)throw new Error('SESSION_CLOSED: 会话已关闭，请重新连接');return cli.snapshot()}))
+  ipcMain.handle('sessions:cli-send',sessionHandler(async(win,id,sql:string)=>{
+    const cli=nativeClis.get(id),info=sessions.info(id)
+    if(!cli||!info.writable)throw new Error('READ_ONLY: 请先启用当前会话的写入权限')
+    const plan=cliStatement(info.kind,sql)
+    if(plan.mode==='write')await confirm(win,'确认执行数据库写操作？',info.name+' · '+info.displayHost+'\n'+plan.sql.slice(0,4096))
+    assertOwner(win,id)
+    if(nativeClis.get(id)!==cli)throw new Error('SESSION_CLOSED: 会话已关闭，请重新连接')
+    cli.send(plan.sql)
+  }))
+  ipcMain.handle('sessions:cli-stop',sessionHandler(async(_win,id)=>{
+    const cli=nativeClis.get(id);if(!cli)return;cli.stop();await nativeCliJobs.get(id);nativeClis.delete(id)
+  }))
+  ipcMain.handle('sessions:clickhouse-transfer',sessionHandler(async(win,id:string,input:import('../shared/types').ClickHouseTransfer)=>{
     const info=sessions.info(id)
     if(info.kind!=='clickhouse'||!input||!['import','export'].includes(input.direction)||typeof input.database!=='string'||typeof input.entity!=='string'||input.database.length>200||input.entity.length>200)throw new Error('INVALID_INPUT: ClickHouse transfer')
     transferFormat(input.format)
@@ -230,17 +299,17 @@ function registerIpc(): void {
     await confirm(win,'确认执行外部工具？',info.name+' · '+info.displayHost+'\n'+input.database+'.'+input.entity+'\n'+input.direction+' '+input.format+'\n'+path+'\n'+tr(input.direction==='import'?'流式导入可能部分写入；失败或取消后请核对，不要直接重试。':'导出整表（无当前页筛选），最多256 MiB；不覆盖现有文件。')+(input.direction==='export'&&input.format==='csv'?'\n'+tr('原始 CSV 保留原值；在电子表格中打开前请检查公式风险。'):''))
     return sessions.clickhouseTransfer(id,input,path)
   }))
-  ipcMain.handle('sessions:cancel', handler((_win, id: string) => sessions.cancel(id)))
-  ipcMain.handle('query-objects:list',handler((_win,id:string,database:string,mode:QueryMode)=>savedQueries.list(savedQueryScope(id,database),mode)))
-  ipcMain.handle('query-objects:get',handler((_win,id:string,database:string,queryId:string)=>savedQueries.get(savedQueryScope(id,database),queryId)))
-  ipcMain.handle('query-objects:save',handler((_win,id:string,database:string,input:QuerySave)=>savedQueries.save(savedQueryScope(id,database),input)))
-  ipcMain.handle('query-objects:copy',handler((_win,id:string,database:string,queryId:string)=>savedQueries.copy(savedQueryScope(id,database),queryId)))
-  ipcMain.handle('query-objects:delete',handler(async(win,id:string,database:string,queryId:string,revision:string)=>{
+  ipcMain.handle('sessions:cancel', sessionHandler((_win, id: string) => disconnectOwned(id)))
+  ipcMain.handle('query-objects:list',sessionHandler((_win,id:string,database:string,mode:QueryMode)=>savedQueries.list(savedQueryScope(id,database),mode)))
+  ipcMain.handle('query-objects:get',sessionHandler((_win,id:string,database:string,queryId:string)=>savedQueries.get(savedQueryScope(id,database),queryId)))
+  ipcMain.handle('query-objects:save',sessionHandler((_win,id:string,database:string,input:QuerySave)=>savedQueries.save(savedQueryScope(id,database),input)))
+  ipcMain.handle('query-objects:copy',sessionHandler((_win,id:string,database:string,queryId:string)=>savedQueries.copy(savedQueryScope(id,database),queryId)))
+  ipcMain.handle('query-objects:delete',sessionHandler(async(win,id:string,database:string,queryId:string,revision:string)=>{
     const scope=savedQueryScope(id,database),item=await savedQueries.get(scope,queryId)
     await confirm(win,'删除已保存的查询？',item.name+' @ '+database,'删除')
     await savedQueries.remove(scope,queryId,revision)
   }))
-  ipcMain.handle('query-objects:import',handler(async(win,id:string,database:string,mode:QueryMode)=>{
+  ipcMain.handle('query-objects:import',sessionHandler(async(win,id:string,database:string,mode:QueryMode)=>{
     const scope=savedQueryScope(id,database);queryModeFor(scope.kind,mode)
     const file=await openText(win,'导入查询',512*1024)
     if(!file)return null
@@ -248,7 +317,7 @@ function registerIpc(): void {
     const draft=readPortableQuery(scope.kind,mode,file.text,basename(file.name,extname(file.name)).slice(0,100)||tr('未命名查询'),isSql)
     return savedQueries.import(scope,draft)
   }))
-  ipcMain.handle('query-objects:export',handler(async(win,id:string,database:string,queryId:string,format:'json'|'sql')=>{
+  ipcMain.handle('query-objects:export',sessionHandler(async(win,id:string,database:string,queryId:string,format:'json'|'sql')=>{
     const item=await savedQueries.get(savedQueryScope(id,database),queryId)
     if(format!=='json'&&format!=='sql'||format==='sql'&&item.mode!=='sql')throw new Error('查询记录参数错误')
     // Query files are intentionally portable plaintext; never include profile credentials.
@@ -271,23 +340,27 @@ function runtimeIcon(){
   const image=nativeImage.createFromPath(runtimeIconPath())
   return image.isEmpty()?undefined:image
 }
-function createWindow(): void {
-  const win = new BrowserWindow({ title: 'DB EX', width: 1440, height: 900, minWidth: 1040, minHeight: 640,
+function createWindow(id=PRIMARY_WORKSPACE,bounds?:WorkspaceWindow['bounds']): void {
+  const safeBounds=bounds&&screen.getAllDisplays().some(d=>bounds.x<d.workArea.x+d.workArea.width-100&&bounds.y<d.workArea.y+d.workArea.height-100&&bounds.x+bounds.width>d.workArea.x+100&&bounds.y+bounds.height>d.workArea.y+100)?bounds:undefined
+  const win = new BrowserWindow({ title: 'DB EX', width: 1440, height: 900,...safeBounds, minWidth: 1040, minHeight: 640,
     backgroundColor: '#111821', show: false,
     icon: runtimeIcon(),
     // On macOS retain AppKit's real traffic-light controls and extend web content
     // into the old title bar. Other operating systems keep their native frames.
     ...windowChromeOptions(process.platform),
-    webPreferences: { preload: join(__dirname, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, spellcheck: false },
+    webPreferences: { preload: join(__dirname, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, spellcheck: false,additionalArguments:['--dbex-workspace='+id] },
   })
   const contentsId = win.webContents.id
-  windows.add(contentsId)
-  win.webContents.once('destroyed', () => windows.delete(contentsId))
+  windows.add(contentsId);windowIds.set(contentsId,id)
+  win.on('move',scheduleWindows);win.on('resize',scheduleWindows)
+  win.on('close',()=>{if(!quitting&&windows.size===1)void persistWindows().catch(()=>{})})
+  win.webContents.once('destroyed', () => {windows.delete(contentsId);windowIds.delete(contentsId);void closeWindowSessions(contentsId);if(!quitting&&windowRestoreStarted)void persistWindows().catch(()=>{})})
   win.once('ready-to-show', () => win.show())
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   win.webContents.on('will-navigate', event => event.preventDefault())
   win.webContents.on('will-attach-webview', event => event.preventDefault())
   void win.loadURL(rendererUrl)
+  scheduleWindows()
 }
 app.whenReady().then(async () => {
   currentLocale = resolveLocale('system', getSystemLanguage())
@@ -302,13 +375,17 @@ app.whenReady().then(async () => {
   await store.init()
   // Preferences are optional; a corrupt preferences file must not prevent opening existing connections.
   await initNativePreferences().catch(()=>{})
+  savedWindows=normalizeWorkspaceWindows(await readJson('workspace-windows.json').catch(()=>undefined))
   registerIpc()
-  createWindow()
+  const initial=savedWindows.find(w=>w.id===PRIMARY_WORKSPACE)||savedWindows[0]
+  startupWindowId=initial?.id||PRIMARY_WORKSPACE
+  createWindow(startupWindowId,initial?.bounds)
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
 }).catch(error => { dialog.showErrorBox(tr('DB EX 启动失败'), localizeMessage(currentLocale, safeError(error).message)); app.quit() })
 app.on('window-all-closed', () => { void sessions.closeAll(); if (process.platform !== 'darwin') app.quit() })
 app.on('before-quit', event => {
   if (quitting) return
   event.preventDefault(); quitting = true
-  void sessions.closeAll().finally(() => app.quit())
+  if(windowSaveTimer)clearTimeout(windowSaveTimer)
+  void Promise.allSettled([persistWindows(),sessions.closeAll()]).finally(() => app.quit())
 })

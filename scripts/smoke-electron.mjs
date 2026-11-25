@@ -37,6 +37,9 @@ application = await electron.launch({
   assert.equal(runtimeArtwork.size.width,1024)
   assert.equal(runtimeArtwork.size.height,1024)
   assert.equal(runtimeArtwork.dockAvailable,true)
+  const logo=await page.locator('img.brand-symbol').evaluate(img=>({width:img.naturalWidth,height:img.naturalHeight,loaded:img.complete}))
+  assert.deepEqual(logo,{width:64,height:64,loaded:true})
+  assert.equal(await page.evaluate(()=>window.dbex.workspaceWindowId),'primary')
   assert.equal(await page.locator('.empty-workspace').textContent(),'')
   assert.equal(await page.locator('.welcome-mark,.welcome-features').count(),0)
   assert.match(boundary.title, /DB EX/)
@@ -81,6 +84,24 @@ application = await electron.launch({
   // The fixture is a new empty file; no user database is touched.
   const sqlitePath=join(userData,'sqlite-smoke.db')
   await writeFile(sqlitePath,'',{flag:'wx',mode:0o600})
+  // Two real renderer windows must not share session IDs, privileges or recovery drafts.
+  const secondWindow=application.waitForEvent('window',{timeout:15000})
+  await page.evaluate(()=>window.dbex.newWorkspaceWindow())
+  const second=await secondWindow
+  await second.waitForFunction(()=>typeof window.dbex?.workspaceWindowId==='string')
+  const secondaryId=await second.evaluate(()=>window.dbex.workspaceWindowId)
+  assert.notEqual(secondaryId,'primary')
+  const isolated=await page.evaluate(async filePath=>window.dbex.connectTemporary({name:'Primary SQLite',kind:'sqlite',host:'',port:0,filePath,ssh:{enabled:false},tls:{enabled:false}}),sqlitePath)
+  try{
+    assert.equal(await second.evaluate(async id=>{try{await window.dbex.roots(id);return false}catch{return true}},isolated.id),true)
+    const secondSession=await second.evaluate(async filePath=>window.dbex.connectTemporary({name:'Secondary SQLite',kind:'sqlite',host:'',port:0,filePath,ssh:{enabled:false},tls:{enabled:false}}),sqlitePath)
+    assert.notEqual(secondSession.id,isolated.id)
+    assert.equal(await page.evaluate(async id=>{try{await window.dbex.roots(id);return false}catch{return true}},secondSession.id),true)
+    const closed=second.waitForEvent('close')
+    await application.evaluate(({BrowserWindow},id)=>{const win=BrowserWindow.getAllWindows().find(w=>w.webContents.getLastWebPreferences()?.additionalArguments?.includes('--dbex-workspace='+id));if(!win)throw new Error('secondary window missing');win.close()},secondaryId)
+    await closed
+    assert.equal((await page.evaluate(id=>window.dbex.roots(id),isolated.id))[0].database,'main')
+  }finally{await page.evaluate(id=>window.dbex.disconnect(id),isolated.id)}
   const sqlite=await page.evaluate(async filePath=>{
     const config={name:'SQLite smoke',kind:'sqlite',host:'',port:0,filePath,ssh:{enabled:false},tls:{enabled:false}}
     const session=await window.dbex.connectTemporary(config)

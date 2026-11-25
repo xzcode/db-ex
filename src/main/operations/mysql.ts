@@ -87,6 +87,7 @@ export class MysqlOperations {
         await this.query((operation.action === 'mysql.createDatabase' ? 'CREATE DATABASE ' : 'DROP DATABASE ') + database, [], signal, 1, false)
         return emptyResult(operation.action === 'mysql.createDatabase' ? '数据库已创建' : '数据库已删除')
       }
+      case 'mariadb.object': case 'mariadb.sequenceRestart': return this.mariaObject(operation,context,signal)
       case 'mysql.query': return this.executeSql(operation, context, signal)
       case 'mysql.browse': return this.browse(operation, signal)
       case 'mysql.inspect': return this.inspectObject(operation.database, operation.entity, signal)
@@ -126,6 +127,51 @@ export class MysqlOperations {
       case 'mysql.import': return this.importRows(operation, context, signal)
       default: throw new Error('INVALID_OPERATION: 不支持的 MySQL 操作')
     }
+  }
+
+  private async mariaObject(operation:Extract<MysqlOperation,{action:'mariadb.object'|'mariadb.sequenceRestart'}>,context:OperationContext,signal:AbortSignal):Promise<OperationResult>{
+    if(this.kind!=='mariadb')throw new Error('INVALID_OPERATION: MariaDB only')
+    const database=resourceName(operation.database),entity=resourceName(operation.entity)
+    const target=quoteIdentifier(database)+'.'+quoteIdentifier(entity)
+    const type=this.records(await this.query('SELECT TABLE_TYPE FROM information_schema.TABLES WHERE TABLE_SCHEMA=? AND TABLE_NAME=? LIMIT 1',[database,entity],signal,1))[0]?.TABLE_TYPE
+    if(operation.action==='mariadb.sequenceRestart'){
+      requireWrite(context)
+      if(this.transaction)throw new Error('IMPLICIT_COMMIT: DDL 会隐式提交，请先显式提交或回滚当前事务')
+      validateDatabaseName('mariadb',database)
+      if(type!=='SEQUENCE'||typeof operation.value!=='string'||!/^-?(?:0|[1-9][0-9]{0,19})$/.test(operation.value))throw new Error('INVALID_INPUT: MariaDB sequence')
+      const value=BigInt(operation.value)
+      if(value<-(1n<<63n)||value>(1n<<63n)-1n)throw new Error('INVALID_INPUT: MariaDB sequence value')
+      await this.query('ALTER SEQUENCE '+target+' RESTART WITH '+value.toString(),[],signal,1,false)
+      return emptyResult('操作已完成')
+    }
+    const {limit,offset}=page(operation)
+    let sql:string,params:SqlValue[]=[]
+    if(operation.view==='sequence'&&type==='SEQUENCE'){
+      // Reading the sequence table itself is non-consuming; never invoke NEXT VALUE.
+      sql='SELECT * FROM '+target
+    }else if(operation.view==='history'&&type==='SYSTEM VERSIONED'){
+      // Implicit period columns are hidden from SELECT *. Explicit period
+      // names are reported by SHOW CREATE TABLE on older server versions too.
+      const ddl=await this.query('SHOW CREATE TABLE '+target,[],signal,1,false)
+      const definition=String(ddl.values[0]?.[1]||'')
+      const period=/PERIOD\s+FOR\s+SYSTEM_TIME\s*\(\s*`((?:``|[^`])+)`\s*,\s*`((?:``|[^`])+)`\s*\)/i.exec(definition)
+      const start=period?quoteIdentifier(period[1]!.replaceAll('``','`')):'ROW_START',end=period?quoteIdentifier(period[2]!.replaceAll('``','`')):'ROW_END'
+      const columns=await this.query('SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? LIMIT 501',[database,entity],signal,501)
+      const names=new Set(columns.values.map(row=>String(row[0]).toLowerCase()))
+      const alias=(name:string)=>{while(names.has(name))name='_'+name;names.add(name);return quoteIdentifier(name)}
+      sql='SELECT *, '+start+' AS '+alias('dbex_row_start')+', '+end+' AS '+alias('dbex_row_end')+' FROM '+target+' FOR SYSTEM_TIME ALL ORDER BY '+start+', '+end
+    }else if(operation.view==='partitions'&&(type==='BASE TABLE'||type==='SYSTEM VERSIONED')){
+      sql='SELECT PARTITION_NAME,PARTITION_ORDINAL_POSITION,SUBPARTITION_NAME,PARTITION_METHOD,PARTITION_EXPRESSION,PARTITION_DESCRIPTION,TABLE_ROWS,DATA_LENGTH,INDEX_LENGTH FROM information_schema.PARTITIONS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? AND PARTITION_NAME IS NOT NULL ORDER BY PARTITION_ORDINAL_POSITION,SUBPARTITION_ORDINAL_POSITION'
+      params=[database,entity]
+    }else throw new Error('INVALID_OPERATION: MariaDB object type')
+    const temporary=!this.transaction
+    if(temporary)await this.query('START TRANSACTION READ ONLY',[],signal,1,false)
+    try{
+      const data=await this.query(sql+' LIMIT '+(limit+1)+' OFFSET '+offset,params,signal,limit+1)
+      const more=data.values.length>limit;if(more)data.values.pop()
+      const result=this.result(data)
+      return {...result,rawRows:undefined,nextOffset:more?offset+limit:undefined,truncated:result.truncated||more}
+    }finally{if(temporary&&!this.closed)await this.query('ROLLBACK',[],signal,1,false)}
   }
 
   private async browse(operation: Extract<MysqlOperation, { action: 'mysql.browse' }>, signal: AbortSignal): Promise<OperationResult> {

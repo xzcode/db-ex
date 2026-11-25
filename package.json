@@ -21,7 +21,8 @@
     "verify": "npm run typecheck && npm test && npm run build",
     "smoke:electron": "node scripts/smoke-electron.mjs",
     "test:topology": "node --import tsx --test tests/mongo-topology.test.ts tests/redis-topology.test.ts",
-    "icons": "node scripts/generate-icons.mjs"
+    "icons": "node scripts/generate-icons.mjs",
+    "pretest:ui": "node -e \"if (!require('fs').existsSync('build/icon-brand.png')) require('child_process').execFileSync(process.execPath,['scripts/generate-icons.mjs'],{stdio:'inherit'})\""
   },
   "dependencies": {
     "@clickhouse/client": "^1.25.0",

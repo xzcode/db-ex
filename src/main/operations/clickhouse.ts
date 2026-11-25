@@ -145,11 +145,23 @@ export class ClickHouseOperations{
    const change=plainObject(op.change,'ClickHouse change') as unknown as typeof op.change
    if(!mergeTreeEngine(await this.engine(database,entity,context)))throw new Error('INVALID_OPERATION: ClickHouse administration supports MergeTree tables')
    const params={db:database,table:entity}
-   let sql:string,parameters:Record<string,unknown>={},backupId:string|undefined
+   let sql:string,parameters:Record<string,unknown>={},backupId:string|undefined,lightweight=false
    if(change.kind==='update'||change.kind==='delete'){
     const fields=await this.structure(database,entity,context)
     if(fields.truncated)throw new Error('LIMIT_EXCEEDED: ClickHouse structure')
     const plan=mutationPlan(change,fields.rows,qualified)
+    lightweight=change.lightweight===true
+    if(lightweight){
+     const setting=change.kind==='update'?'allow_experimental_lightweight_update':'allow_experimental_lightweight_delete'
+     const support=await this.select('SELECT value FROM system.settings WHERE name={name:String} LIMIT 1',{name:setting},context,1)
+     // Do not enable experimental server settings or modify table settings automatically.
+     if(support.rows[0]?.value!=='1')throw new Error('INVALID_OPERATION: ClickHouse lightweight mutation unavailable')
+     if(change.kind==='update'){
+      const table=await this.select('SELECT create_table_query FROM system.tables WHERE database={db:String} AND name={table:String} LIMIT 1',params,context,1)
+      const ddl=table.rows[0]?.create_table_query||''
+      if(!/\benable_block_number_column\s*=\s*1\b/i.test(ddl)||!/\benable_block_offset_column\s*=\s*1\b/i.test(ddl))throw new Error('INVALID_OPERATION: ClickHouse lightweight UPDATE requires block number and offset columns')
+     }
+    }
     if(op.action==='clickhouse.mutationPreview'){
      if(change.kind==='update')await this.select('SELECT accurateCast({value:String}, {valueType:String}) AS validated',plan.params,context,1)
      const result=await this.select('SELECT count() AS matched FROM '+qualified+' WHERE '+plan.where,plan.params,context,1)
@@ -182,12 +194,12 @@ export class ClickHouseOperations{
    const id=randomUUID()
    // Submission is not completion; do not present row counts or success of
    // background work. Never automatically retry an interrupted mutation.
-   await this.client.command({query:sql,query_params:parameters,query_id:id,abort_signal:context.signal,clickhouse_settings:{...WRITE_SETTINGS,mutations_sync:'0'}})
+   await this.client.command({query:sql,query_params:parameters,query_id:id,abort_signal:context.signal,clickhouse_settings:{...WRITE_SETTINGS,mutations_sync:'0',...(lightweight&&change.kind==='delete'?{lightweight_deletes_sync:'0'}:{})}})
    return {columns:[],rows:[],queryId:id,backupId,message:'ClickHouse 操作已提交，请刷新任务状态；取消不回滚已完成的修改。'}
   }
   if(op.action==='clickhouse.management'){
    const query=clickHouseManagementQuery(op.view,op)
-   const result=await this.select(query.sql,{db:database,table:entity},context,query.limit)
+   const result=await this.select(query.sql,query.view==='topology'?{}:{db:database,table:entity},context,query.limit)
    if(query.view!=='queries'&&result.truncated&&query.offset+query.limit<=1000000)result.nextOffset=query.offset+query.limit
    return result
   }

@@ -18,12 +18,13 @@ export function mutationPlan(change:ClickHouseChange,fields:Fields,qualified:str
  const params:Record<string,string>={filter:boundedText(change.match,'ClickHouse filter',65536),filterType:filter.type!}
  // Use server conversion and equality (not arbitrary user-supplied SQL).
  const where=clickHouseIdentifier(filter.name)+' = accurateCast({filter:String}, {filterType:String})'
- let sql='ALTER TABLE '+qualified+' DELETE WHERE '+where
+ if(change.lightweight!==undefined&&typeof change.lightweight!=='boolean')throw new Error('INVALID_INPUT: ClickHouse mutation mode')
+ let sql=change.lightweight?'DELETE FROM '+qualified+' WHERE '+where:'ALTER TABLE '+qualified+' DELETE WHERE '+where
  if(change.kind==='update'){
   const field=fields.find(r=>r.name===change.column)
   if(!field||!scalarType(field.type||'')||field.is_in_primary_key!=='0'||field.is_in_sorting_key!=='0'||field.is_in_partition_key!=='0'||field.is_in_sampling_key!=='0'||['MATERIALIZED','ALIAS','EPHEMERAL'].includes(field.default_kind||''))throw new Error('INVALID_INPUT: ClickHouse update column')
   params.value=boundedText(change.value,'ClickHouse value',65536);params.valueType=field.type!
-  sql='ALTER TABLE '+qualified+' UPDATE '+clickHouseIdentifier(field.name)+' = accurateCast({value:String}, {valueType:String}) WHERE '+where
+  sql=(change.lightweight?'UPDATE '+qualified+' SET ':'ALTER TABLE '+qualified+' UPDATE ')+clickHouseIdentifier(field.name)+' = accurateCast({value:String}, {valueType:String}) WHERE '+where
  }
  return {sql,where,params}
 }

@@ -4,6 +4,9 @@ import { windowChromeForPlatform } from '../shared/window-chrome'
 // Every bridge method is explicit. Renderer receives no filesystem, raw IPC or driver handles.
 const api: DbExAPI = {
   windowChrome:windowChromeForPlatform(process.platform),
+  workspaceWindowId:process.argv.find(x=>x.startsWith('--dbex-workspace='))?.slice('--dbex-workspace='.length)||'primary',
+  newWorkspaceWindow:()=>ipcRenderer.invoke('workspace:new-window'),
+  restoreWorkspaceWindows:restore=>ipcRenderer.invoke('workspace:restore-windows',restore),
   getNativePreferences:()=>ipcRenderer.invoke('preferences:native-get'),
   saveNativePreferences:value=>ipcRenderer.invoke('preferences:native-save',value),
   pickTool:name=>ipcRenderer.invoke('preferences:pick-tool',name),
@@ -11,6 +14,10 @@ const api: DbExAPI = {
   toolVersion:(name,path)=>ipcRenderer.invoke('preferences:tool-version',name,path),
   backupSqlite:id=>ipcRenderer.invoke('sessions:sqlite-backup',id),
   runNativeTool:(id,task,database,entity)=>ipcRenderer.invoke('sessions:native-tool',id,task,database,entity),
+  startNativeCli:(id,database)=>ipcRenderer.invoke('sessions:cli-start',id,database),
+  readNativeCli:id=>ipcRenderer.invoke('sessions:cli-read',id),
+  sendNativeCli:(id,sql)=>ipcRenderer.invoke('sessions:cli-send',id,sql),
+  stopNativeCli:id=>ipcRenderer.invoke('sessions:cli-stop',id),
   logPath:()=>ipcRenderer.invoke('preferences:log-path'),
   openLogs:()=>ipcRenderer.invoke('preferences:open-logs'),
   saveRecovery:value=>ipcRenderer.invoke('recovery:save',value),

@@ -24,11 +24,19 @@ async function installBridge(page: Page) {
       { id: 'redis', name: 'Redis Local', kind: 'redis', host: '127.0.0.1', port: 6379 },
       { id: 'sql2', name: 'MySQL Other', kind: 'mysql', host: '127.0.0.2', port: 3306 },
       {id:'ch',name:'ClickHouse Local',kind:'clickhouse',host:'127.0.0.1',port:8123},
+      {id:'maria',name:'MariaDB Local',kind:'mariadb',host:'127.0.0.1',port:3306},
     ].map(value => ({ ...value, sshEnabled: false, tlsEnabled: false }))
     const grid = (values: Record<string, string>[]) => ({ columns: Object.keys(values[0] || {}), rows: values })
     ;(window as any).__dbexCalls = calls
     ;(window as any).dbex = {
       windowChrome:localStorage.getItem('mock.window-chrome')==='mac-native-controls'?'mac-native-controls':'native',
+      workspaceWindowId:localStorage.getItem('mock.workspace-window')||'primary',
+      async newWorkspaceWindow(){calls.push({action:'newWorkspaceWindow'});return true},
+      async restoreWorkspaceWindows(restore:boolean){calls.push({action:'restoreWorkspaceWindows',restore})},
+      async startNativeCli(id:string,database:string){calls.push({action:'startNativeCli',id,database})},
+      async readNativeCli(){return {output:'fixture SQL result',status:'ready',running:false,closed:false}},
+      async sendNativeCli(id:string,sql:string){calls.push({action:'sendNativeCli',id,sql})},
+      async stopNativeCli(id:string){calls.push({action:'stopNativeCli',id})},
       async getNativePreferences(){return JSON.parse(localStorage.getItem('mock.native-preferences')||'{"tools":{},"diagnostics":false}')},
       async saveNativePreferences(value:any){localStorage.setItem('mock.native-preferences',JSON.stringify(value));return value},
       async logPath(){return '/mock/logs'},async openLogs(){calls.push({action:'openLogs'})},
@@ -53,6 +61,7 @@ async function installBridge(page: Page) {
       async roots(id: string) { return [{ id: id + '-db', label: id === 'redis' ? 'DB 0' : id === 'sql2' ? 'other' : 'app', kind: id === 'redis' ? 'keyspace' : 'database', database: id === 'sql2' ? 'other' : 'app' },...(additionalDbs[id]||[]).map(database=>({id:id+'-'+database,label:database,kind:'database',database}))] },
       async children(id: string, database: string, category?: string) {
         if(id==='ch')return [{id:database+'-events',label:'events',database,entity:'events',kind:'table',metrics:[{label:'存储引擎',value:'MergeTree'},{label:'记录数（估算）',value:'10'}]}]
+        if(id==='maria')return [{id:database+'-seq',label:'seq',database,entity:'seq',kind:'table',objectType:'sequence',readOnly:true},{id:database+'-history',label:'history',database,entity:'history',kind:'table',objectType:'system-versioned',readOnly:true}]
         if(id!=='mongo')return [{ id: database + '-users', label: 'users', database, entity: 'users', kind: 'table' }]
         if(!category)return [['collections','集合'],['views','视图'],['functions','函数'],['indexes','索引'],['pipelines','聚合管道'],['gridfs','GridFS 存储桶'],['queries','查询']].map(([key,label])=>({id:database+'-'+key,label,database,kind:'mongo-category',category:key}))
         if(category==='collections')return [{id:database+'-users',label:'users',database,entity:'users',kind:'collection',metrics:[{label:'文档数',value:'10'},{label:'数据大小',value:'2048',format:'bytes'}]},...((window as any).__dbexCatalogFixture?[{id:database+'-audit',label:'audit',database,entity:'audit',kind:'collection',metrics:[{label:'文档数',value:'2'},{label:'数据大小',value:'100',format:'bytes'}]}]:[])]
@@ -70,9 +79,12 @@ async function installBridge(page: Page) {
         if(op.action==='clickhouse.management'){
           if(op.view==='partitions')return {...grid([{partition_id:op.offset?'p2':'p1',rows:'10',compression_ratio:'2.5'}]),nextOffset:op.offset?undefined:200}
           if(op.view==='mutations')return grid([{mutation_id:'mutation_1.txt',is_done:'0',parts_to_do:'2'}])
+          if(op.view==='topology')return grid([{cluster:'fixture_cluster',shard_num:'1',replica_num:'2'}])
+          if(op.view==='replicationQueue')return grid([{replica_name:'replica-1',new_part_name:'part-1'}])
           if(op.view==='replicas')return grid([{replica_name:'replica-1',queue_size:'3'}])
           if(op.view==='queries')return grid([{outcome:'QueryFinish',queries:'12',avg_ms:'10'}])
         }
+        if(op.action==='mariadb.object')return grid(op.view==='sequence'?[{next_not_cached_value:'7'}]:[{note:'historical version'}])
         if(op.action==='clickhouse.mutationPreview')return {...grid([{matched:'1'}]),totalRows:'1'}
         if(op.action==='clickhouse.change')return {columns:[],rows:[],queryId:'query-fixture',backupId:op.change.kind==='backup'?'backup-fixture':undefined,message:'ClickHouse 操作已提交，请刷新任务状态；取消不回滚已完成的修改。'}
         if(op.action==='clickhouse.backupStatus')return grid([{id:op.backupId,status:'BACKUP_CREATED',total_size:'1024'}])
@@ -1246,6 +1258,10 @@ test('ClickHouse management reports remain scoped and read-only',async({page})=>
  await expect(workbench.locator('.data-table')).toContainText('mutation_1.txt')
  await workbench.getByRole('button',{name:'副本状态',exact:true}).click()
  await expect(workbench.locator('.data-table')).toContainText('replica-1')
+ await workbench.getByRole('button',{name:'集群拓扑',exact:true}).click()
+ await expect(workbench.locator('.data-table')).toContainText('fixture_cluster')
+ await workbench.getByRole('button',{name:'复制队列',exact:true}).click()
+ await expect(workbench.locator('.data-table')).toContainText('part-1')
  await workbench.getByRole('button',{name:'查询统计',exact:true}).click()
  await expect(workbench.locator('.data-table')).toContainText('QueryFinish')
  await expect(workbench.getByText('本节点最近24小时已记录查询；日志可能延迟或未启用')).toBeVisible()
@@ -1272,15 +1288,16 @@ test('ClickHouse scoped admin actions require preview and write access, and file
  await workbench.getByRole('button',{name:'变更任务…',exact:true}).click()
  const dialog=page.getByRole('dialog',{name:'管理',exact:true})
  await dialog.locator('select').nth(1).selectOption('id')
- await dialog.locator('input').nth(0).fill('18446744073709551615')
+ await dialog.locator('input:not([type=checkbox])').nth(0).fill('18446744073709551615')
  await dialog.locator('select').nth(2).selectOption('note')
- await dialog.locator('input').nth(1).fill('new note')
+ await dialog.locator('input:not([type=checkbox])').nth(1).fill('new note')
+ await dialog.getByRole('checkbox',{name:'轻量级变更'}).check()
  await expect(dialog.getByRole('button',{name:'确认执行',exact:true})).toBeDisabled()
  await dialog.getByRole('button',{name:'预览匹配记录数',exact:true}).click()
  await expect(dialog.getByText(/匹配记录数（执行时可能变化）/)).toContainText('1')
  await dialog.getByRole('button',{name:'确认执行',exact:true}).click()
  await expect(dialog).toHaveCount(0)
- await expect.poll(()=>page.evaluate(()=>(window as any).__dbexCalls.filter((c:any)=>c.action==='clickhouse.change').at(-1))).toMatchObject({database:'app',entity:'events',confirmed:true,change:{kind:'update',field:'id',match:'18446744073709551615',column:'note',value:'new note'}})
+ await expect.poll(()=>page.evaluate(()=>(window as any).__dbexCalls.filter((c:any)=>c.action==='clickhouse.change').at(-1))).toMatchObject({database:'app',entity:'events',confirmed:true,change:{kind:'update',field:'id',match:'18446744073709551615',column:'note',value:'new note',lightweight:true}})
  await workbench.getByRole('button',{name:'备份数据库 / 恢复数据库…',exact:true}).click()
  await dialog.getByPlaceholder('backups').fill('dbex_backups')
  await dialog.getByPlaceholder('snapshot.zip').fill('snapshot.zip')
@@ -1321,4 +1338,38 @@ test('SQL completion infers current table and fetches metadata before query exec
  await expect.poll(()=>page.evaluate(()=>(window as any).__dbexCalls.filter((c:any)=>c.action==='clickhouse.structure').at(-1))).toMatchObject({database:'app',entity:'events'})
  await expect(editor.getByText('字段补全来源: events')).toBeVisible()
  expect(await page.evaluate(()=>(window as any).__dbexCalls.filter((c:any)=>c.action==='clickhouse.query'))).toEqual([])
+})
+
+
+test('approved logo replaces placeholder and separate workspace startup restores its own snapshot',async({page})=>{
+ await expect(page.locator('img.brand-symbol')).toBeVisible()
+ await expect.poll(()=>page.locator('img.brand-symbol').evaluate((img:HTMLImageElement)=>img.complete&&img.naturalWidth===64)).toBe(true)
+ const id='550e8400-e29b-41d4-a716-446655440000'
+ await page.evaluate(id=>{
+   localStorage.setItem('mock.workspace-window',id)
+   localStorage.setItem('dbex.preferences.v1',JSON.stringify({startup:'workspace'}))
+   localStorage.setItem('dbex.workspace.v1',JSON.stringify({ids:['sql'],active:'sql',positions:{}}))
+   localStorage.setItem('dbex.workspace.v1.'+id,JSON.stringify({ids:['ch'],active:'ch',positions:{}}))
+ },id)
+ await page.reload()
+ await expect(page.locator('.resource-list[data-active-session="true"]')).toBeVisible()
+ await expect.poll(()=>page.evaluate(id=>JSON.parse(localStorage.getItem('dbex.workspace.v1.'+id)||'{}').ids,id)).toEqual(['ch'])
+ expect(await page.evaluate(()=>JSON.parse(localStorage.getItem('dbex.workspace.v1')||'{}').ids)).toEqual(['sql'])
+ await page.keyboard.press('Control+Shift+N')
+ await expect.poll(()=>page.evaluate(()=>(window as any).__dbexCalls.some((x:any)=>x.action==='newWorkspaceWindow'))).toBe(true)
+})
+
+test('MariaDB sequence panel reads without consuming and submits explicit restart only after unlock',async({page})=>{
+ await connect(page,'MariaDB Local')
+ await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ await page.locator('.resource-node[data-object-kind="table"]').filter({hasText:'seq'}).click()
+ const workbench=page.locator('.workbench:visible')
+ await workbench.getByRole('button',{name:'序列状态…',exact:true}).click()
+ const dialog=page.getByRole('dialog',{name:'序列状态'})
+ await expect(dialog.locator('.data-table')).toContainText('next_not_cached_value')
+ await expect(dialog.getByRole('button',{name:'重设序列起始值'})).toHaveCount(0)
+ await dialog.getByRole('button',{name:'启用写入'}).click()
+ await dialog.locator('input').fill('42')
+ await dialog.getByRole('button',{name:'重设序列起始值'}).click()
+ await expect.poll(()=>page.evaluate(()=>(window as any).__dbexCalls.filter((c:any)=>c.action==='mariadb.sequenceRestart').at(-1))).toMatchObject({database:'app',entity:'seq',value:'42',confirmed:true})
 })

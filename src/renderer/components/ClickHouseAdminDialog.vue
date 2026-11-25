@@ -5,7 +5,7 @@ import type {ClickHouseChange,ClickHouseOperation,OperationResult,SessionInfo} f
 const props=defineProps<{session:SessionInfo;database:string;entity:string;fields:Record<string,string>[];initialKind:ClickHouseChange['kind'];initialId?:string;execute:(op:ClickHouseOperation)=>Promise<OperationResult>}>()
 const emit=defineEmits<{close:[];submitted:[OperationResult];busyChange:[boolean];cancel:[]}>()
 const kind=ref(props.initialKind),field=ref(''),match=ref(''),column=ref(''),value=ref(''),id=ref(props.initialId||''),disk=ref(''),file=ref(''),newTable=ref('')
-const busy=ref(false),error=ref(''),preview=ref<string>(),reviewed=ref(false)
+const busy=ref(false),error=ref(''),preview=ref<string>(),reviewed=ref(false),lightweight=ref(false)
 const mutation=computed(()=>kind.value==='update'||kind.value==='delete')
 const backup=computed(()=>kind.value==='backup'||kind.value==='restore')
 const options: {kind:ClickHouseChange['kind'];label:string}[]=[
@@ -15,8 +15,8 @@ const options: {kind:ClickHouseChange['kind'];label:string}[]=[
 ]
 const editable=computed(()=>props.fields.filter(r=>r.is_in_primary_key==='0'&&r.is_in_sorting_key==='0'&&r.is_in_partition_key==='0'&&r.is_in_sampling_key==='0'&&!['MATERIALIZED','ALIAS','EPHEMERAL'].includes(r.default_kind||'')))
 const change=computed<ClickHouseChange>(()=>{
- if(kind.value==='update')return {kind:'update',field:field.value,match:match.value,column:column.value,value:value.value}
- if(kind.value==='delete')return {kind:'delete',field:field.value,match:match.value}
+ if(kind.value==='update')return {kind:'update',field:field.value,match:match.value,column:column.value,value:value.value,...(lightweight.value?{lightweight:true}:{})}
+ if(kind.value==='delete')return {kind:'delete',field:field.value,match:match.value,...(lightweight.value?{lightweight:true}:{})}
  if(kind.value==='killMutation')return {kind:'killMutation',mutationId:id.value}
  if(kind.value==='backup')return {kind:'backup',disk:disk.value,file:file.value}
  if(kind.value==='restore')return {kind:'restore',disk:disk.value,file:file.value,newTable:newTable.value}
@@ -34,6 +34,7 @@ async function submit(){if(!valid.value||!props.session.writable||mutation.value
   <div class="dialog-body">
    <label class="field field-wide">{{t('操作：')}}<select v-model="kind" :disabled="busy"><option v-for="item in options" :key="item.kind" :value="item.kind">{{item.label}}</option></select></label>
    <template v-if="mutation">
+    <label class="field field-wide"><span><input type="checkbox" v-model="lightweight" :disabled="busy"/> {{t('轻量级变更')}}</span><small class="helper">{{t('仅使用服务器已启用的轻量级功能，不自动修改表或服务器设置。')}}</small></label>
     <label class="field field-wide">WHERE · {{t('字段')}}<select v-model="field" :disabled="busy"><option value="">—</option><option v-for="f in fields" :key="f.name" :value="f.name">{{f.name}} · {{f.type}}</option></select></label>
     <label class="field field-wide">= {{t('字段值')}}<input v-model="match" :disabled="busy" maxlength="65536"/></label>
     <template v-if="kind==='update'">

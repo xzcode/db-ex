@@ -17,7 +17,7 @@ const tab=ref<'data'|'structure'|'management'>(props.initialTab==='structure'?'s
 const busy=ref(false),running=ref(false),error=ref(''),notice=ref('')
 const result=ref<OperationResult>(),structure=ref<OperationResult>(),inspection=ref<OperationResult['inspection']>()
 const managementViews: {value:ClickHouseManagementView;label:string}[]=[
- {value:'partitions',label:'分区'},{value:'mutations',label:'变更任务'},{value:'replicas',label:'副本状态'},{value:'queries',label:'查询统计'}
+ {value:'partitions',label:'分区'},{value:'mutations',label:'变更任务'},{value:'replicas',label:'副本状态'},{value:'replicationQueue',label:'复制队列'},{value:'topology',label:'集群拓扑'},{value:'queries',label:'查询统计'}
 ]
 const managementView=ref<ClickHouseManagementView>('partitions'),managementResult=ref<OperationResult>(),managementOffset=ref(0)
 const canManage=computed(()=>props.node.kind==='table'&&!props.node.readOnly)
@@ -118,7 +118,7 @@ onBeforeUnmount(()=>{disposed=true})
    <div v-if="tab==='management'" class="editor-toolbar" data-ch-management>
     <button v-for="view in managementViews" :key="view.value" class="btn secondary small" :class="{primary:managementView===view.value}" :aria-pressed="managementView===view.value" :disabled="busy" @click="loadManagement(view.value)">{{ t(view.label) }}</button>
     <span v-if="managementView==='queries'" class="muted-text">{{ t('本节点最近24小时已记录查询；日志可能延迟或未启用') }}</span>
-    <span v-else class="muted-text">{{ t('本节点 · 只读') }}</span>
+    <span v-else class="muted-text">{{ t(managementView==='topology'?'服务器配置的分片与副本；不代表实时连通性':'本节点 · 只读') }}</span>
     <span class="toolbar-spacer"></span>
     <button v-if="managementView==='mutations'" class="btn secondary small" :disabled="busy||!session.writable" @click="openAdmin('update')">{{t('变更任务')}}…</button>
     <button v-if="managementView==='partitions'" class="btn secondary small" :disabled="busy||!session.writable" @click="openAdmin('detachPartition')">{{t('分区')}}…</button>

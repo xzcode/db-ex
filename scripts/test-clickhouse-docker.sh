@@ -10,6 +10,18 @@ cat > "$fixture/backups.xml" <<'XML'
 <clickhouse>
  <storage_configuration><disks><dbex_backups><type>local</type><path>/var/lib/clickhouse/dbex_backups/</path></dbex_backups></disks></storage_configuration>
  <backups><allowed_disk>dbex_backups</allowed_disk></backups>
+ <interserver_http_host>127.0.0.1</interserver_http_host>
+ <keeper_server>
+  <tcp_port>9181</tcp_port><server_id>1</server_id>
+  <log_storage_path>/var/lib/clickhouse/keeper/log/</log_storage_path>
+  <snapshot_storage_path>/var/lib/clickhouse/keeper/snapshots/</snapshot_storage_path>
+  <raft_configuration><server><id>1</id><hostname>127.0.0.1</hostname><port>9234</port></server></raft_configuration>
+ </keeper_server>
+ <zookeeper><node><host>127.0.0.1</host><port>9181</port></node></zookeeper>
+ <remote_servers><dbex_m10_cluster>
+  <shard><replica><host>127.0.0.1</host><port>9000</port></replica></shard>
+  <shard><replica><host>127.0.0.1</host><port>9000</port></replica></shard>
+ </dbex_m10_cluster></remote_servers>
 </clickhouse>
 XML
 chmod 644 "$fixture/backups.xml"
@@ -26,3 +38,5 @@ for i in $(seq 1 60); do
 done
 [[ "$ready" == 1 ]] || { docker logs --tail 25 "$container"; exit 1; }
 DBEX_CH_PORT="$port" DBEX_CH_PASSWORD="$password" node --import tsx scripts/test-clickhouse-integration.ts
+
+DBEX_CH_PORT="$port" DBEX_CH_PASSWORD="$password" DBEX_CH_REPLICATION=1 node --import tsx scripts/test-clickhouse-m10-advanced.ts
