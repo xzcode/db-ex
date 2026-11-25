@@ -67,7 +67,6 @@ code, pre, kbd { font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', mon
 .brand-symbol { width: 31px; height: 31px; display: grid; place-content: center; background: var(--accent-button); color: #fff; font-size: 23px; border-radius: 4px; }
 .brand strong { letter-spacing: 1px; font-size: 19px; }
 .brand-subtitle { color: var(--muted); font-size: 10px; letter-spacing: 1.6px; margin-left: 5px; }
-.top-hint { color: var(--muted); font-size: 11px; }
 .btn { border: 1px solid transparent; background: none; padding: 7px 12px; display: inline-flex; justify-content: center; align-items: center; gap: 7px; line-height: 1.35; white-space: nowrap; }
 .btn.primary { background: var(--accent-button); border-color: var(--accent-button); color: #fff; }
 .btn.primary:hover:not(:disabled) { filter: brightness(1.1); }
@@ -247,7 +246,7 @@ kbd { color: #ffffffb0; font-size: 9px; }
 .history-list pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; color: var(--muted); max-height: 100px; overflow: hidden; margin-bottom: 0; }
 .history-actions { display: flex; flex-direction: column; gap: 5px; }
 @media (max-width: 1150px) {
-  .brand-subtitle, .top-hint, .parameter-line > span { display: none; }
+  .brand-subtitle, .parameter-line > span { display: none; }
   .workbench-header { padding: 12px; }
   .workbench-tabs { padding: 0 4px; }
   .workbench-tabs > button { padding: 11px 9px; font-size: 12px; }
@@ -259,7 +258,6 @@ kbd { color: #ffffffb0; font-size: 9px; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; } }
 
 /* Keep language controls aligned with the existing toolbar inputs. */
-.language-select { height: 32px; max-width: 168px; padding: 4px 8px; font-size: 12px; }
 .connection-actions { flex-shrink: 0; }
 .workbench-tabs { overflow-x: auto; }
 .workbench-tabs > button { white-space: nowrap; }
@@ -270,7 +268,6 @@ kbd { color: #ffffffb0; font-size: 9px; }
 .subtabs { overflow-x: auto; }
 .subtabs > button, .workbench-tabs > button { flex-shrink: 0; }
 .dialog-footer { flex-wrap: wrap; }
-.top-actions .top-hint { max-width: 195px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Arabic mirrors the workspace. Code, numeric values and result columns stay LTR. */
 .connection-item { border-left: none; border-inline-start: 3px solid transparent; }
 .connection-actions { right: auto; inset-inline-end: 4px; }

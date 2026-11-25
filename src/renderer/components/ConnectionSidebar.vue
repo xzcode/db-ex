@@ -118,7 +118,7 @@ onBeforeUnmount(() => { window.removeEventListener('pointerdown', outside); wind
 </script>
 <template>
   <aside class="sidebar connection-sidebar">
-    <div class="sidebar-label"><span>{{ t('连接列表') }}</span><div class="sidebar-heading-actions"><button class="ghost-icon" :title="t('＋ 新建连接')" :disabled="busy" @click="emit('create')">+</button><button class="ghost-icon" :title="t('刷新连接')" :disabled="busy" @click="emit('refresh')">↻</button></div></div>
+    <div class="sidebar-label"><span>{{ t('连接列表') }}</span><div class="sidebar-heading-actions"><button class="ghost-icon" :title="t('＋ 新建连接')" :aria-label="t('＋ 新建连接')" :disabled="busy" @click="emit('create')">+</button><button class="ghost-icon" :title="t('刷新连接')" :disabled="busy" @click="emit('refresh')">↻</button></div></div>
     <div class="sidebar-search"><input v-model="filter" :aria-label="t('筛选连接')" :placeholder="t('搜索名称 / 主机')" /></div>
     <div class="saved-list connection-tree" @scroll="closeMenu">
       <template v-for="[group, items] in groups" :key="group">

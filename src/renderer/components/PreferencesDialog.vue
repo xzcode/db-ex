@@ -9,7 +9,8 @@ import { bsonTypes,bsonLabel,isBsonType } from '../../shared/bson-types'
 import { normalizeBsonPalette,newBsonPalette,typeColor } from '../../shared/bson-palette'
 import { databaseTypes,normalizeDatabasePalette,newDatabasePalette,databaseTypeColor,type DatabasePalette } from '../../shared/database-palette'
 import ConnectionColorPicker from './ConnectionColorPicker.vue'
-const emit=defineEmits<{close:[]}>()
+defineProps<{connectionBusy?:boolean}>()
+const emit=defineEmits<{close:[];createConnection:[]}>()
 const tabs=[['general','常规','⚙'],['tabs','选项卡','▣'],['completion','代码补全','⌨'],['editor','编辑器','✎'],['records','记录','▦'],['colors','数据类型配色','◉'],['recovery','自动恢复','↶'],['tools','外部工具','ENV'],['advanced','高级','⚒']] as const
 type Tab=typeof tabs[number][0]
 const tab=ref<Tab>('general')
@@ -71,8 +72,12 @@ onMounted(()=>{void action(async()=>{native.value=normalizeNativePreferences(awa
         <div v-if="notice" class="inline-message notice" role="status">{{ localize(notice) }}</div>
         <template v-if="tab==='general'">
           <div class="pref-section-title">{{ t('外观') }}</div>
-          <label class="pref-row"><span>{{ t('语言') }}</span><select v-model="draft.language" :aria-label="t('语言')"><option value="system">{{ t('跟随系统') }}</option><option v-for="language in languages" :key="language.locale" :value="language.locale">{{ language.label }}</option></select></label>
-          <label class="pref-row"><span>{{ t('主题') }}</span><select v-model="draft.theme" :aria-label="t('主题')"><option value="system">{{ t('跟随系统') }}</option><option value="light">{{ t('浅色主题') }}</option><option value="dark">{{ t('深色主题') }}</option></select></label>
+          <label class="pref-row"><span>{{ t('语言') }}</span><select v-model="draft.language" data-preference="language" :aria-label="t('语言')"><option value="system">{{ t('跟随系统') }}</option><option v-for="language in languages" :key="language.locale" :value="language.locale">{{ language.label }}</option></select></label>
+          <label class="pref-row"><span>{{ t('主题') }}</span><select v-model="draft.theme" data-preference="theme" :aria-label="t('主题')"><option value="system">{{ t('跟随系统') }}</option><option value="light">{{ t('浅色主题') }}</option><option value="dark">{{ t('深色主题') }}</option></select></label>
+          <div class="pref-section-title">{{ t('连接列表') }}</div>
+          <div class="pref-row"><span></span><div><button class="btn secondary" type="button" data-action="create-connection" :disabled="busy||connectionBusy" @click="emit('createConnection')">{{ t('＋ 新建连接') }}</button></div></div>
+          <div class="pref-section-title">{{ t('本地数据') }}</div>
+          <p class="helper">{{ t('本地优先 · 内置加密') }}</p>
         </template>
         <template v-else-if="tab==='tabs'">
           <label class="pref-row"><span>{{ t('启动画面') }}</span><select v-model="draft.startup" :aria-label="t('启动画面')"><option value="welcome">{{ t('欢迎') }}</option><option value="lastConnection">{{ t('重新打开上次连接') }}</option><option value="workspace">{{ t('恢复工作区') }}</option></select></label>
@@ -135,7 +140,7 @@ onMounted(()=>{void action(async()=>{native.value=normalizeNativePreferences(awa
           <div class="pref-section-title">{{ t('本地数据') }}</div><p class="helper">{{ t('所有设置保存在本机，不需要账户或云服务。') }}</p>
         </template>
       </div>
-      <footer class="dialog-footer"><button class="btn secondary pref-reset" :disabled="busy||!ready" @click="reset">{{ t('还原默认值') }}</button><button class="btn secondary" :disabled="busy" @click="emit('close')">{{ t('取消') }}</button><button class="btn primary" :disabled="busy||!ready" @click="save">{{ t('确认') }}</button></footer>
+      <footer class="dialog-footer"><button class="btn secondary pref-reset" :disabled="busy||!ready" @click="reset">{{ t('还原默认值') }}</button><button class="btn secondary" :disabled="busy" @click="emit('close')">{{ t('取消') }}</button><button class="btn primary" data-action="save-preferences" :disabled="busy||!ready" @click="save">{{ t('确认') }}</button></footer>
     </section>
   </div>
 </template>

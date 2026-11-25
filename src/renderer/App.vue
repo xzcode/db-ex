@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { databaseCapabilities } from '../shared/database-capabilities'
-import { t, localize, languages, languagePreference, setLanguage } from './i18n'
+import { t, localize } from './i18n'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import ConnectionDialog from './ConnectionDialog.vue'
 import ConnectionSidebar from './components/ConnectionSidebar.vue'
@@ -10,7 +10,7 @@ import { mongoCategory, mongoCategoryNodes } from '../shared/mongo-catalog'
 import { protectedDatabase } from '../shared/database-admin'
 import PreferencesDialog from './components/PreferencesDialog.vue'
 import { normalizeWorkspace, workspacePosition, categoryForNode, matchWorkspaceNode, validWorkbenchTab, type WorkspacePosition, type WorkbenchTab } from '../shared/workspace-recovery'
-import { preferences, resolvedTheme, setTheme } from './preferences'
+import { preferences, resolvedTheme } from './preferences'
 import NativeToolDialog from './components/NativeToolDialog.vue'
 import DatabaseActionsDialog from './components/DatabaseActionsDialog.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
@@ -60,7 +60,7 @@ const dialogOpen = ref(false)
 const connectionDraft = ref<ConnectionDraft>()
 const theme = computed(()=>resolvedTheme(preferences.value.theme))
 const preferencesOpen=ref(false)
-function settingsKey(event:KeyboardEvent){if((event.metaKey||event.ctrlKey)&&event.key===','){event.preventDefault();preferencesOpen.value=true}}
+function settingsKey(event:KeyboardEvent){if((event.metaKey||event.ctrlKey)&&event.key===','){event.preventDefault();if(!dialogOpen.value)preferencesOpen.value=true}}
 const sidebarWidth = ref(270)
 const explorerWidth = ref(220)
 const { confirmation, confirm, answer } = useConfirmation()
@@ -262,7 +262,6 @@ async function exportConnections(id?: string) {
 function persistView() {
   try { localStorage.setItem('dbex.view', JSON.stringify({ theme: theme.value, sidebar: sidebarWidth.value, explorer: explorerWidth.value })) } catch { /* UI preferences are optional. */ }
 }
-function changeTheme() { setTheme(theme.value === 'dark' ? 'light' : 'dark'); persistView() }
 function resize(event: PointerEvent, pane: 'sidebar' | 'explorer') {
   event.preventDefault(); stopResize?.()
   const start = event.clientX
@@ -309,7 +308,7 @@ onBeforeUnmount(() => { stopResize?.(); window.removeEventListener('pointerdown'
 
 <template>
   <main class="desktop" :style="{ '--sidebar-width': sidebarWidth + 'px', '--explorer-width': explorerWidth + 'px' }">
-    <header class="topbar"><div class="brand"><span class="brand-symbol">▦</span><strong>DB EX</strong><span class="brand-subtitle">DATABASE WORKSPACE</span></div><div class="top-actions"><select class="language-select" :aria-label="t('语言')" :title="t('语言设置')" :value="languagePreference" @change="setLanguage(($event.target as HTMLSelectElement).value)"><option value="system">{{ t('跟随系统') }}</option><option v-for="language in languages" :key="language.locale" :value="language.locale" :lang="language.locale" :dir="language.direction">{{ language.label }}</option></select><span class="top-hint">{{ t('本地优先 · 内置加密') }}</span><button class="icon-button preferences-button" :aria-label="t('偏好设置')" :title="t('偏好设置')" @click="preferencesOpen=true">⚙</button><button class="icon-button" :title="theme === 'dark' ? t('浅色主题') : t('深色主题')" @click="changeTheme">{{ theme === 'dark' ? '☼' : '◐' }}</button><button class="btn primary" :disabled="busy" @click="newConnection">{{ t('＋ 新建连接') }}</button></div></header>
+    <header class="topbar"><div class="brand"><span class="brand-symbol">▦</span><strong>DB EX</strong><span class="brand-subtitle">DATABASE WORKSPACE</span></div><div class="top-actions"><button class="icon-button preferences-button" :aria-label="t('偏好设置')" :title="t('偏好设置')" @click="preferencesOpen=true">⚙</button></div></header>
     <div class="workspace"><ConnectionSidebar :connections="connections" :sessions="sessions" :current="current" :busy="busy" @refresh="refreshConnections" @create="newConnection" @connect="connectSaved" @activate="current = $event" @disconnect="disconnect" @edit="editConnection" @remove="deleteConnection" @import="importConnections" @export="exportConnections" @appearance="updateAppearance" />
       <div class="resize-handle" role="separator" :aria-label="t('调整连接列表宽度')" aria-orientation="vertical" :aria-valuenow="sidebarWidth" :aria-valuemin="170" :aria-valuemax="400" tabindex="0" @pointerdown="resize($event, 'sidebar')" @keydown="resizeKey($event, 'sidebar')"></div>
       <section class="main-panel"><div v-show="preferences.alwaysShowTabs || sessions.length > 1" class="tabbar"><div v-if="!sessions.length" class="tab active">{{ t('欢迎') }}</div><div v-for="session in sessions" :key="session.id" :class="['session-tab', { active: current === session.id, 'has-color': !!sessionColor(session) }]" :style="colorStyle(sessionColor(session))" :data-color="sessionColor(session) || ''"><button class="tab" @click="current = session.id"><span :class="['db-small-icon', session.kind]">{{ kindIcon(session.kind) }}</span>{{ session.name }}</button><button class="tab-close" :title="t('断开 {0}', [session.name])" :disabled="busy" @click="disconnect(session.id)">×</button></div><div class="tab-filler"></div><span v-if="busy" class="tab-trailing">{{ t('正在连接 / 处理…') }}</span></div><div v-if="error" class="inline-message error" role="alert">{{ localize(error) }}<button class="ghost-icon" :aria-label="t('关闭错误')" @click="error = ''">×</button></div><div v-if="notice" class="inline-message notice">{{ localize(notice) }}</div>
@@ -328,7 +327,7 @@ onBeforeUnmount(() => { stopResize?.(); window.removeEventListener('pointerdown'
     </div></Teleport>
     <NativeToolDialog v-if="nativeDialog&&nativeSession" :session="nativeSession" :database="nativeDialog.database" @close="nativeDialog=undefined" @session="updateSession" @disconnect="removeSession(nativeSession.id);nativeDialog=undefined" />
     <DatabaseActionsDialog v-if="dbDialog && dbDialogSession" :session="dbDialogSession" :database="dbDialog.database" :mode="dbDialog.mode" :existing="explorers[dbDialog.sessionId]?.roots.map(item=>item.database || item.label) || []" @close="dbDialog=undefined" @changed="databaseChanged" @select="databaseObjectSelected" @session="updateSession" />
-    <PreferencesDialog v-if="preferencesOpen" @close="preferencesOpen=false" />
+    <PreferencesDialog v-if="preferencesOpen" v-show="!dialogOpen" :connection-busy="busy" @create-connection="newConnection" @close="preferencesOpen=false" />
     <ConnectionDialog v-if="dialogOpen" :draft="connectionDraft" @close="dialogOpen = false" @saved="refreshConnections" @connected="startSession" />
     <ConfirmDialog v-if="confirmation" v-bind="confirmation" @confirm="answer(true)" @cancel="answer(false)" />
   </main>
