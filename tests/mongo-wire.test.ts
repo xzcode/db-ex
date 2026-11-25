@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { childType, typeName } from '../src/shared/bson-types'
 import net, { type Socket } from 'node:net'
 import test from 'node:test'
 import { BSON, MongoClient, type Document } from 'mongodb'
@@ -119,6 +120,8 @@ test('Mongo cursor replies keep numeric protocol errors retryable and BSON docum
     ]) {
       const result = await operations.execute(operation, read)
       assert.deepEqual(result.documents, [canonical(source)])
+      const metadata = result.bsonTypes![0]
+      for (const [key, type] of Object.entries({ _id: 'ObjectId', int: 'Int32', double: 'Double', long: 'Int64', decimal: 'Decimal128', binary: 'Binary', date: 'Date' })) assert.equal(typeName(childType(metadata, key)), type, key)
     }
     assert.equal(attempts.get('find'), 2)
     assert.equal(attempts.get('aggregate'), 2)

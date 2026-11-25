@@ -4,6 +4,9 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { DatabaseOperation, ExplorerNode, OperationResult, QuerySnippet, RedisValueType, SessionInfo, SqlRow, SqlValue } from '../shared/types'
 import CodeEditor from './components/CodeEditor.vue'
 import ResultGrid from './components/ResultGrid.vue'
+import BsonColorSettings from './components/BsonColorSettings.vue'
+import BsonDocumentTree from './components/BsonDocumentTree.vue'
+import type { BsonTypeBranch } from '../shared/bson-types'
 import { csvFromRows, sqlRowsFromFile, validateSqlRow } from './data-format'
 
 const props = defineProps<{ session: SessionInfo; node?: ExplorerNode }>()
@@ -35,6 +38,9 @@ const historyError = ref('')
 const edit = ref<{ mode: 'insert' | 'update' | 'import'; text: string; original?: SqlRow; originalDocument?: string; count?: number } | null>(null)
 const editError = ref('')
 const indexDialog = ref(false)
+const bsonSettingsOpen = ref(false)
+const documentView = ref<{ document: string; metadata?: BsonTypeBranch }>()
+const documentViewMode = ref<'tree' | 'raw'>('tree')
 const indexKeys = ref('{ "field": 1 }')
 const indexOptions = ref('{ "name": "field_1" }')
 const redisPattern = ref('*')
@@ -152,6 +158,17 @@ async function runAggregation() {
 async function transaction(action: 'mysql.begin' | 'mysql.commit' | 'mysql.rollback') {
   const label = action === 'mysql.begin' ? '开始事务' : action === 'mysql.commit' ? '提交事务' : '回滚事务'
   if (action === 'mysql.rollback' || await confirmWrite(label, action === 'mysql.commit' ? '提交当前会话中尚未提交的所有修改。' : '进入显式事务。完成后请提交或回滚。')) await execute({ action, confirmed: true }, false)
+}
+function viewMongoDocument(index = selectedRow.value) {
+  const document = result.value?.documents?.[index]
+  if (!isMongo.value || document === undefined) return
+  documentViewMode.value = 'tree'
+  documentView.value = { document, metadata: result.value?.bsonTypes?.[index] }
+}
+function openResultRow(index: number) {
+  selectedRow.value = index
+  if (isMongo.value) viewMongoDocument(index)
+  else if (tab.value === 'data' && !isRedis.value) openEdit()
 }
 function openInsert() { editError.value = ''; edit.value = { mode: 'insert', text: isMysql.value ? '{} ' : '{\n  "name": ""\n}' } }
 function openEdit() {
@@ -364,7 +381,7 @@ onBeforeUnmount(() => { disposed = true; generation++ })
 <template>
   <div class="workbench">
     <header class="workbench-header"><div><span class="eyebrow">{{ session.kind.toUpperCase() }} / {{ session.environment === 'production' ? 'PRODUCTION' : session.environment.toUpperCase() }}</span><h2>{{ node?.label || session.name }}</h2></div><div class="header-tools"><span v-if="session.transaction" class="transaction-badge">{{ t('事务进行中') }}</span><button :class="['btn', session.writable ? 'warning' : 'secondary']" :disabled="busy" @click="toggleWrite">{{ session.writable ? t('写入已启用 · 锁定') : t('只读 · 启用写入') }}</button></div></header>
-    <nav class="workbench-tabs"><button :disabled="busy" :class="{ active: tab === 'data' }" @click="changeTab('data')">{{ isRedis ? t('Key 浏览器') : t('数据') }}</button><button v-if="isMysql" :disabled="busy" :class="{ active: tab === 'query' }" @click="changeTab('query')">{{ t('SQL 编辑器') }}</button><button v-if="isMongo" :disabled="busy" :class="{ active: tab === 'aggregation' }" @click="changeTab('aggregation')">Aggregation</button><button v-if="!isRedis" :disabled="busy" :class="{ active: tab === 'structure' }" @click="changeTab('structure')">{{ isMysql ? t('结构与索引') : t('索引') }}</button><button v-if="isRedis" :disabled="busy" :class="{ active: tab === 'console' }" @click="changeTab('console')">{{ t('命令台') }}</button><div class="tab-filler"></div><button v-if="!isRedis" @click="openHistory">{{ t('历史 / 收藏') }}</button></nav>
+    <nav class="workbench-tabs"><button :disabled="busy" :class="{ active: tab === 'data' }" @click="changeTab('data')">{{ isRedis ? t('Key 浏览器') : t('数据') }}</button><button v-if="isMysql" :disabled="busy" :class="{ active: tab === 'query' }" @click="changeTab('query')">{{ t('SQL 编辑器') }}</button><button v-if="isMongo" :disabled="busy" :class="{ active: tab === 'aggregation' }" @click="changeTab('aggregation')">Aggregation</button><button v-if="!isRedis" :disabled="busy" :class="{ active: tab === 'structure' }" @click="changeTab('structure')">{{ isMysql ? t('结构与索引') : t('索引') }}</button><button v-if="isRedis" :disabled="busy" :class="{ active: tab === 'console' }" @click="changeTab('console')">{{ t('命令台') }}</button><div class="tab-filler"></div><button v-if="isMongo" @click="bsonSettingsOpen = true">{{ t('BSON 类型配色') }}</button><button v-if="!isRedis" @click="openHistory">{{ t('历史 / 收藏') }}</button></nav>
     <div v-if="error" class="inline-message error" role="alert">{{ localize(error) }}<button class="ghost-icon" :aria-label="t('关闭错误')" @click="error = ''">×</button></div>
     <div v-if="notice" class="inline-message notice" role="status">{{ localize(notice) }}</div>
     <div v-if="busy" class="operation-progress"><span class="progress-indicator"></span> {{ t('正在执行') }} <button class="btn secondary small" @click="cancel">{{ t('取消并断开') }}</button></div>
@@ -384,7 +401,7 @@ onBeforeUnmount(() => { disposed = true; generation++ })
     </template>
     <template v-if="tab === 'structure'">
       <div class="editor-toolbar"><button class="btn secondary" :disabled="busy || !hasEntity" @click="loadStructure">{{ t('刷新结构') }}</button><template v-if="isMongo"><button class="btn secondary" :disabled="busy || !hasEntity || !session.writable" @click="indexDialog = true">{{ t('新建索引') }}</button><button class="btn danger-text" :disabled="busy || !session.writable || selectedRow < 0" @click="dropIndex">{{ t('删除选中索引') }}</button></template><span v-if="isMysql" class="muted-text">{{ t('主键：') }}{{ primaryKeys.join(', ') || t('无（记录修改已禁用）') }}</span></div>
-      <ResultGrid v-if="structure" :columns="structure.columns" :rows="structure.rows" :selected="selectedRow" @select="selectedRow = $event" />
+      <ResultGrid v-if="structure" :columns="structure.columns" :rows="structure.rows" :selected="selectedRow" :bson-types="isMongo ? structure.bsonTypes : undefined" @select="selectedRow = $event" />
       <div v-else class="empty-state"><strong>{{ t('选择表或集合查看结构') }}</strong><span>{{ t('从左侧资源树选择一个对象。') }}</span></div>
     </template>
     <template v-else-if="isRedis && tab === 'data'">
@@ -398,12 +415,22 @@ onBeforeUnmount(() => { disposed = true; generation++ })
     </template>
     <template v-else>
       <div v-if="tab === 'data' && isMongo" class="mongo-filters"><label>Filter<textarea v-model="filter" rows="2" spellcheck="false" /></label><label>Projection<textarea v-model="projection" rows="2" spellcheck="false" /></label><label>Sort<textarea v-model="sort" rows="2" spellcheck="false" /></label><button class="btn primary" :disabled="busy || !hasEntity" @click="loadData()">{{ t('查询') }}</button></div>
-      <div class="editor-toolbar"><template v-if="tab === 'data' && !isRedis"><button class="btn secondary" :disabled="busy || !hasEntity" @click="loadData(offset)">{{ t('刷新') }}</button><button class="btn secondary" :disabled="busy || !hasEntity || !session.writable" @click="openInsert">{{ t('新增') }}</button><button class="btn secondary" :disabled="busy || !canEditRow || !session.writable" @click="openEdit">{{ t('编辑') }}</button><button class="btn danger-text" :disabled="busy || !canEditRow || !session.writable" @click="deleteRow">{{ t('删除') }}</button><button class="btn secondary" :disabled="busy || !hasEntity || !session.writable" @click="importData">{{ t('导入') }} {{ isMysql ? 'CSV / JSON' : 'EJSON' }}</button></template><span class="toolbar-spacer"></span><button class="btn secondary small" :disabled="!result?.rows.length" @click="exportData('json')">{{ t('导出当前页 JSON') }}</button><button class="btn secondary small" :disabled="!result?.rows.length" @click="exportData('csv')">CSV</button></div>
-      <ResultGrid v-if="result" :columns="result.columns" :rows="result.rows" :selected="selectedRow" :offset="offset" @select="selectedRow = $event" @open="selectedRow = $event; tab === 'data' && !isRedis && openEdit()" />
+      <div class="editor-toolbar"><template v-if="tab === 'data' && !isRedis"><button class="btn secondary" :disabled="busy || !hasEntity" @click="loadData(offset)">{{ t('刷新') }}</button><button class="btn secondary" :disabled="busy || !hasEntity || !session.writable" @click="openInsert">{{ t('新增') }}</button><button class="btn secondary" :disabled="busy || !canEditRow || !session.writable" @click="openEdit">{{ t('编辑') }}</button><button class="btn danger-text" :disabled="busy || !canEditRow || !session.writable" @click="deleteRow">{{ t('删除') }}</button><button class="btn secondary" :disabled="busy || !hasEntity || !session.writable" @click="importData">{{ t('导入') }} {{ isMysql ? 'CSV / JSON' : 'EJSON' }}</button></template><button v-if="isMongo" class="btn secondary small" :disabled="selectedRow < 0 || !result?.documents?.[selectedRow]" @click="viewMongoDocument()">{{ t('查看文档') }}</button><span class="toolbar-spacer"></span><button class="btn secondary small" :disabled="!result?.rows.length" @click="exportData('json')">{{ t('导出当前页 JSON') }}</button><button class="btn secondary small" :disabled="!result?.rows.length" @click="exportData('csv')">CSV</button></div>
+      <ResultGrid v-if="result" :columns="result.columns" :rows="result.rows" :selected="selectedRow" :offset="offset" :bson-types="isMongo ? result.bsonTypes : undefined" @select="selectedRow = $event" @open="openResultRow" />
       <div v-else class="empty-state"><span class="empty-icon">▤</span><strong>{{ hasEntity ? t('运行查询查看结果') : t('选择数据库中的表或集合') }}</strong><span>{{ isMysql ? t('可直接切换到 SQL 编辑器执行查询。') : t('使用左侧资源树选择目标。') }}</span></div>
       <footer class="result-footer"><span>{{ result?.rows.length || 0 }} {{ t('条记录') }}<span v-if="result?.durationMs !== undefined"> · {{ result.durationMs }} ms</span><span v-if="result?.truncated"> {{ t('· 已达到单页限制') }}</span></span><div><button v-if="offset > 0 && tab !== 'aggregation'" class="btn secondary small" :disabled="busy" @click="tab === 'query' ? runQuery(Math.max(0, offset - limit)) : loadData(Math.max(0, offset - limit))">{{ t('← 上一页') }}</button><button v-if="result?.nextOffset !== undefined && tab !== 'aggregation'" class="btn secondary small" :disabled="busy" @click="tab === 'query' ? runQuery(result.nextOffset) : loadData(result.nextOffset)">{{ t('下一页 →') }}</button></div><span>{{ session.writable ? t('可写会话') : t('只读会话') }}</span></footer>
     </template>
 
+    <BsonColorSettings v-if="bsonSettingsOpen" @close="bsonSettingsOpen = false" />
+    <div v-if="documentView" class="modal-backdrop" @keydown.esc.stop="documentView = undefined">
+      <section class="dialog document-dialog bson-view-dialog" role="dialog" aria-modal="true" :aria-label="t('查看文档')">
+        <header class="dialog-header"><div><span class="eyebrow">{{ entityTitle() }}</span><h2>{{ t('查看文档') }}</h2></div><button class="icon-button" :aria-label="t('关闭弹窗')" @click="documentView = undefined">×</button></header>
+        <nav class="subtabs"><button type="button" :class="{ active: documentViewMode === 'tree' }" @click="documentViewMode = 'tree'">{{ t('文档树') }}</button><button type="button" :class="{ active: documentViewMode === 'raw' }" @click="documentViewMode = 'raw'">{{ t('原始 EJSON') }}</button></nav>
+        <BsonDocumentTree v-if="documentViewMode === 'tree'" :document="documentView.document" :metadata="documentView.metadata" />
+        <pre v-else class="bson-raw-document" dir="ltr">{{ documentView.document }}</pre>
+        <footer class="dialog-footer"><span class="toolbar-spacer"></span><button class="btn secondary" type="button" @click="documentView = undefined">{{ t('关闭') }}</button></footer>
+      </section>
+    </div>
     <div v-if="edit" class="modal-backdrop"><section class="dialog document-dialog" role="dialog" aria-modal="true" aria-labelledby="edit-title"><header class="dialog-header"><div><span class="eyebrow">{{ entityTitle() }}</span><h2 id="edit-title">{{ edit.mode === 'update' ? t('编辑记录') : edit.mode === 'import' ? t('导入预览') : t('新增记录') }}</h2></div><button class="icon-button" :aria-label="t('关闭')" :disabled="busy" @click="edit = null">×</button></header><div v-if="editError" class="inline-message error" role="alert">{{ localize(editError) }}</div><p class="compact-help">{{ isMysql ? t('JSON 字段值支持字符串、数字、布尔、null；BIGINT / DECIMAL 请使用字符串。省略自增字段可使用默认值。') : t('使用 Extended JSON 保留 ObjectId、Date、Decimal128 等 BSON 类型；修改时必须保留 _id。') }}</p><div class="document-editor"><CodeEditor v-model="edit.text" language="json" :readonly="!session.writable" /></div><footer class="dialog-footer"><button class="btn secondary" :disabled="busy" @click="edit = null">{{ t('取消') }}</button><button class="btn primary" :disabled="busy || !session.writable" @click="saveEdit">{{ t('审阅并保存') }}</button></footer></section></div>
     <div v-if="indexDialog" class="modal-backdrop"><section class="dialog" role="dialog" aria-modal="true" aria-labelledby="index-title"><header class="dialog-header"><h2 id="index-title">{{ t('创建 MongoDB 索引') }}</h2><button class="icon-button" @click="indexDialog = false">×</button></header><div v-if="error" class="inline-message error">{{ localize(error) }}</div><div class="dialog-body"><label class="field field-wide">{{ t('索引字段 JSON') }}<textarea v-model="indexKeys" rows="4" /></label><label class="field field-wide">{{ t('选项 JSON（name / unique / sparse / expireAfterSeconds）') }}<textarea v-model="indexOptions" rows="4" /></label></div><footer class="dialog-footer"><button class="btn secondary" @click="indexDialog = false">{{ t('取消') }}</button><button class="btn primary" :disabled="busy" @click="createIndex">{{ t('审阅并创建') }}</button></footer></section></div>
     <div v-if="historyOpen" class="modal-backdrop"><section class="dialog history-dialog" role="dialog" aria-modal="true" aria-labelledby="history-title"><header class="dialog-header"><h2 id="history-title">{{ t('查询历史与收藏') }}</h2><button class="icon-button" @click="historyOpen = false">×</button></header><div v-if="historyError" class="inline-message error">{{ localize(historyError) }}</div><div class="editor-toolbar"><input v-model="snippetName" :placeholder="t('当前编辑器内容的收藏名称')" /><button class="btn primary" @click="favorite()">{{ t('收藏当前内容') }}</button><label class="checkbox-row"><input v-model="historyOnlyFavorites" type="checkbox" /> {{ t('仅收藏') }}</label></div><div class="history-list"><article v-for="item in visibleSnippets" :key="item.id"><div><strong>{{ item.name }}</strong><small>{{ item.database || t('未指定数据库') }} · {{ new Date(item.updatedAt).toLocaleString(locale) }}</small><pre>{{ item.text.slice(0, 600) }}</pre></div><div class="history-actions"><button class="btn secondary small" @click="useSnippet(item)">{{ t('打开') }}</button><button class="btn secondary small" @click="favorite(item)">{{ item.favorite ? t('★ 已收藏') : t('☆ 收藏') }}</button><button class="btn danger-text small" @click="removeSnippet(item)">{{ t('删除') }}</button></div></article><div v-if="!visibleSnippets.length" class="empty-state">{{ t('暂无保存的查询') }}</div></div></section></div>

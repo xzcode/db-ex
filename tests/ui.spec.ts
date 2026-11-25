@@ -8,7 +8,14 @@ async function installBridge(page: Page) {
     const calls: Record<string, unknown>[] = []
     const sessions: Record<string, any> = {}
     const rows = [{ id: '1', name: 'Ada', email: 'ada@example.test' }]
-    const document = '{"_id":{"$oid":"64b000000000000000000001"},"name":"Ada","createdAt":{"$date":{"$numberLong":"1700000000000"}}}'
+    const document = '{"_id":{"$oid":"64b000000000000000000001"},"name":"Ada","createdAt":{"$date":{"$numberLong":"1700000000000"}},"score":{"$numberInt":"7"},"nullable":null,"nested":{"values":[{"$numberLong":"99"},"99"]}}'
+    const secondDocument = '{"_id":{"$oid":"64b000000000000000000002"},"name":"Grace","score":"7","nullable":"NULL"}'
+    const thirdDocument = '{"_id":{"$oid":"64b000000000000000000003"},"name":"Lin","score":{"$numberDouble":"7.0"}}'
+    const mongoMetadata = [
+      { type: 'Document', children: { _id: 'ObjectId', name: 'String', createdAt: 'Date', score: 'Int32', nullable: 'Null', nested: { type: 'Document', children: { values: { type: 'Array', children: { '0': 'Int64', '1': 'String' } } } } } },
+      { type: 'Document', children: { _id: 'ObjectId', name: 'String', score: 'String', nullable: 'String' } },
+      { type: 'Document', children: { _id: 'ObjectId', name: 'String', score: 'Double' } },
+    ]
     const configs = [
       { id: 'sql', name: 'MySQL Local', kind: 'mysql', host: '127.0.0.1', port: 3306 },
       { id: 'mongo', name: 'Mongo Local', kind: 'mongodb', host: '127.0.0.1', port: 27017 },
@@ -43,7 +50,7 @@ async function installBridge(page: Page) {
         }
         if (op.action === 'mysql.begin') return { columns: [], rows: [], transaction: true }
         if (op.action === 'mysql.commit' || op.action === 'mysql.rollback') return { columns: [], rows: [], transaction: false }
-        if (op.action === 'mongo.find' || op.action === 'mongo.aggregate') return { ...grid([{ _id: '64b000000000000000000001', name: 'Ada' }]), documents: [document], durationMs: 3 }
+        if (op.action === 'mongo.find' || op.action === 'mongo.aggregate') return { columns: ['_id', 'name', 'createdAt', 'score', 'nullable', 'nested'], rows: [{ _id: '64b000000000000000000001', name: 'Ada', createdAt: 'date', score: '7', nullable: 'NULL', nested: '{...}' }, { _id: '64b000000000000000000002', name: 'Grace', score: '7', nullable: 'NULL' }, { _id: '64b000000000000000000003', name: 'Lin', score: '7' }], documents: [document, secondDocument, thirdDocument], bsonTypes: mongoMetadata, durationMs: 3 }
         if (op.action === 'mongo.indexes') return grid([{ name: '_id_', key: '{"_id":1}' }])
         if (op.action === 'redis.nodes') return grid([{ id: '127.0.0.1:6379', host: '127.0.0.1', port: '6379', role: 'master' }, { id: '127.0.0.2:6379', host: '127.0.0.2', port: '6379', role: 'master' }])
         if (op.action === 'redis.scan') return { ...grid([{ key: 'profile:1', type: 'string', ttl: '-1' }]), nextCursor: undefined }
@@ -358,4 +365,38 @@ test('connection context colors, custom colors, grouping and live tab highlighti
   await expect(page.locator('.connection-group[data-group="Project Alpha"]')).toHaveCount(0)
   await expect(row()).not.toHaveClass(/in-group/)
   await expect.poll(() => page.evaluate(() => (window as any).__dbexCalls.filter((c: any) => c.action === 'appearance').map((c: any) => c.patch))).toEqual([{ color: '#e05252' }, { color: '#123abc' }, { group: 'Project Alpha' }, { color: null }, { group: null }])
+})
+
+
+test('MongoDB uses per-value BSON colors, nested document types and saved custom preferences', async ({ page }) => {
+  await connect(page, 'Mongo Local'); await openUsers(page)
+  const grid = page.locator('.workbench:visible .data-table').first()
+  await expect(grid.locator('tr[data-row-index="0"] [data-bson-type="Int32"]')).toContainText('Int32')
+  await expect(grid.locator('tr[data-row-index="1"] [data-bson-type="String"]').filter({ hasText: '7' })).toBeVisible()
+  await expect(grid.locator('tr[data-row-index="2"] [data-bson-type="Double"]')).toBeVisible()
+  await expect(grid.locator('tr[data-row-index="0"] [data-bson-type="Null"]')).toContainText('NULL')
+  await expect(grid.locator('tr[data-row-index="2"] [data-bson-type="Missing"]').first()).toBeVisible()
+  await grid.locator('tr[data-row-index="0"]').dblclick()
+  const viewer = page.getByRole('dialog', { name: '查看文档' })
+  await expect(viewer).toBeVisible()
+  await viewer.getByRole('button', { name: 'nested', exact: true }).click()
+  await viewer.getByRole('button', { name: 'values', exact: true }).click()
+  await expect(viewer.locator('[data-bson-type="Int64"]')).toContainText('99')
+  await viewer.getByRole('button', { name: '原始 EJSON', exact: true }).click()
+  await expect(viewer.locator('.bson-raw-document')).toContainText('$numberLong')
+  await viewer.getByRole('button', { name: '关闭', exact: true }).click()
+  await page.getByRole('button', { name: 'BSON 类型配色', exact: true }).click()
+  const settings = page.getByRole('dialog', { name: 'BSON 类型配色' })
+  await settings.locator('.bson-type-option').filter({ hasText: 'Int32' }).click()
+  await settings.getByLabel('HEX', { exact: true }).fill('#123abc')
+  await settings.getByRole('button', { name: '应用', exact: true }).click()
+  await settings.getByRole('button', { name: '保存', exact: true }).click()
+  await expect(grid.locator('[data-bson-type="Int32"]')).toHaveAttribute('data-bson-color', '#123abc')
+  await page.reload()
+  await connect(page, 'Mongo Local'); await openUsers(page)
+  await expect(page.locator('.workbench:visible [data-bson-type="Int32"]')).toHaveAttribute('data-bson-color', '#123abc')
+  await page.getByRole('button', { name: 'BSON 类型配色', exact: true }).click()
+  await page.getByRole('dialog', { name: 'BSON 类型配色' }).getByRole('button', { name: '恢复全部默认颜色' }).click()
+  await page.getByRole('dialog', { name: 'BSON 类型配色' }).getByRole('button', { name: '保存', exact: true }).click()
+  await expect(page.locator('.workbench:visible [data-bson-type="Int32"]')).toHaveAttribute('data-bson-color', '#4b88d9')
 })

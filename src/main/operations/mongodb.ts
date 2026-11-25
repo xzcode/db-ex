@@ -1,5 +1,7 @@
 import { BSON, MongoBulkWriteError, type AbstractCursor, type CreateIndexesOptions, type Document, type IndexDirection, type MongoClient, type Sort } from 'mongodb'
 import type { MongoOperation, OperationResult } from '../../shared/types'
+import type { BsonTypeBranch } from '../../shared/bson-types'
+import { describeBsonDocument, newTypeBudget } from './bson-metadata'
 import { boundedText, checkAborted, databaseError, displayCell, emptyResult, MAX_BYTES, MAX_ROWS, MAX_VALUE_BYTES, page, plainObject, requireWrite, resourceName, TIMEOUT_MS, type OperationContext } from './common'
 
 const FORBIDDEN_OPERATORS = new Set(['$where', '$function', '$accumulator', '$out', '$merge'])
@@ -232,6 +234,8 @@ export class MongoOperations {
     const documents: string[] = []
     const rows: Record<string, string>[] = []
     const columns = new Set<string>()
+    const bsonTypes: BsonTypeBranch[] = []
+    const typeBudget = newTypeBudget()
     let bytes = 0
     let truncated = false
     try {
@@ -240,18 +244,22 @@ export class MongoOperations {
         if (documents.length >= limit) { truncated = true; break }
         if (rawDocument instanceof Uint8Array && rawDocument.byteLength > MAX_VALUE_BYTES) { truncated = true; break }
         const document: Document = rawDocument instanceof Uint8Array
-          ? BSON.deserialize(rawDocument, { promoteValues: false, promoteLongs: false })
+          ? BSON.deserialize(rawDocument, { promoteValues: false, promoteLongs: false, bsonRegExp: true })
           : rawDocument
         const canonical = BSON.EJSON.stringify(document, { relaxed: false })
         const size = Buffer.byteLength(canonical, 'utf8')
         if (size > MAX_VALUE_BYTES || bytes + size > MAX_BYTES) { truncated = true; break }
         const row: Record<string, string> = Object.create(null) as Record<string, string>
-        for (const [key, value] of Object.entries(document).slice(0, 100)) {
+        for (const [key, value] of Object.entries(document)) {
+          // Keep a stable 100-column window. Fields already displayed in the
+          // grid must not disappear merely because their order differs in a row.
+          if (!columns.has(key) && columns.size >= 100) continue
           columns.add(key)
           row[key] = value && typeof value === 'object' ? displayCell(BSON.EJSON.serialize(value, { relaxed: false })) : displayCell(value)
         }
         documents.push(canonical)
         rows.push(row)
+        bsonTypes.push(describeBsonDocument(document, Object.keys(row), typeBudget))
         bytes += size
       }
     } finally {
@@ -259,7 +267,7 @@ export class MongoOperations {
       if (this.cursor === cursor) this.cursor = undefined
     }
     return {
-      columns: [...columns].slice(0, 100), rows, documents, truncated,
+      columns: [...columns], rows, documents, bsonTypes, truncated,
       message: truncated ? '已达到行数或 2 MiB 返回上限（单文档最大 512 KiB），请缩小筛选范围' : undefined,
     }
   }
