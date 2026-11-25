@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { t } from '../i18n'
 import { sqlContext,sqlKeywords,sqlFunctions,mongoSuggestions,redisSuggestions } from '../../shared/editor-completion'
+import {mongoScriptMethods,mongoCursorMethods,mongoConstructors} from '../../shared/mongo-query-script'
 import { preferences } from '../preferences'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as monaco from 'monaco-editor/editor/editor.api'
@@ -67,6 +68,16 @@ if (!monaco.languages.getLanguages().some(language => language.id === 'dbex-mong
     ] }
   })
 }
+if (!monaco.languages.getLanguages().some(language=>language.id==='dbex-mongo-script')){
+ monaco.languages.register({id:'dbex-mongo-script'})
+ monaco.languages.setMonarchTokensProvider('dbex-mongo-script',{
+  tokenizer:{root:[
+   [/\/\/.*$/,'comment'],[/\/\*/,'comment','@comment'],[/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/,'string'],
+   [/\b(?:db|true|false|null|new|ObjectId|NumberInt|NumberLong|NumberDecimal|Int32|Long|Decimal128|ISODate|Date)\b/,'keyword'],
+   [/\$[A-Za-z_][\w$]*/,'keyword'],[/-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/,'number'],[/[{}\[\]()]/,'@brackets'],[/[,:;.]/,'delimiter'],[/[A-Za-z_$][\w$]*/,'identifier']
+  ],comment:[[/[^*/]+/,'comment'],[/\*\//,'comment','@pop'],[/[*/]/,'comment']]}})
+ monaco.languages.setLanguageConfiguration('dbex-mongo-script',{comments:{lineComment:'//',blockComment:['/*','*/']},brackets:[['{','}'],['[',']'],['(',')']],autoClosingPairs:[{open:'{',close:'}'},{open:'[',close:']'},{open:'(',close:')'},{open:'"',close:'"'},{open:"'",close:"'"}]})
+}
 function applyTheme() {
   const light=document.documentElement.dataset.theme==='light'
   const p=preferences.value.editor
@@ -102,11 +113,11 @@ onMounted(() => {
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => emit('execute'))
   function provider(language:string){
     return monaco.languages.registerCompletionItemProvider(language,{
-      triggerCharacters:language==='sql'?['.',' ']:['$','"'],
+      triggerCharacters:language==='sql'?['.',' ']:language==='dbex-mongo-script'?['.','$','"',"'"]:['$','"'],
       provideCompletionItems(model,position){
         if(model!==editor?.getModel()||!preferences.value.completion||activeLanguage()==='plaintext'||props.readonly)return {suggestions:[]}
         const word=model.getWordUntilPosition(position)
-        const range=new monaco.Range(position.lineNumber,language==='json'&&model.getLineContent(position.lineNumber)[word.startColumn-2]==='$'?word.startColumn-1:word.startColumn,position.lineNumber,word.endColumn)
+        const range=new monaco.Range(position.lineNumber,(language==='json'||language==='dbex-mongo-script')&&model.getLineContent(position.lineNumber)[word.startColumn-2]==='$'?word.startColumn-1:word.startColumn,position.lineNumber,word.endColumn)
         const kinds=monaco.languages.CompletionItemKind
         const prefix=model.getValueInRange(new monaco.Range(position.lineNumber,1,position.lineNumber,position.column))
         const entries:monaco.languages.CompletionItem[]=[]
@@ -120,6 +131,25 @@ onMounted(() => {
           add(props.suggestions||[],kinds.Field,context==='field'?'0':'2',quote)
           add(sqlKeywords,kinds.Keyword,'3')
           add(sqlFunctions,kinds.Function,'4',name=>name+'()')
+        }else if(language==='dbex-mongo-script'){
+          const fullPrefix=model.getValueInRange(new monaco.Range(1,1,position.lineNumber,position.column))
+          const collectionPrefix=/\bdb\.([\w$]*)$/.exec(fullPrefix)
+          const quotedCollection=/\bdb\.getCollection\(\s*["']([^"']*)$/.exec(fullPrefix)
+          const methodPrefix=/\bdb(?:\.[\w$]+|\.getCollection\([^)]*\)|\[["'][^"']+["']\])\.([\w$]*)$/.test(fullPrefix)
+          if(collectionPrefix){
+           add(props.tableSuggestions||[],kinds.Class,'0',name=>/^[A-Za-z_$][\w$]*$/.test(name)?name:'getCollection('+JSON.stringify(name)+')')
+           add(['getCollection'],kinds.Function,'1',()=> 'getCollection("")')
+          }else if(quotedCollection){
+           for(const label of [...new Set(props.tableSuggestions||[])].slice(0,500))entries.push({label,kind:kinds.Class,range:new monaco.Range(position.lineNumber,position.column-quotedCollection[1]!.length,position.lineNumber,position.column),insertText:JSON.stringify(label).slice(1,-1).replaceAll("'","\\'"),sortText:'0'+label})
+          }else if(methodPrefix){
+           add(mongoScriptMethods,kinds.Method,'0',name=>name+'()')
+          }else if(/\)\s*\.\w*$/.test(fullPrefix)){
+           add(mongoCursorMethods,kinds.Method,'0',name=>name+'()')
+          }else{
+           add(mongoSuggestions,kinds.Keyword,'1')
+           add(props.suggestions||[],kinds.Field,'0',name=>/^[A-Za-z_$][\w$]*$/.test(name)?name:JSON.stringify(name))
+           add(mongoConstructors,kinds.Constructor,'2',name=>name+'()')
+          }
         }else if(props.completionKind==='mongodb'){
           add(mongoSuggestions,kinds.Keyword,'1')
           add(props.suggestions||[],kinds.Field,'2')
@@ -128,7 +158,7 @@ onMounted(() => {
       }
     })
   }
-  completion=[provider('sql'),provider('json')]
+  completion=[provider('sql'),provider('json'),provider('dbex-mongo-script')]
   observer = new MutationObserver(applyTheme)
   observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
 })

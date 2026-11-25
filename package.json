@@ -1,11 +1,12 @@
 {
   "name": "db-ex",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
-  "description": "DB EX — local-first database explorer for MySQL, MariaDB, MongoDB, Redis and SQLite",
+  "description": "DB EX — local-first database explorer for MySQL, MariaDB, MongoDB, Redis, SQLite and ClickHouse",
   "main": "dist-electron/main.cjs",
   "scripts": {
+    "predev": "npm run icons",
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && npm run build:main && npm run build:preload && electron . --dev\"",
     "build:main": "esbuild src/main/index.ts --bundle --platform=node --format=cjs --target=node22 --outfile=dist-electron/main.cjs --packages=external --external:electron && esbuild src/main/operations/sqlite-worker.ts --bundle --platform=node --format=cjs --target=node22 --outfile=dist-electron/sqlite-worker.cjs --packages=external",
     "build:preload": "esbuild src/preload/index.ts --bundle --platform=node --format=cjs --target=node22 --outfile=dist-electron/preload.cjs --external:electron",
@@ -23,12 +24,16 @@
     "icons": "node scripts/generate-icons.mjs"
   },
   "dependencies": {
+    "@clickhouse/client": "^1.25.0",
+    "acorn": "^8.19.0",
     "ioredis": "^5.11.1",
     "monaco-editor": "^0.57.0",
     "mongodb": "^6.15.0",
     "mysql2": "^3.12.0",
     "papaparse": "^5.7.1",
+    "prettier": "^3.10.1",
     "socks": "^2.8.11",
+    "sql-formatter": "^15.10.0",
     "ssh2": "^1.16.0",
     "vue": "^3.5.13"
   },
@@ -56,8 +61,20 @@
       "dist-electron/**/*",
       "package.json"
     ],
+    "extraResources": [
+      {
+        "from": "build/icon.png",
+        "to": "icons/db-ex.png"
+      },
+      {
+        "from": "build/icon-mac.png",
+        "to": "icons/db-ex-mac.png"
+      }
+    ],
     "asar": true,
-    "asarUnpack": ["dist-electron/sqlite-worker.cjs"],
+    "asarUnpack": [
+      "dist-electron/sqlite-worker.cjs"
+    ],
     "mac": {
       "target": [
         "dmg",

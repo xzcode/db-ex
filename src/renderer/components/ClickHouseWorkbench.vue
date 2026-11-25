@@ -1,0 +1,81 @@
+<script setup lang="ts">
+import {computed,onMounted,onBeforeUnmount,ref} from 'vue'
+import {t,localize} from '../i18n'
+import {preferences} from '../preferences'
+import {pageSizeFor} from '../../shared/preferences'
+import {changeColumnSort,type ColumnAction} from '../../shared/column-actions'
+import type {SortRule} from '../../shared/browse-filter'
+import type {ClickHouseOperation,ExplorerNode,OperationResult,SessionInfo,SqlRow} from '../../shared/types'
+import {csvFromRows,sqlRowsFromFile} from '../data-format'
+import ResultGrid from './ResultGrid.vue'
+import ObjectInspector from './ObjectInspector.vue'
+const props=defineProps<{session:SessionInfo;node:ExplorerNode;active:boolean;initialTab?:string}>()
+const emit=defineEmits<{busyChange:[boolean];updateSession:[SessionInfo];disconnect:[];tabChange:['data'|'structure'];dirtyChange:[boolean]}>()
+const database=props.node.database||'',entity=props.node.entity||''
+const tab=ref<'data'|'structure'>(props.initialTab==='structure'?'structure':'data')
+const busy=ref(false),running=ref(false),error=ref(''),notice=ref('')
+const result=ref<OperationResult>(),structure=ref<OperationResult>(),inspection=ref<OperationResult['inspection']>()
+const inspector=ref<'info'|'ddl'|'colors'|null>(null)
+const pageSize=ref<number>(pageSizeFor(preferences.value,'clickhouse')),offset=ref(0)
+const sort=ref<SortRule[]>([]),filter=ref<{field:string;value:string}>(),filterDraft=ref<{field:string;value:string}>()
+const importRows=ref<SqlRow[]>(),importText=ref('')
+const canInsert=computed(()=>props.session.writable&&!props.node.readOnly&&database!=='system')
+const target={database,entity}
+let disposed=false
+async function task(fn:()=>Promise<void>){if(busy.value||disposed)return;busy.value=true;emit('busyChange',true);error.value='';notice.value='';try{await fn()}catch(e){if(!disposed)error.value=e instanceof Error?e.message:String(e)}finally{busy.value=false;emit('busyChange',false)}}
+async function execute(operation:ClickHouseOperation){running.value=true;try{return await window.dbex.execute(props.session.id,operation)}finally{running.value=false}}
+async function load(next=0,nextSort=sort.value,nextFilter:typeof filter.value|null=filter.value,size=pageSize.value){
+ await task(async()=>{
+   const value=await execute({action:'clickhouse.browse',...target,limit:size,offset:next,sort:nextSort,filter:nextFilter||undefined})
+   if(disposed)return
+   result.value=value;offset.value=next;sort.value=nextSort;filter.value=nextFilter||undefined;pageSize.value=size
+ })
+}
+async function changeTab(value:'data'|'structure',force=false){tab.value=value;emit('tabChange',value);if(value==='structure'&&(force||!structure.value))await task(async()=>{structure.value=await execute({action:'clickhouse.structure',...target})});if(value==='data'&&!result.value)await load()}
+async function openInspector(value:'info'|'ddl'|'colors'){inspector.value=value;if(value!=='colors'&&!inspection.value)await task(async()=>{inspection.value=(await execute({action:'clickhouse.inspect',...target})).inspection})}
+async function action(action:ColumnAction,field:string){
+ if(action==='filter'){filterDraft.value={field,value:''};return}
+ await load(0,changeColumnSort(sort.value,field,action))
+}
+async function applyFilter(){if(filterDraft.value){const next={...filterDraft.value};await load(0,sort.value,next);if(!error.value)filterDraft.value=undefined}}
+async function unlock(){await task(async()=>emit('updateSession',await window.dbex.setWriteAccess(props.session.id,!props.session.writable)))}
+async function importFile(){if(!canInsert.value)return;await task(async()=>{const file=await window.dbex.importFile();if(file){const rows=sqlRowsFromFile(file);importRows.value=rows;importText.value=JSON.stringify(rows,null,2);emit('dirtyChange',true)}})}
+function closeImport(){importRows.value=undefined;importText.value='';emit('dirtyChange',false)}
+async function insert(){
+ if(!canInsert.value||!importRows.value)return
+ let success=false
+ await task(async()=>{
+  const rows=JSON.parse(importText.value) as SqlRow[]
+  const next=await execute({action:'clickhouse.insert',...target,rows,confirmed:true})
+  notice.value=next.message||'操作已完成';success=true;closeImport()
+ })
+ if(success)await load(offset.value)
+}
+async function exportData(format:'csv'|'json'){await task(async()=>{
+ const rows=result.value?.rawRows;if(!rows)return
+ const name=entity.replace(/[^a-zA-Z0-9_.-]/g,'_')||'clickhouse'
+ // This is an exact textual page representation, with server type metadata.
+ const content=format==='csv'?csvFromRows(result.value!.columns,rows):JSON.stringify({columns:result.value!.columns,types:result.value!.columnTypes,rows},null,2)
+ if(await window.dbex.exportFile(name+'.'+format,content,format))notice.value='操作已完成'
+})}
+async function cancel(){try{await window.dbex.cancel(props.session.id);emit('disconnect')}catch(e){error.value=String(e)}}
+onMounted(()=>{if(props.node.kind==='clickhouse-dictionary'){tab.value='structure';void openInspector('info')}else if(tab.value==='structure')void changeTab('structure');else void load()})
+onBeforeUnmount(()=>{disposed=true})
+</script>
+<template>
+ <div class="workbench-shell">
+  <section class="workbench clickhouse-workbench">
+   <header class="workbench-header"><div><h2>{{ entity }}</h2><span class="muted-text">{{ database }}</span></div><div class="header-tools"><button class="btn secondary" :disabled="busy" @click="unlock">{{ session.writable?t('写入已启用 · 锁定'):t('只读 · 启用写入') }}</button></div></header>
+   <nav class="workbench-tabs"><button :class="{active:tab==='data'}" :disabled="busy||node.kind==='clickhouse-dictionary'" @click="changeTab('data')">{{ t('数据') }}</button><button :class="{active:tab==='structure'}" :disabled="busy" @click="changeTab('structure')">{{ t('结构') }}</button><span class="toolbar-spacer"></span><button :disabled="busy" @click="openInspector('info')">{{ t('对象信息') }}</button><button :disabled="busy" @click="openInspector('ddl')">DDL</button><button :disabled="busy" @click="openInspector('colors')">{{ t('数据类型配色') }}</button></nav>
+   <div v-if="error" class="inline-message error" role="alert">{{ localize(error) }}</div><div v-if="notice" class="inline-message notice" role="status">{{ localize(notice) }}</div>
+   <div class="editor-toolbar"><button class="btn secondary small" :disabled="busy" @click="tab==='data'?load(offset):changeTab('structure',true)">{{ t('刷新') }}</button><template v-if="tab==='data'"><button class="btn secondary small" :disabled="busy||!canInsert" @click="importFile">{{ t('导入 CSV / JSON') }}</button><button class="btn secondary small" :disabled="busy||!result?.rawRows" @click="exportData('csv')">{{ t('导出 CSV') }}</button><button class="btn secondary small" :disabled="busy||!result?.rawRows" @click="exportData('json')">{{ t('导出 JSON') }}</button><button v-if="filter" class="btn secondary small" :disabled="busy" @click="load(0,sort,null)">{{ t('清除筛选') }}</button></template><span class="toolbar-spacer"></span><button v-if="running" class="btn secondary small" @click="cancel">{{ t('取消并断开') }}</button></div>
+   <div v-if="filterDraft&&tab==='data'" class="editor-toolbar"><span>{{ filterDraft.field }} · toString()</span><input v-model="filterDraft.value" :aria-label="t('筛选条件')" @keydown.enter="applyFilter" /><button class="btn primary small" :disabled="busy" @click="applyFilter">{{ t('查询') }}</button><button class="btn secondary small" @click="filterDraft=undefined">{{ t('取消') }}</button></div>
+   <ResultGrid v-if="tab==='data'&&result" :columns="result.columns" :rows="result.rows" :column-types="result.columnTypes" :null-cells="result.nullCells" relational-kind="clickhouse" :offset="offset" :action-columns="busy?[]:result.columns" :column-sort="sort" :active="active" @column-action="action"/>
+   <ResultGrid v-else-if="tab==='structure'&&structure" :columns="structure.columns" :rows="structure.rows" />
+   <div v-else class="empty-state">{{ t(busy?'正在加载资源…':'无可见对象') }}</div>
+   <footer class="result-footer"><span>{{ (tab==='data'?result:structure)?.rows.length||0 }} {{ t('条记录') }}<template v-if="result?.truncated"> · {{ t('结果已截断') }}</template></span><div v-if="tab==='data'"><select :value="pageSize" :disabled="busy" @change="load(0,sort,filter,Number(($event.target as HTMLSelectElement).value))"><option v-for="n in [100,200,500]" :value="n" :key="n">{{ n }}</option></select><button class="btn secondary small" :disabled="busy||offset===0" @click="load(Math.max(0,offset-pageSize))">{{ t('上一页') }}</button><button class="btn secondary small" :disabled="busy||result?.nextOffset===undefined" @click="result?.nextOffset!==undefined&&load(result.nextOffset)">{{ t('下一页') }}</button></div></footer>
+   <div v-if="importRows" class="modal-backdrop"><section class="dialog" role="dialog" :aria-label="t('导入预览')"><header class="dialog-header"><h2>{{ t('导入预览') }}</h2></header><div class="dialog-body"><p class="helper">{{ database }}.{{ entity }} · {{ importRows.length }} · MergeTree</p><p v-if="error" role="alert">{{ localize(error) }}</p><textarea v-model="importText" rows="12" spellcheck="false" :disabled="busy"/></div><footer class="dialog-footer"><button class="btn secondary" :disabled="busy" @click="closeImport">{{ t('取消') }}</button><button class="btn primary" :disabled="busy||!canInsert" @click="insert">{{ t('审阅并保存') }}</button></footer></section></div>
+  </section>
+  <ObjectInspector v-if="inspector" :kind="session.kind" :database="database" :connection="session.name" :busy="busy" :tab="inspector" :name="entity" :inspection="inspection" :loading="busy" :error="error" @change="openInspector" @close="inspector=null" @refresh="inspection=undefined;inspector&&openInspector(inspector)" />
+ </div>
+</template>

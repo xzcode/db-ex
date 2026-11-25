@@ -80,7 +80,7 @@ function proxy(value: unknown): ProxyOptions | undefined {
 export function validateConnection(value: unknown, allowMissingSecrets = false): ConnectionConfig {
   const v = object(value, '连接')
   const name = text(v.name, '连接名称', 100, true)!
-  if (!['mysql', 'mongodb', 'redis', 'sqlite','mariadb'].includes(String(v.kind))) throw new Error('INVALID_CONNECTION: 数据库类型错误')
+  if (!['mysql', 'mongodb', 'redis', 'sqlite','mariadb','clickhouse'].includes(String(v.kind))) throw new Error('INVALID_CONNECTION: 数据库类型错误')
   // Legacy profiles may contain an environment field; it is no longer used.
   const kind = v.kind as ConnectionConfig['kind']
   if(kind==='sqlite'){

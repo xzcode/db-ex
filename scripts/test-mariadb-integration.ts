@@ -6,6 +6,7 @@ import {SessionManager} from '../src/main/connections/manager'
 import {createTransport} from '../src/main/connections/transport'
 import {newConnectionConfig} from '../src/shared/connection-form'
 import {newBrowseFilter} from '../src/shared/browse-filter'
+import {prepareGridEdits} from '../src/shared/grid-edit'
 import {runNativeTool} from '../src/main/operations/native-tools'
 import {createConnectionBackup,readConnectionBackup} from '../src/main/connections/backup'
 import {redactConnection,mergeConnectionSecrets} from '../src/main/connections/credentials'
@@ -76,6 +77,46 @@ try{
  await manager.execute(session.id,{action:'mysql.import',...target,rows:[{id:3,note:'import'}],confirmed:true})
  const query=await manager.execute(session.id,{action:'mysql.query',sql:'SELECT note FROM items WHERE id=?',database,parameters:[3]})
  assert.equal(query.rows[0]?.note,'import')
+
+ // Isolated batch table: cover generated columns without changing existing
+ // expected native backup/restore assertions for the original items table.
+ const batchTarget={database,entity:'grid_batch'}
+ await admin.query('CREATE TABLE '+database+'.grid_batch (id BIGINT PRIMARY KEY, note VARCHAR(40), amount DECIMAL(24,4), generated_note VARCHAR(80) AS (CONCAT(note,"!")) PERSISTENT) ENGINE=InnoDB')
+ await admin.query("INSERT INTO "+database+".grid_batch(id,note,amount) VALUES(9223372036854775805,'one',12345678901234567890.1234),(9223372036854775806,'two',2.2345),(9223372036854775807,'three',3.4567)")
+ const gridStructure=await manager.execute(session.id,{action:'mysql.structure',...batchTarget})
+ const gridBrowse=()=>manager.execute(session.id,{action:'mysql.browse',...batchTarget,filter:{...newBrowseFilter(),sort:[{field:'id',direction:1}]}})
+ let snapshot=await gridBrowse()
+ const plan=(text:string)=>prepareGridEdits(snapshot,gridStructure,'mariadb',['id'],[{row:0,field:'note',text},{row:1,field:'note',text}]).sqlEdits
+ const batch={action:'mysql.updateBatch' as const,...batchTarget,edits:plan('updated'),confirmed:true}
+ assert.deepEqual((await manager.execute(session.id,batch)).gridBatch,{total:2,completed:2,atomic:true})
+ snapshot=await gridBrowse()
+ assert.deepEqual(snapshot.rawRows!.map(r=>r.note),['updated','updated','three'])
+ assert.equal(snapshot.rawRows![0]!.amount,'12345678901234567890.1234')
+ const stale=plan('rollback')
+ await admin.query('UPDATE '+database+'.grid_batch SET note="external" WHERE id=9223372036854775806')
+ await assert.rejects(manager.execute(session.id,{...batch,edits:stale}),/EDIT_CONFLICT/)
+ assert.deepEqual((await gridBrowse()).rawRows!.map(r=>r.note),['updated','external','three'])
+ snapshot=await gridBrowse()
+ await manager.execute(session.id,{action:'mysql.begin',confirmed:true})
+ assert.equal((await manager.execute(session.id,{...batch,edits:plan('pending')})).transaction,true)
+ await manager.execute(session.id,{action:'mysql.rollback'})
+ assert.deepEqual((await gridBrowse()).rawRows!.map(r=>r.note),['updated','external','three'])
+ const non={database,entity:'grid_nonatomic'}
+ await admin.query('CREATE TABLE '+database+'.grid_nonatomic (id INT PRIMARY KEY,note VARCHAR(40)) ENGINE=MyISAM')
+ await admin.query('INSERT INTO '+database+'.grid_nonatomic VALUES(1,"one"),(2,"two")')
+ const partialOp={action:'mysql.updateBatch' as const,...non,confirmed:true,edits:[
+  {key:{id:1},original:{id:1,note:'one'},changes:{note:'saved'}},
+  {key:{id:2},original:{id:2,note:'stale'},changes:{note:'not saved'}}
+ ]}
+ const partial=await manager.execute(session.id,partialOp)
+ assert.deepEqual([partial.gridBatch?.completed,partial.gridBatch?.atomic,partial.gridBatch?.failed,partial.gridBatch?.uncertain],[1,false,true,false])
+ const [actual]=await admin.query('SELECT note FROM '+database+'.grid_nonatomic ORDER BY id')
+ assert.deepEqual((actual as {note:string}[]).map(r=>r.note),['saved','two'])
+ await manager.execute(session.id,{action:'mysql.begin',confirmed:true})
+ await assert.rejects(manager.execute(session.id,partialOp),/TRANSACTION_REQUIRED/)
+ await manager.execute(session.id,{action:'mysql.rollback'})
+ console.log('MariaDB batch editing scope, exact types, conflict rollback and nontransactional partial result passed')
+
  console.log('MariaDB metadata, sequence/system-versioned objects, exact data types, CRUD, conflict checks, rollback and parameter binding passed')
  await manager.closeAll()
  const file=join(fixture,'dump.sql')

@@ -26,6 +26,19 @@ application = await electron.launch({
   const boundary = await page.evaluate(() => ({ node: typeof window.require, ipc: typeof window.dbex?.execute, title: document.title }))
   assert.equal(boundary.node, 'undefined')
   assert.equal(boundary.ipc, 'function')
+  const runtimeArtwork=await application.evaluate(({app,nativeImage})=>{
+    const mac=process.platform==='darwin'
+    const path=app.isPackaged?process.resourcesPath+'/icons/'+(mac?'db-ex-mac.png':'db-ex.png'):app.getAppPath()+'/build/'+(mac?'icon-mac.png':'icon.png')
+    const expected=nativeImage.createFromPath(path)
+    const dockAvailable=!mac||typeof app.dock?.setIcon==='function'
+    return {empty:expected.isEmpty(),size:expected.getSize(),dockAvailable}
+  })
+  assert.equal(runtimeArtwork.empty,false)
+  assert.equal(runtimeArtwork.size.width,1024)
+  assert.equal(runtimeArtwork.size.height,1024)
+  assert.equal(runtimeArtwork.dockAvailable,true)
+  assert.equal(await page.locator('.empty-workspace').textContent(),'')
+  assert.equal(await page.locator('.welcome-mark,.welcome-features').count(),0)
   assert.match(boundary.title, /DB EX/)
   assert(Array.isArray(await page.evaluate(() => window.dbex.listConnections())))
   const preferences = await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.getLastWebPreferences())

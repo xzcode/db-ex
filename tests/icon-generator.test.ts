@@ -57,6 +57,7 @@ test('native PNG/ICNS/ICO use the user-approved bitmap rather than legacy redraw
     at += length
   }
   assert(macPng)
+  assert.deepEqual(readFileSync('build/icon-mac.png'),macPng,'runtime Dock PNG uses the same approved Mac artwork as the ICNS')
   assert.equal(macPng.readUInt32BE(16), 1024)
   assert.equal(macPng.readUInt32BE(20), 1024)
   // Verify the actual packaged Mac artwork, not just the Linux PNG.

@@ -22,3 +22,8 @@ test('restoration matches real explorer object metadata rather than a saved fake
  const draft=normalizeRecoveryDraft({connectionId:'abc',database:'app',entity:'users',kind:'record-edit',text:'{"mode":"insert","text":"{}"}'})
  assert.notEqual(recoveryKey(draft),recoveryKey({...draft,kind:'mysql-query'}))
 })
+
+test('legacy MapReduce workspace restores the database catalog instead',()=>{
+ const saved=normalizeWorkspace({ids:['abc'],positions:{abc:{tab:'aggregation',node:{kind:'mongo-category',database:'app',category:'mapReduce'}}}})
+ assert.deepEqual(saved.positions.abc,{tab:'data',node:{kind:'database',database:'app'}})
+})

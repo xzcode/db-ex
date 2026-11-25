@@ -23,6 +23,7 @@ async function installBridge(page: Page) {
       { id: 'mongo', name: 'Mongo Local', kind: 'mongodb', host: '127.0.0.1', port: 27017 },
       { id: 'redis', name: 'Redis Local', kind: 'redis', host: '127.0.0.1', port: 6379 },
       { id: 'sql2', name: 'MySQL Other', kind: 'mysql', host: '127.0.0.2', port: 3306 },
+      {id:'ch',name:'ClickHouse Local',kind:'clickhouse',host:'127.0.0.1',port:8123},
     ].map(value => ({ ...value, sshEnabled: false, tlsEnabled: false }))
     const grid = (values: Record<string, string>[]) => ({ columns: Object.keys(values[0] || {}), rows: values })
     ;(window as any).__dbexCalls = calls
@@ -51,8 +52,9 @@ async function installBridge(page: Page) {
       async disconnect(id: string) { calls.push({ action: 'disconnect', id }) },
       async roots(id: string) { return [{ id: id + '-db', label: id === 'redis' ? 'DB 0' : id === 'sql2' ? 'other' : 'app', kind: id === 'redis' ? 'keyspace' : 'database', database: id === 'sql2' ? 'other' : 'app' },...(additionalDbs[id]||[]).map(database=>({id:id+'-'+database,label:database,kind:'database',database}))] },
       async children(id: string, database: string, category?: string) {
+        if(id==='ch')return [{id:database+'-events',label:'events',database,entity:'events',kind:'table',metrics:[{label:'存储引擎',value:'MergeTree'},{label:'记录数（估算）',value:'10'}]}]
         if(id!=='mongo')return [{ id: database + '-users', label: 'users', database, entity: 'users', kind: 'table' }]
-        if(!category)return [['collections','集合'],['views','视图'],['functions','函数'],['indexes','索引'],['mapReduce','MapReduce'],['pipelines','聚合管道'],['gridfs','GridFS 存储桶'],['queries','查询']].map(([key,label])=>({id:database+'-'+key,label,database,kind:'mongo-category',category:key}))
+        if(!category)return [['collections','集合'],['views','视图'],['functions','函数'],['indexes','索引'],['pipelines','聚合管道'],['gridfs','GridFS 存储桶'],['queries','查询']].map(([key,label])=>({id:database+'-'+key,label,database,kind:'mongo-category',category:key}))
         if(category==='collections')return [{id:database+'-users',label:'users',database,entity:'users',kind:'collection',metrics:[{label:'文档数',value:'10'},{label:'数据大小',value:'2048',format:'bytes'}]},...((window as any).__dbexCatalogFixture?[{id:database+'-audit',label:'audit',database,entity:'audit',kind:'collection',metrics:[{label:'文档数',value:'2'},{label:'数据大小',value:'100',format:'bytes'}]}]:[])]
         if(category==='views')return [{id:database+'-users-view',label:'users_view',database,entity:'users_view',kind:'view',readOnly:true}]
         if(category==='indexes')return [{id:database+'-users-indexes',label:'users',database,entity:'users',kind:'mongo-indexes'}]
@@ -62,6 +64,11 @@ async function installBridge(page: Page) {
       },
       async execute(id: string, op: any) {
         calls.push({ sessionId: id, ...op })
+        if(op.action==='clickhouse.browse'||op.action==='clickhouse.query')return {...grid([{id:'18446744073709551615',amount:'12345678901234567890.12345678'}]),columnTypes:['UInt64','Decimal(38,8)'],rawRows:[{id:'18446744073709551615',amount:'12345678901234567890.12345678'}],queryId:'fixture-id'}
+        if(op.action==='clickhouse.structure')return grid([{name:'id',type:'UInt64'}])
+        if(op.action==='clickhouse.inspect')return {columns:[],rows:[],inspection:{kind:'table',metrics:[{label:'存储引擎',value:'MergeTree'}],definition:'CREATE TABLE events (id UInt64) ENGINE=MergeTree ORDER BY id'}}
+        if(op.action==='clickhouse.insert')return {columns:[],rows:[],affectedRows:1,message:'操作已完成'}
+
         if(op.action==='mongo.createDatabase'||op.action==='mysql.createDatabase'){additionalDbs[id]=[...(additionalDbs[id]||[]),op.database];return {columns:[],rows:[],message:'数据库已创建'}}
         if(op.action==='mongo.dropDatabase'||op.action==='mysql.dropDatabase'){additionalDbs[id]=(additionalDbs[id]||[]).filter(name=>name!==op.database);return {columns:[],rows:[],message:'数据库已删除'}}
         if (op.action === 'mysql.structure') return { ...grid([{ name: 'id', type: 'int', key: 'PRI' }, { name: 'name', type: 'varchar', key: '' }]), primaryKeys: ['id'] }
@@ -72,6 +79,7 @@ async function installBridge(page: Page) {
           const values = (window as any).__dbexLargeGrid ? Array.from({ length: 500 }, (_, index) => ({ id: String(index + 1), name: 'User ' + (index + 1), email: 'user' + (index + 1) + '@example.test' })) : id === 'sql2' ? [{ id: '2', name: 'Grace', email: 'grace@example.test' }] : rows
           return { ...grid(values), rawRows: values, columnTypes: ['BIGINT','VARCHAR','VARCHAR'], nullCells: values.map(() => []), durationMs: 4, transaction: false, nextOffset: op.action === 'mysql.browse' && (op.offset || 0) < 500 ? (op.offset || 0) + op.limit : undefined }
         }
+        if(op.action==='mysql.updateBatch'||op.action==='mongo.replaceBatch')return {columns:[],rows:[],affectedRows:op.edits.length,gridBatch:{total:op.edits.length,completed:op.edits.length,atomic:op.action==='mysql.updateBatch'}}
         if (op.action === 'mysql.begin') return { columns: [], rows: [], transaction: true }
         if (op.action === 'mysql.commit' || op.action === 'mysql.rollback') return { columns: [], rows: [], transaction: false }
         if (op.action === 'mongo.find' || op.action === 'mongo.aggregate') return { columns: ['_id', 'name', 'createdAt', 'score', 'nullable', 'nested'], rows: [{ _id: '64b000000000000000000001', name: 'Ada', createdAt: 'date', score: '7', nullable: 'NULL', nested: '{...}' }, { _id: '64b000000000000000000002', name: 'Grace', score: '7', nullable: 'NULL' }, { _id: '64b000000000000000000003', name: 'Lin', score: '7' }], documents: [document, secondDocument, thirdDocument], bsonTypes: mongoMetadata, durationMs: 3, nextOffset: op.action === 'mongo.find' && (op.offset || 0) < 400 ? (op.offset || 0) + op.limit : undefined }
@@ -129,11 +137,12 @@ async function connect(page: Page, name: string) {
   await page.locator('.connection-item').filter({ hasText: name }).getByTitle('连接', { exact: true }).click()
 }
 async function openUsers(page: Page, database = 'app') {
-  await page.locator('.resource-node').filter({ hasText: database }).first().click()
-  const folders=page.locator('.resource-node[data-object-category="collections"]')
-  await expect(page.locator('.resource-node[data-object-kind="table"], .resource-node[data-object-category="collections"]').first()).toBeVisible()
+  const tree=page.locator('.resource-list[data-active-session="true"]')
+  await tree.locator('.resource-node').filter({ hasText: database }).first().click()
+  const folders=tree.locator('.resource-node[data-object-category="collections"]')
+  await expect(tree.locator('.resource-node[data-object-kind="table"], .resource-node[data-object-category="collections"]').first()).toBeVisible()
   if(await folders.count()) await folders.click()
-  await page.locator('.child-node').filter({ hasText: 'users' }).click()
+  await tree.locator('.child-node').filter({ hasText: 'users' }).click()
   await expect(page.locator('.workbench:visible .data-table tbody tr').first()).toContainText(database === 'other' ? 'Grace' : 'Ada')
 }
 async function replaceEditor(page: Page, selector: string, text: string) {
@@ -222,7 +231,7 @@ test('MongoDB right-click document editor uses typed syntax, validates locally a
   await page.getByRole('button', { name: '查询条件', exact: true }).click()
   await page.getByRole('button', { name: '文本', exact: true }).click()
   await page.getByLabel('Projection', { exact: true }).fill('{"name":1}')
-  await page.getByRole('button', { name: '查询', exact: true }).click()
+  await page.locator('.workbench:visible').getByRole('button', { name: '查询', exact: true }).click()
   await row.click({ button: 'right' })
   await expect(page.locator('.mongo-row-menu').getByRole('button', { name: '编辑文档…' })).toBeDisabled()
   await page.keyboard.press('Escape')
@@ -716,7 +725,7 @@ test('MongoDB filter detects ObjectId while typing and preserves a manual text o
 test('MongoDB classified explorer and saved query library',async({page})=>{
   await connect(page,'Mongo Local')
   await page.locator('.resource-node[data-object-kind="database"]').click()
-  await expect(page.locator('.resource-node[data-object-kind="mongo-category"]')).toHaveCount(8)
+  await expect(page.locator('.resource-node[data-object-kind="mongo-category"]')).toHaveCount(7)
   await page.locator('[data-object-category="views"]').click()
   await page.locator('[data-object-kind="view"]').click()
   await expect(page.locator('.workbench:visible')).toContainText('只读对象')
@@ -731,27 +740,40 @@ test('MongoDB classified explorer and saved query library',async({page})=>{
   const catalog=page.locator('.object-list-panel:visible')
   await catalog.getByRole('button',{name:/新建查询/}).click()
   const library=page.locator('.mongo-library:visible')
-  await library.getByLabel('目标集合或视图',{exact:true}).selectOption('users')
+  await expect(library.getByLabel('目标集合或视图',{exact:true})).toHaveCount(0)
+  await expect(library.getByLabel('Filter',{exact:true})).toHaveCount(0)
   await library.getByLabel('名称',{exact:true}).fill('My saved query')
-  await library.getByLabel('Filter',{exact:true}).fill('{"score":{"$numberInt":"7"}}')
+  await replaceEditor(page,'.mongo-library:visible .native-mongo-editor .monaco-editor','db.')
+  await page.keyboard.press('Control+Space')
+  await expect(page.locator('.suggest-widget.visible')).toContainText('users')
+  await page.keyboard.press('Escape')
+  await replaceEditor(page,'.mongo-library:visible .native-mongo-editor .monaco-editor','db.users.')
+  await page.keyboard.press('Control+Space')
+  await expect(page.locator('.suggest-widget.visible')).toContainText('find')
+  await page.keyboard.press('Escape')
+  await replaceEditor(page,'.mongo-library:visible .native-mongo-editor .monaco-editor','db.users.find({score:NumberInt(7)})')
+  await library.getByRole('button',{name:'美化语句',exact:true}).click()
+  await expect(library.locator('.view-lines')).toContainText('NumberInt(7)')
+  await expect.poll(()=>library.locator('.view-lines').textContent()).toContain('score:')
   await library.getByRole('button',{name:'保存',exact:true}).click()
   await expect(library.getByRole('status')).toHaveText('保存成功')
-  await library.getByRole('button',{name:'查询',exact:true}).click()
+  await library.getByRole('button',{name:'运行选中 / 全部',exact:true}).click()
   await expect(library.locator('.data-table')).toContainText('Ada')
+  await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((c:any)=>c.action==='mongo.find').at(-1)?.filter)).toBe('{"score":{"$numberInt":"7"}}')
   await page.locator('[data-object-category="pipelines"]').click()
   await catalog.getByRole('button',{name:/新建查询/}).click()
-  await library.getByLabel('目标集合或视图',{exact:true}).selectOption('users')
   await library.getByLabel('名称',{exact:true}).fill('My pipeline')
+  await replaceEditor(page,'.mongo-library:visible .native-mongo-editor .monaco-editor','db.users.aggregate([{$limit:10}])')
   await library.getByRole('button',{name:'保存',exact:true}).click()
   await expect(library.getByRole('status')).toHaveText('保存成功')
-  await library.getByRole('button',{name:'运行 Aggregation',exact:true}).click()
+  await library.getByRole('button',{name:'运行选中 / 全部',exact:true}).click()
   await expect(library.locator('.data-table')).toContainText('Ada')
   await page.locator('[data-object-category="queries"]').click()
   await expect(catalog.locator('tbody')).toContainText('My saved query')
   await catalog.locator('tbody tr').filter({hasText:'My saved query'}).dblclick()
-  await expect(library.getByLabel('Filter',{exact:true})).toHaveValue('{"score":{"$numberInt":"7"}}')
-  await page.locator('[data-object-category="mapReduce"]').click()
-  await expect(page.locator('.workbench:visible')).toContainText('MapReduce 已弃用')
+  await expect(library.locator('.view-lines')).toContainText('NumberInt(7)')
+  await expect(page.locator('[data-object-category="mapReduce"]')).toHaveCount(0)
+  await expect(page.locator('[data-object-category="pipelines"]')).toBeVisible()
 })
 
 test('database menu creates and drops a named MongoDB database, with typed confirmation',async({page})=>{
@@ -1052,4 +1074,151 @@ test('macOS integrated title bar reserves native controls and keeps preferences 
  await expect(bar).toHaveCSS('direction','ltr')
  await settings.click()
  await expect(prefs).toBeVisible()
+})
+
+
+test('ClickHouse uses its own typed query actions and analytical workspace',async({page})=>{
+ await connect(page,'ClickHouse Local')
+ await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ await page.locator('.resource-node[data-object-kind="table"]').filter({hasText:'events'}).click()
+ const workbench=page.locator('.clickhouse-workbench:visible')
+ await expect(workbench.locator('.data-table')).toContainText('18446744073709551615')
+ await expect(workbench.getByRole('button',{name:'开始事务',exact:true})).toHaveCount(0)
+ await expect(workbench.getByRole('button',{name:'编辑',exact:true})).toHaveCount(0)
+ await workbench.locator('.data-table').getByRole('button',{name:'列操作: id',exact:true}).click()
+ await page.getByRole('menuitem',{name:'降序排序',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((c:any)=>c.action==='clickhouse.browse').at(-1)?.sort)).toEqual([{field:'id',direction:-1}])
+ await workbench.getByRole('button',{name:'结构',exact:true}).click()
+ await expect(workbench.locator('.data-table')).toContainText('UInt64')
+ await page.locator('[data-object-kind="query-folder"]').click()
+ await page.locator('.object-list-panel:visible').getByRole('button',{name:/新建查询/}).click()
+ const editor=page.locator('.saved-query-editor:visible')
+ await editor.getByLabel('名称',{exact:true}).fill('Analytics')
+ await replaceEditor(page,'.saved-query-editor:visible .query-editor .monaco-editor','SELECT {id:UInt64} AS id')
+ await editor.getByLabel('ClickHouse 参数 JSON 对象').fill('{"id":"18446744073709551615"}')
+ await editor.getByRole('button',{name:'保存',exact:true}).click()
+ await expect(editor.getByRole('status')).toHaveText('保存成功')
+ await editor.getByRole('button',{name:'运行选中 / 全部',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((c:any)=>c.action==='clickhouse.query').at(-1)?.parameters)).toEqual({id:'18446744073709551615'})
+ await expect(editor.getByRole('button',{name:'开始事务',exact:true})).toHaveCount(0)
+ await expect(editor.locator('.data-table')).toContainText('18446744073709551615')
+})
+
+test('MongoDB index syntax help preserves the draft and inserts examples without creating an index',async({page})=>{
+ await connect(page,'Mongo Local')
+ await page.locator('.resource-node[data-object-kind="database"]').click()
+ await page.locator('[data-object-category="indexes"]').click()
+ await page.locator('[data-object-kind="mongo-indexes"]').click()
+ const workbench=page.locator('.workbench:visible')
+ await workbench.getByRole('button',{name:'只读 · 启用写入',exact:true}).click()
+ await workbench.getByRole('button',{name:'新建索引',exact:true}).click()
+ const dialog=page.getByRole('dialog',{name:'创建 MongoDB 索引',exact:true})
+ const keys=dialog.locator('[data-index-keys]'),options=dialog.locator('[data-index-options]')
+ await keys.fill('{"custom":-1}')
+ await options.fill('{"name":"custom_index"}')
+ await dialog.getByRole('button',{name:'语法帮助',exact:true}).click()
+ await expect(dialog.locator('[data-index-help]')).toContainText('partialFilterExpression')
+ await expect(dialog.locator('[data-index-help]')).toContainText('expireAfterSeconds')
+ await dialog.getByRole('button',{name:'返回',exact:true}).click()
+ await expect(keys).toHaveValue('{"custom":-1}')
+ await expect(options).toHaveValue('{"name":"custom_index"}')
+ await dialog.getByRole('button',{name:'语法帮助',exact:true}).click()
+ await dialog.locator('[data-index-example]').selectOption('ttl')
+ await dialog.getByRole('button',{name:'填入示例',exact:true}).click()
+ expect(JSON.parse(await keys.inputValue())).toEqual({expiresAt:1})
+ expect(JSON.parse(await options.inputValue())).toEqual({name:'expiresAt_ttl',expireAfterSeconds:0})
+ expect(await page.evaluate(()=> (window as any).__dbexCalls.filter((c:any)=>c.action==='mongo.createIndex').length)).toBe(0)
+ await dialog.getByRole('button',{name:'审阅并创建',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.find((c:any)=>c.action==='mongo.createIndex'))).toMatchObject({database:'app',entity:'users',confirmed:true})
+ await expect(dialog).toHaveCount(0)
+})
+
+
+test('database brand icons are consistent in sidebar, session tabs and connection dialogs; welcome is empty',async({page})=>{
+ const sidebar=page.locator('.connection-sidebar')
+ await expect(page.locator('.empty-workspace')).toBeVisible()
+ await expect(page.locator('.empty-workspace')).toBeEmpty()
+ await expect(page.locator('.welcome-mark,.welcome-features')).toHaveCount(0)
+ const mongo=sidebar.locator('.connection-item').filter({hasText:'Mongo Local'})
+ await expect(mongo.locator('[data-database-icon="mongodb"] img')).toBeVisible()
+ await expect.poll(()=>mongo.locator('img').evaluate((img:HTMLImageElement)=>img.complete&&img.naturalWidth>0)).toBe(true)
+ await page.getByRole('button',{name:'＋ 新建连接',exact:true}).click()
+ const choices=page.locator('.connection-choice:not(.uri-choice)')
+ await expect(choices.locator('[data-database-icon]')).toHaveCount(6)
+ for(const kind of ['mysql','mariadb','mongodb','redis','sqlite','clickhouse']){
+  const image=choices.locator('[data-database-icon="'+kind+'"] img')
+  await expect(image).toBeVisible()
+  await expect.poll(()=>image.evaluate((el:HTMLImageElement)=>el.complete&&el.naturalWidth>0)).toBe(true)
+ }
+ await page.getByRole('button',{name:'MongoDB',exact:true}).click()
+ await expect(page.locator('.connection-dialog-title [data-database-icon="mongodb"] img')).toBeVisible()
+ await page.getByRole('button',{name:'取消',exact:true}).click()
+ await connect(page,'Mongo Local')
+ await expect(page.locator('.session-tab.active [data-database-icon="mongodb"] img')).toBeVisible()
+})
+
+
+test('a single connection tree keeps multiple independent session resources expanded',async({page})=>{
+ await connect(page,'MySQL Local');await openUsers(page)
+ const local=page.locator('[data-resource-session="sql"]')
+ await expect(local.locator('.resource-node').filter({hasText:'users'})).toBeVisible()
+ await connect(page,'MySQL Other');await openUsers(page,'other')
+ const other=page.locator('[data-resource-session="sql2"]')
+ await expect(local).toBeVisible()
+ await expect(other).toBeVisible()
+ await expect(page.locator('.explorer-pane')).toHaveCount(0)
+ await expect(page.locator('.resize-handle[role="separator"]')).toHaveCount(1)
+ await expect(page.locator('.connection-sidebar .resource-list')).toHaveCount(2)
+ await local.locator('.resource-node').filter({hasText:'users'}).click()
+ await expect(page.locator('.workbench:visible .data-table')).toContainText('Ada')
+ await other.locator('.resource-node').filter({hasText:'users'}).click()
+ await expect(page.locator('.workbench:visible .data-table')).toContainText('Grace')
+ const chevron=page.locator('[data-connection-id="sql"] .connection-chevron')
+ await chevron.click()
+ await expect(local).toHaveCount(0)
+ await expect(other).toBeVisible()
+ await expect(page.locator('.session-tab')).toHaveCount(2)
+ await chevron.click()
+ await expect(local.locator('.resource-node').filter({hasText:'users'})).toBeVisible()
+ await expect(other.locator('.resource-node').filter({hasText:'users'})).toBeVisible()
+ // A database context action on an inactive tree activates the correct session.
+ await local.locator('[data-object-kind="database"]').click({button:'right'})
+ await page.locator('.database-context-menu').getByRole('button',{name:'新建查询',exact:true}).click()
+ await expect(page.locator('.session-tab.active')).toContainText('MySQL Local')
+ await expect(page.locator('.saved-query-editor:visible')).toBeVisible()
+})
+
+
+test('grid inline edits and column assignment are staged, cancellable and explicitly committed',async({page})=>{
+ await connect(page,'Mongo Local');await openUsers(page)
+ const workbench=page.locator('.workbench:visible'),grid=workbench.locator('.data-table')
+ await workbench.getByRole('button',{name:'只读 · 启用写入',exact:true}).click()
+ const cell=grid.locator('tr[data-row-index="0"] [data-grid-field="name"]')
+ await cell.dblclick()
+ const input=grid.locator('.inline-grid-input')
+ await expect(input).toHaveValue('Ada')
+ await input.fill('Ada staged');await input.press('Enter')
+ await expect(cell).toContainText('Ada staged')
+ expect(await page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mongo.replaceBatch').length)).toBe(0)
+ await workbench.getByRole('button',{name:'取消表格修改',exact:true}).click()
+ await expect(cell).toContainText('Ada')
+ await grid.locator('thead th').filter({hasText:/^name/}).dblclick()
+ await workbench.getByLabel('整列修改值',{exact:true}).fill('New name')
+ await expect(grid.locator('tr[data-row-index="1"] [data-grid-field="name"]')).toContainText('New name')
+ await workbench.getByRole('button',{name:'保存表格修改',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mongo.replaceBatch').at(-1)?.edits.map((x:any)=>JSON.parse(x.document).name))).toEqual(['New name','New name','New name'])
+ await expect(workbench.getByRole('button',{name:'保存表格修改',exact:true})).toBeDisabled()
+})
+
+test('SQL inline edits retain exact record identity and block pagination until resolved',async({page})=>{
+ await connect(page,'MySQL Local');await openUsers(page)
+ const workbench=page.locator('.workbench:visible'),grid=workbench.locator('.data-table')
+ await workbench.getByRole('button',{name:'只读 · 启用写入',exact:true}).click()
+ await grid.locator('tr[data-row-index="0"] [data-grid-field="name"]').dblclick()
+ const input=grid.locator('.inline-grid-input')
+ await input.fill('Changed');await input.press('Enter')
+ await workbench.getByRole('button',{name:'下一页',exact:true}).click()
+ await expect(workbench.getByRole('alert')).toContainText('请先保存或取消表格修改。')
+ await workbench.getByRole('button',{name:'保存表格修改',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.updateBatch').at(-1)?.edits[0])).toMatchObject({key:{id:'1'},original:{name:'Ada'},changes:{name:'Changed'}})
 })

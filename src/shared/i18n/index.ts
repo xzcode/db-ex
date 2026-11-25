@@ -1,3 +1,7 @@
+import { gridEditCatalogs } from './catalog-grid-edit'
+import { queryEditorCatalogs } from './catalog-query-editor'
+import { navigationCatalogs } from './catalog-navigation'
+import { indexHelpCatalogs } from './catalog-index-help'
 import { en } from './catalog-en'
 import { connectionCatalogs } from './catalog-connection'
 import zh_TW from './catalog-zh-TW.json'
@@ -109,18 +113,18 @@ export function resolveLocale(preference: LanguagePreference, systemLanguage: st
 }
 export const catalogs: Readonly<Record<Locale, Readonly<Record<string, string>>>> = {
   'zh-CN': {}, en,
-  'zh-TW': { ...zh_TW, ...connectionCatalogs['zh-TW'] },
-  'ja': { ...ja, ...connectionCatalogs['ja'] },
-  'ko': { ...ko, ...connectionCatalogs['ko'] },
-  'de': { ...de, ...connectionCatalogs['de'] },
-  'fr': { ...fr, ...connectionCatalogs['fr'] },
-  'es': { ...es, ...connectionCatalogs['es'] },
-  'pt-BR': { ...pt_BR, ...connectionCatalogs['pt-BR'] },
-  'ru': { ...ru, ...connectionCatalogs['ru'] },
-  'it': { ...it, ...connectionCatalogs['it'] },
-  'ar': { ...ar, ...connectionCatalogs['ar'] },
-  'hi': { ...hi, ...connectionCatalogs['hi'] },
-  'id': { ...id, ...connectionCatalogs['id'] }
+  'zh-TW': { ...zh_TW, ...connectionCatalogs['zh-TW'], ...indexHelpCatalogs['zh-TW'], ...navigationCatalogs['zh-TW'], ...queryEditorCatalogs['zh-TW'], ...gridEditCatalogs['zh-TW'] },
+  'ja': { ...ja, ...connectionCatalogs['ja'], ...indexHelpCatalogs['ja'], ...navigationCatalogs['ja'], ...queryEditorCatalogs['ja'], ...gridEditCatalogs['ja'] },
+  'ko': { ...ko, ...connectionCatalogs['ko'], ...indexHelpCatalogs['ko'], ...navigationCatalogs['ko'], ...queryEditorCatalogs['ko'], ...gridEditCatalogs['ko'] },
+  'de': { ...de, ...connectionCatalogs['de'], ...indexHelpCatalogs['de'], ...navigationCatalogs['de'], ...queryEditorCatalogs['de'], ...gridEditCatalogs['de'] },
+  'fr': { ...fr, ...connectionCatalogs['fr'], ...indexHelpCatalogs['fr'], ...navigationCatalogs['fr'], ...queryEditorCatalogs['fr'], ...gridEditCatalogs['fr'] },
+  'es': { ...es, ...connectionCatalogs['es'], ...indexHelpCatalogs['es'], ...navigationCatalogs['es'], ...queryEditorCatalogs['es'], ...gridEditCatalogs['es'] },
+  'pt-BR': { ...pt_BR, ...connectionCatalogs['pt-BR'], ...indexHelpCatalogs['pt-BR'], ...navigationCatalogs['pt-BR'], ...queryEditorCatalogs['pt-BR'], ...gridEditCatalogs['pt-BR'] },
+  'ru': { ...ru, ...connectionCatalogs['ru'], ...indexHelpCatalogs['ru'], ...navigationCatalogs['ru'], ...queryEditorCatalogs['ru'], ...gridEditCatalogs['ru'] },
+  'it': { ...it, ...connectionCatalogs['it'], ...indexHelpCatalogs['it'], ...navigationCatalogs['it'], ...queryEditorCatalogs['it'], ...gridEditCatalogs['it'] },
+  'ar': { ...ar, ...connectionCatalogs['ar'], ...indexHelpCatalogs['ar'], ...navigationCatalogs['ar'], ...queryEditorCatalogs['ar'], ...gridEditCatalogs['ar'] },
+  'hi': { ...hi, ...connectionCatalogs['hi'], ...indexHelpCatalogs['hi'], ...navigationCatalogs['hi'], ...queryEditorCatalogs['hi'], ...gridEditCatalogs['hi'] },
+  'id': { ...id, ...connectionCatalogs['id'], ...indexHelpCatalogs['id'], ...navigationCatalogs['id'], ...queryEditorCatalogs['id'], ...gridEditCatalogs['id'] }
 }
 export function translate(locale: Locale, key: string, values: readonly unknown[] = []): string {
   const catalog = catalogs[locale]

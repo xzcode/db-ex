@@ -249,6 +249,31 @@ export class MongoOperations {
         if (result.matchedCount !== 1) throw new Error('EDIT_CONFLICT: 文档已被修改、删除或原始文档不完整，请刷新后重试')
         return emptyResult(`已替换 ${result.modifiedCount} 份文档`, result.modifiedCount)
       }
+      case 'mongo.replaceBatch': {
+        requireWrite(context)
+        if(!Array.isArray(operation.edits)||!operation.edits.length||operation.edits.length>MAX_ROWS||Buffer.byteLength(JSON.stringify(operation.edits))>MAX_BYTES)throw new Error('LIMIT_EXCEEDED: 单批编辑最多 500 行和 2 MiB')
+        const identities=new Set<string>()
+        const edits=operation.edits.map(item=>{
+          const pair=checkedReplacement(item.original,item.document),identity=BSON.EJSON.stringify(pair.original._id,{relaxed:false})
+          if(identities.has(identity))throw new Error('INVALID_INPUT: 重复记录')
+          identities.add(identity)
+          BSON.serialize(pair.replacement)
+          return pair
+        })
+        let completed=0
+        for(const {original,replacement} of edits){
+          checkAborted(signal)
+          try{
+            const result=await collection.replaceOne(optimisticFilter(original),replacement,{...options,upsert:false})
+            if(result.matchedCount!==1)throw new Error('EDIT_CONFLICT: 文档已被修改、删除或原始文档不完整，请刷新后重试')
+            completed++
+          }catch(error){
+            const failure=databaseError(error)
+            return {...emptyResult('批量编辑未全部完成',completed),gridBatch:{total:edits.length,completed,atomic:false,failed:true,uncertain:!failure.message.startsWith('EDIT_CONFLICT:'),error:failure.message}}
+          }
+        }
+        return {...emptyResult('操作已完成',completed),gridBatch:{total:edits.length,completed,atomic:false}}
+      }
       case 'mongo.delete': {
         requireWrite(context)
         const original = documentEjson(operation.original, '原始文档')

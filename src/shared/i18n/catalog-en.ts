@@ -1,3 +1,7 @@
+import { gridEditCatalogs } from './catalog-grid-edit'
+import { queryEditorCatalogs } from './catalog-query-editor'
+import { navigationCatalogs } from './catalog-navigation'
+import { indexHelpCatalogs } from './catalog-index-help'
 // English resource catalog. Chinese source strings are stable message keys.
 export const en: Readonly<Record<string, string>> = {
   "本地优先 · 内置加密": "Local-first · Built-in encryption",
@@ -894,8 +898,6 @@ export const en: Readonly<Record<string, string>> = {
   "聚合管道": "Aggregation pipelines",
   "GridFS 存储桶": "GridFS buckets",
   "只读对象": "Read-only object",
-  "MapReduce 已弃用": "MapReduce is deprecated",
-  "请使用聚合管道替代；DB EX 不执行服务器端 JavaScript。": "Use aggregation pipelines instead; DB EX does not execute server-side JavaScript.",
   "GridFS 文件元数据浏览；暂不支持文件上传、下载和删除。": "Browse GridFS file metadata; file upload, download and deletion are not supported yet.",
   "仅查看已存储的函数，不执行服务器端 JavaScript。": "View stored functions only; server-side JavaScript is not executed.",
   "已保存对象": "Saved objects",
@@ -1058,4 +1060,8 @@ export const en: Readonly<Record<string, string>> = {
   "请先保存或关闭已修改的查询。": "Save or close the modified query first.",
   "请在已打开的查询编辑器内修改名称并保存。": "Rename and save the query in its open editor.",
   "导出": "Export",
+  ...indexHelpCatalogs.en,
+  ...navigationCatalogs.en,
+  ...queryEditorCatalogs.en,
+  ...gridEditCatalogs.en,
 }

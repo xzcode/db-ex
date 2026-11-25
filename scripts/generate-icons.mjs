@@ -206,6 +206,7 @@ const macImages = new Map([16, 32, 64, 128, 256, 512, 1024].map(size => [size, p
 await Promise.all([
   writeFile('build/icon.png', images.get(1024)),
   writeFile('build/icon.ico', ico(images)),
-  writeFile('build/icon.icns', icns(macImages))
+  writeFile('build/icon.icns', icns(macImages)),
+  writeFile('build/icon-mac.png', macImages.get(1024))
 ])
 console.log('Generated user-approved DB EX icons (source SHA-256 verified): build/icon.png, build/icon.ico, build/icon.icns')

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, shell, utilityProcess, session as electronSession } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, shell, utilityProcess, nativeImage, session as electronSession } from 'electron'
 import { windowChromeOptions } from '../shared/window-chrome'
 import { isLocale, resolveLocale, translate, localizeMessage, type Locale } from '../shared/i18n'
 import { constants } from 'node:fs'
@@ -74,8 +74,8 @@ function writes(op: DatabaseOperation, writable: boolean, kind:import('../shared
 function operationDetail(id: string, op: DatabaseOperation): string {
   const info = sessions.info(id)
   const target = 'entity' in op ? `${op.database}.${op.entity}` : 'initialCollection' in op ? `${op.database}.${op.initialCollection}` : 'database' in op ? op.database || '' : 'key' in op ? op.key : 'keys' in op ? tr('{0} 个已选择的Key', [op.keys.length]) : ''
-  const count = 'rows' in op ? '\n' + tr('导入 {0} 行', [op.rows.length]) : 'documents' in op ? '\n' + tr('写入 {0} 个文档', [op.documents.length]) : ''
-  const sql = op.action === 'mysql.query' ? `\n\n${op.sql.slice(0, 1500)}` : op.action === 'redis.command' ? '\n' + tr('命令：') + ' ' + op.args[0] : ''
+  const count = 'edits' in op ? '\n' + tr('修改 {0} 条选中记录', [op.edits.length]) : 'rows' in op ? '\n' + tr('导入 {0} 行', [op.rows.length]) : 'documents' in op ? '\n' + tr('写入 {0} 个文档', [op.documents.length]) : ''
+  const sql = (op.action === 'mysql.query'||op.action==='clickhouse.query') ? `\n\n${op.sql.slice(0, 1500)}` : op.action === 'redis.command' ? '\n' + tr('命令：') + ' ' + op.args[0] : ''
   return `${tr('连接：')} ${info.name}\n${tr('地址：')} ${info.displayHost}\n${tr('操作：')} ${op.action}${target ? '\n' + tr('目标：') + ' ' + target : ''}${count}\n${tr(info.transaction ? '当前有未提交事务。' : '本操作可能立即持久化。')}${sql}`
 }
 async function openText(win: BrowserWindow, title: string, limit = 4 * 1024 * 1024): Promise<FileImport | null> {
@@ -249,9 +249,19 @@ function registerIpc(): void {
   ipcMain.handle('files:import', handler(win => openText(win, '选择数据文件（最多4 MiB）')))
   ipcMain.handle('files:export', handler((win, name: string, content: string, format: 'csv' | 'json' | 'text') => saveText(win, name, content, format)))
 }
+// Use the same approved generated artwork as the installed app bundle.
+function runtimeIconPath():string {
+  const mac=process.platform==='darwin'
+  return app.isPackaged?join(process.resourcesPath,'icons',mac?'db-ex-mac.png':'db-ex.png'):join(app.getAppPath(),'build',mac?'icon-mac.png':'icon.png')
+}
+function runtimeIcon(){
+  const image=nativeImage.createFromPath(runtimeIconPath())
+  return image.isEmpty()?undefined:image
+}
 function createWindow(): void {
   const win = new BrowserWindow({ title: 'DB EX', width: 1440, height: 900, minWidth: 1040, minHeight: 640,
     backgroundColor: '#111821', show: false,
+    icon: runtimeIcon(),
     // On macOS retain AppKit's real traffic-light controls and extend web content
     // into the old title bar. Other operating systems keep their native frames.
     ...windowChromeOptions(process.platform),
@@ -268,6 +278,11 @@ function createWindow(): void {
 }
 app.whenReady().then(async () => {
   currentLocale = resolveLocale('system', getSystemLanguage())
+  if(process.platform==='win32')app.setAppUserModelId('dev.dbex.desktop')
+  if(process.platform==='darwin'){
+    const image=runtimeIcon()
+    if(image)app.dock?.setIcon(image)
+  }
   electronSession.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
   electronSession.defaultSession.setPermissionCheckHandler(() => false)
   electronSession.defaultSession.on('will-download', event => event.preventDefault())

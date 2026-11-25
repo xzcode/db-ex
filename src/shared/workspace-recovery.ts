@@ -7,7 +7,7 @@ export type WorkbenchTab=typeof workbenchTabs[number]
 type SelectedNode={kind:ExplorerNode['kind'];database:string;entity?:string;category?:MongoCategory;queryId?:string;queryMode?:QueryMode}
 export interface WorkspacePosition {tab:WorkbenchTab;node?:SelectedNode}
 export interface WorkspaceSnapshot {ids:string[];active?:string;positions:Record<string,WorkspacePosition>}
-const nodeKinds=['database','table','collection','keyspace','view','mongo-category','mongo-function','mongo-indexes','gridfs-bucket','database-query','query-folder','saved-query'] as const
+const nodeKinds=['database','table','collection','keyspace','view','mongo-category','mongo-function','mongo-indexes','gridfs-bucket','database-query','query-folder','saved-query','clickhouse-dictionary'] as const
 const isId=(v:unknown):v is string=>typeof v==='string'&&/^[a-zA-Z0-9_-]{1,128}$/.test(v)
 const name=(v:unknown):v is string=>typeof v==='string'&&v.length>0&&v.length<=200&&!v.includes('\0')
 function object(v:unknown):Record<string,unknown>{return v&&typeof v==='object'&&!Array.isArray(v)?v as Record<string,unknown>:{}}
@@ -30,6 +30,10 @@ export function normalizeWorkspace(input:unknown):WorkspaceSnapshot{
   for(const id of ids){
     if(!Object.hasOwn(values,id))continue
     const v=object(values[id]),n=object(v.node)
+    if(n.kind==='mongo-category'&&n.category==='mapReduce'&&name(n.database)){
+      positions[id]={tab:'data',node:{kind:'database',database:n.database}}
+      continue
+    }
     const kind=nodeKinds.find(k=>k===n.kind)
     const node=kind&&name(n.database)?{kind,database:n.database,entity:name(n.entity)?n.entity:undefined,category:mongoCategory(n.category)?.key,...(isQueryId(n.queryId)?{queryId:n.queryId}:{}),...(['sql','mongo-find','mongo-aggregation'].includes(String(n.queryMode))?{queryMode:n.queryMode as QueryMode}:{})}:undefined
     positions[id]={tab:workbenchTabs.includes(v.tab as WorkbenchTab)?v.tab as WorkbenchTab:'data',node}

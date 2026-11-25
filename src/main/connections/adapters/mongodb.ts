@@ -9,11 +9,11 @@ import { describeMongoConnectionError } from '../mongo-diagnostics'
 import { mongoDirectConnection,mongoUriTlsEnabled } from '../mongo-topology'
 import type { DatabaseAdapter,OperationAction } from './types'
 
-const actions=['mongo.find','mongo.createDatabase','mongo.dropDatabase','mongo.count','mongo.aggregate','mongo.insert','mongo.replace','mongo.delete','mongo.indexes','mongo.inspect','mongo.createIndex','mongo.dropIndex'] as const satisfies readonly OperationAction[]
+const actions=['mongo.find','mongo.createDatabase','mongo.dropDatabase','mongo.count','mongo.aggregate','mongo.insert','mongo.replace','mongo.replaceBatch','mongo.delete','mongo.indexes','mongo.inspect','mongo.createIndex','mongo.dropIndex'] as const satisfies readonly OperationAction[]
 function hostForUri(host:string):string{return isIP(host)===6?'['+host+']':host}
 export const mongoAdapter:DatabaseAdapter={
   kind:'mongodb',actions,connectionError:describeMongoConnectionError,
-  writes(input){return ['mongo.createDatabase','mongo.dropDatabase','mongo.insert','mongo.replace','mongo.delete','mongo.createIndex','mongo.dropIndex'].includes(input.action)},
+  writes(input){return ['mongo.createDatabase','mongo.dropDatabase','mongo.insert','mongo.replace','mongo.replaceBatch','mongo.delete','mongo.createIndex','mongo.dropIndex'].includes(input.action)},
   async connect({config,transport,tls}){
     const nodes=config.nodes?.length?config.nodes:[{host:config.host,port:config.port}]
     const uri=config.uri?.trim()||'mongodb://'+nodes.map(node=>hostForUri(node.host)+':'+node.port).join(',')+'/'

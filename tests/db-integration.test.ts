@@ -5,6 +5,9 @@ import mysql from 'mysql2/promise'
 import { BSON, MongoClient } from 'mongodb'
 import { MysqlOperations } from '../src/main/operations/mysql'
 import { MongoOperations } from '../src/main/operations/mongodb'
+import {prepareGridEdits} from '../src/shared/grid-edit'
+import {newBrowseFilter} from '../src/shared/browse-filter'
+import {compileMongoScript} from '../src/shared/mongo-query-script'
 
 const enabled = process.env.DB_EX_INTEGRATION === '1'
 const read = { writable: false, confirmed: false }
@@ -97,6 +100,47 @@ test('MySQL real database: pagination, prepared CRUD, conflicts, transactions an
     assert.equal(jsonRow.created_at, '2025-01-01 10:00:00.123456')
     await operations.execute({ action: 'mysql.update', ...jsonTarget, key: { id: 1 }, original: jsonRow, changes: { payload: '{"huge":9007199254740995}' } }, write)
     await assert.rejects(operations.execute({ action: 'mysql.delete', ...jsonTarget, key: { id: 1 }, original: jsonRow }, write), /EDIT_CONFLICT/)
+    // Regression: apply only staged records, preserve exact types, and roll
+    // back the whole batch on a stale original. Existing fixtures remain isolated.
+    const batchTarget={database,entity:'batch_records'}
+    await client.query('CREATE TABLE '+database+'.batch_records (id BIGINT PRIMARY KEY, name VARCHAR(50) NOT NULL, amount DECIMAL(20,5) NOT NULL) ENGINE=InnoDB')
+    await operations.execute({action:'mysql.import',...batchTarget,rows:[
+      {id:'9007199254740993',name:'one',amount:'123456789012345.12345'},
+      {id:'9007199254740994',name:'two',amount:'9.87654'},
+      {id:'9007199254740995',name:'three',amount:'1.23456'}
+    ]},write)
+    const batchStructure=await operations.execute({action:'mysql.structure',...batchTarget},read)
+    const batchBrowse=()=>operations.execute({action:'mysql.browse',...batchTarget,filter:{...newBrowseFilter(),sort:[{field:'id',direction:1}]}},read)
+    let snapshot=await batchBrowse()
+    const plan=(value:string)=>prepareGridEdits(snapshot,batchStructure,'mysql',['id'],[{row:0,field:'name',text:value},{row:1,field:'name',text:value}]).sqlEdits
+    const batch={action:'mysql.updateBatch' as const,...batchTarget,edits:plan('updated')}
+    await assert.rejects(operations.execute(batch,read),/READ_ONLY/)
+    await assert.rejects(operations.execute(batch,{writable:true,confirmed:false}),/CONFIRMATION_REQUIRED/)
+    assert.deepEqual((await operations.execute(batch,write)).gridBatch,{total:2,completed:2,atomic:true})
+    snapshot=await batchBrowse()
+    assert.deepEqual(snapshot.rawRows!.map(r=>r.name),['updated','updated','three'])
+    assert.equal(snapshot.rawRows![0]!.id,'9007199254740993')
+    assert.equal(snapshot.rawRows![0]!.amount,'123456789012345.12345')
+    const stale=plan('rollback')
+    await client.query('UPDATE '+database+'.batch_records SET name="external" WHERE id=9007199254740994')
+    await assert.rejects(operations.execute({...batch,edits:stale},write),/EDIT_CONFLICT/)
+    assert.deepEqual((await batchBrowse()).rawRows!.map(r=>r.name),['updated','external','three'])
+    snapshot=await batchBrowse()
+    await operations.execute({action:'mysql.begin'},write)
+    assert.equal((await operations.execute({...batch,edits:plan('pending')},write)).transaction,true)
+    await operations.execute({action:'mysql.rollback'},read)
+    assert.deepEqual((await batchBrowse()).rawRows!.map(r=>r.name),['updated','external','three'])
+    const nonAtomic={database,entity:'batch_nonatomic'}
+    await client.query('CREATE TABLE '+database+'.batch_nonatomic (id INT PRIMARY KEY,name VARCHAR(40)) ENGINE=MyISAM')
+    await client.query('INSERT INTO '+database+'.batch_nonatomic VALUES (1,"one"),(2,"two")')
+    const partial=await operations.execute({action:'mysql.updateBatch',...nonAtomic,edits:[
+      {key:{id:1},original:{id:1,name:'one'},changes:{name:'saved'}},
+      {key:{id:2},original:{id:2,name:'stale'},changes:{name:'not saved'}}
+    ]},write)
+    assert.deepEqual([partial.gridBatch?.completed,partial.gridBatch?.atomic,partial.gridBatch?.failed,partial.gridBatch?.uncertain],[1,false,true,false])
+    const [remaining]=await client.query('SELECT name FROM '+database+'.batch_nonatomic ORDER BY id')
+    assert.deepEqual((remaining as {name:string}[]).map(r=>r.name),['saved','two'])
+
   } finally {
     await operations.close()
     const cleanup = operations.disconnected ? await mysql.createConnection(localUrl('MYSQL_URL', 'mysql://root:dbex-test@127.0.0.1:3306')) : client
@@ -148,6 +192,32 @@ test('MongoDB real database: BSON exactness, filter, aggregation, indexes and op
     await assert.rejects(operations.execute({ action: 'mongo.insert', ...target, documents: ['{}'] }, read), /READ_ONLY/)
     await assert.rejects(operations.execute({ action: 'mongo.insert', database, entity: 'bulk', documents: ['{"_id":"same","value":1}', '{"_id":"same","value":2}'] }, write), /PARTIAL_WRITE:.*1/)
     assert.equal(await client.db(database).collection('bulk').countDocuments(), 1)
+    const batchTarget={database,entity:'batch_records'}
+    const batchDoc=(id:number,name:string)=>canonical({_id:new BSON.ObjectId(String(id).padStart(24,'0')),name,big:BSON.Long.fromString('9223372036854775807'),money:BSON.Decimal128.fromString('123456789.123456789'),score:new BSON.Int32(7),date:new Date('2025-01-01T00:00:00Z')})
+    await operations.execute({action:'mongo.insert',...batchTarget,documents:[batchDoc(1,'one'),batchDoc(2,'two'),batchDoc(3,'three')]},write)
+    const batchFind=()=>operations.execute({action:'mongo.find',...batchTarget,sort:'{"_id":1}'},read)
+    let snapshot=await batchFind()
+    const batch={action:'mongo.replaceBatch' as const,...batchTarget,edits:prepareGridEdits(snapshot,null,'mongodb',[],[
+      {row:0,field:'name',text:'updated'},{row:1,field:'name',text:'updated'},{row:0,field:'big',text:'9223372036854775806'}
+    ]).mongoEdits}
+    await assert.rejects(operations.execute(batch,read),/READ_ONLY/)
+    await assert.rejects(operations.execute(batch,{writable:true,confirmed:false}),/CONFIRMATION_REQUIRED/)
+    assert.deepEqual((await operations.execute(batch,write)).gridBatch,{total:2,completed:2,atomic:false})
+    snapshot=await batchFind()
+    const docs=snapshot.documents!.map(text=>JSON.parse(text))
+    assert.deepEqual(docs.map(x=>x.name),['updated','updated','three'])
+    assert.equal(docs[0].big.$numberLong,'9223372036854775806')
+    assert.equal(docs[0].money.$numberDecimal,'123456789.123456789')
+    assert.deepEqual(docs[0].score,{$numberInt:'7'})
+    assert.equal(docs[0].date.$date.$numberLong,'1735689600000')
+    const edits=prepareGridEdits(snapshot,null,'mongodb',[],[{row:0,field:'name',text:'partial'},{row:1,field:'name',text:'not saved'}]).mongoEdits
+    await client.db(database).collection(batchTarget.entity).updateOne({_id:new BSON.ObjectId('000000000000000000000002')},{$set:{name:'external'}})
+    const partial=await operations.execute({...batch,edits},write)
+    assert.deepEqual([partial.gridBatch?.completed,partial.gridBatch?.failed,partial.gridBatch?.uncertain],[1,true,false])
+    assert.deepEqual((await batchFind()).documents!.map(text=>JSON.parse(text).name),['partial','external','three'])
+    const script=compileMongoScript('db.batch_records.find({big:NumberLong("9223372036854775806")}).limit(1)',database).operation
+    assert.equal((await operations.execute(script,read)).documents?.length,1)
+
     await operations.execute({action:'mongo.dropDatabase',database},write)
     assert.equal((await client.db(database).listCollections().toArray()).length,0)
   } finally {
