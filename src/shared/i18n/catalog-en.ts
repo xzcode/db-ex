@@ -1,3 +1,4 @@
+import { navigationCatalogs } from './catalog-navigation'
 import { indexHelpCatalogs } from './catalog-index-help'
 // English resource catalog. Chinese source strings are stable message keys.
 export const en: Readonly<Record<string, string>> = {
@@ -1058,4 +1059,5 @@ export const en: Readonly<Record<string, string>> = {
   "请在已打开的查询编辑器内修改名称并保存。": "Rename and save the query in its open editor.",
   "导出": "Export",
   ...indexHelpCatalogs.en,
+  ...navigationCatalogs.en,
 }

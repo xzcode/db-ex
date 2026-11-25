@@ -1,3 +1,4 @@
+import { navigationCatalogs } from './catalog-navigation'
 import { indexHelpCatalogs } from './catalog-index-help'
 import { en } from './catalog-en'
 import { connectionCatalogs } from './catalog-connection'
@@ -110,18 +111,18 @@ export function resolveLocale(preference: LanguagePreference, systemLanguage: st
 }
 export const catalogs: Readonly<Record<Locale, Readonly<Record<string, string>>>> = {
   'zh-CN': {}, en,
-  'zh-TW': { ...zh_TW, ...connectionCatalogs['zh-TW'], ...indexHelpCatalogs['zh-TW'] },
-  'ja': { ...ja, ...connectionCatalogs['ja'], ...indexHelpCatalogs['ja'] },
-  'ko': { ...ko, ...connectionCatalogs['ko'], ...indexHelpCatalogs['ko'] },
-  'de': { ...de, ...connectionCatalogs['de'], ...indexHelpCatalogs['de'] },
-  'fr': { ...fr, ...connectionCatalogs['fr'], ...indexHelpCatalogs['fr'] },
-  'es': { ...es, ...connectionCatalogs['es'], ...indexHelpCatalogs['es'] },
-  'pt-BR': { ...pt_BR, ...connectionCatalogs['pt-BR'], ...indexHelpCatalogs['pt-BR'] },
-  'ru': { ...ru, ...connectionCatalogs['ru'], ...indexHelpCatalogs['ru'] },
-  'it': { ...it, ...connectionCatalogs['it'], ...indexHelpCatalogs['it'] },
-  'ar': { ...ar, ...connectionCatalogs['ar'], ...indexHelpCatalogs['ar'] },
-  'hi': { ...hi, ...connectionCatalogs['hi'], ...indexHelpCatalogs['hi'] },
-  'id': { ...id, ...connectionCatalogs['id'], ...indexHelpCatalogs['id'] }
+  'zh-TW': { ...zh_TW, ...connectionCatalogs['zh-TW'], ...indexHelpCatalogs['zh-TW'], ...navigationCatalogs['zh-TW'] },
+  'ja': { ...ja, ...connectionCatalogs['ja'], ...indexHelpCatalogs['ja'], ...navigationCatalogs['ja'] },
+  'ko': { ...ko, ...connectionCatalogs['ko'], ...indexHelpCatalogs['ko'], ...navigationCatalogs['ko'] },
+  'de': { ...de, ...connectionCatalogs['de'], ...indexHelpCatalogs['de'], ...navigationCatalogs['de'] },
+  'fr': { ...fr, ...connectionCatalogs['fr'], ...indexHelpCatalogs['fr'], ...navigationCatalogs['fr'] },
+  'es': { ...es, ...connectionCatalogs['es'], ...indexHelpCatalogs['es'], ...navigationCatalogs['es'] },
+  'pt-BR': { ...pt_BR, ...connectionCatalogs['pt-BR'], ...indexHelpCatalogs['pt-BR'], ...navigationCatalogs['pt-BR'] },
+  'ru': { ...ru, ...connectionCatalogs['ru'], ...indexHelpCatalogs['ru'], ...navigationCatalogs['ru'] },
+  'it': { ...it, ...connectionCatalogs['it'], ...indexHelpCatalogs['it'], ...navigationCatalogs['it'] },
+  'ar': { ...ar, ...connectionCatalogs['ar'], ...indexHelpCatalogs['ar'], ...navigationCatalogs['ar'] },
+  'hi': { ...hi, ...connectionCatalogs['hi'], ...indexHelpCatalogs['hi'], ...navigationCatalogs['hi'] },
+  'id': { ...id, ...connectionCatalogs['id'], ...indexHelpCatalogs['id'], ...navigationCatalogs['id'] }
 }
 export function translate(locale: Locale, key: string, values: readonly unknown[] = []): string {
   const catalog = catalogs[locale]

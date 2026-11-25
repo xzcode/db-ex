@@ -136,11 +136,12 @@ async function connect(page: Page, name: string) {
   await page.locator('.connection-item').filter({ hasText: name }).getByTitle('连接', { exact: true }).click()
 }
 async function openUsers(page: Page, database = 'app') {
-  await page.locator('.resource-node').filter({ hasText: database }).first().click()
-  const folders=page.locator('.resource-node[data-object-category="collections"]')
-  await expect(page.locator('.resource-node[data-object-kind="table"], .resource-node[data-object-category="collections"]').first()).toBeVisible()
+  const tree=page.locator('.resource-list[data-active-session="true"]')
+  await tree.locator('.resource-node').filter({ hasText: database }).first().click()
+  const folders=tree.locator('.resource-node[data-object-category="collections"]')
+  await expect(tree.locator('.resource-node[data-object-kind="table"], .resource-node[data-object-category="collections"]').first()).toBeVisible()
   if(await folders.count()) await folders.click()
-  await page.locator('.child-node').filter({ hasText: 'users' }).click()
+  await tree.locator('.child-node').filter({ hasText: 'users' }).click()
   await expect(page.locator('.workbench:visible .data-table tbody tr').first()).toContainText(database === 'other' ? 'Grace' : 'Ada')
 }
 async function replaceEditor(page: Page, selector: string, text: string) {
@@ -1140,4 +1141,35 @@ test('database brand icons are consistent in sidebar, session tabs and connectio
  await page.getByRole('button',{name:'取消',exact:true}).click()
  await connect(page,'Mongo Local')
  await expect(page.locator('.session-tab.active [data-database-icon="mongodb"] img')).toBeVisible()
+})
+
+
+test('a single connection tree keeps multiple independent session resources expanded',async({page})=>{
+ await connect(page,'MySQL Local');await openUsers(page)
+ const local=page.locator('[data-resource-session="sql"]')
+ await expect(local.locator('.resource-node').filter({hasText:'users'})).toBeVisible()
+ await connect(page,'MySQL Other');await openUsers(page,'other')
+ const other=page.locator('[data-resource-session="sql2"]')
+ await expect(local).toBeVisible()
+ await expect(other).toBeVisible()
+ await expect(page.locator('.explorer-pane')).toHaveCount(0)
+ await expect(page.locator('.resize-handle[role="separator"]')).toHaveCount(1)
+ await expect(page.locator('.connection-sidebar .resource-list')).toHaveCount(2)
+ await local.locator('.resource-node').filter({hasText:'users'}).click()
+ await expect(page.locator('.workbench:visible .data-table')).toContainText('Ada')
+ await other.locator('.resource-node').filter({hasText:'users'}).click()
+ await expect(page.locator('.workbench:visible .data-table')).toContainText('Grace')
+ const chevron=page.locator('[data-connection-id="sql"] .connection-chevron')
+ await chevron.click()
+ await expect(local).toHaveCount(0)
+ await expect(other).toBeVisible()
+ await expect(page.locator('.session-tab')).toHaveCount(2)
+ await chevron.click()
+ await expect(local.locator('.resource-node').filter({hasText:'users'})).toBeVisible()
+ await expect(other.locator('.resource-node').filter({hasText:'users'})).toBeVisible()
+ // A database context action on an inactive tree activates the correct session.
+ await local.locator('[data-object-kind="database"]').click({button:'right'})
+ await page.locator('.database-context-menu').getByRole('button',{name:'新建查询',exact:true}).click()
+ await expect(page.locator('.session-tab.active')).toContainText('MySQL Local')
+ await expect(page.locator('.saved-query-editor:visible')).toBeVisible()
 })

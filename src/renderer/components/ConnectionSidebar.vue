@@ -10,7 +10,7 @@ const props = defineProps<{ connections: SavedConnection[]; sessions: SessionInf
 const emit = defineEmits<{
   refresh: []; create: []; connect: [connection: SavedConnection]; activate: [id: string]; disconnect: [id: string];
   edit: [connection: SavedConnection]; remove: [connection: SavedConnection]; import: []; export: [id?: string];
-  appearance: [id: string, patch: ConnectionAppearancePatch]
+  appearance: [id: string, patch: ConnectionAppearancePatch]; resourceMenu:[event:MouseEvent,sessionId:string]; refreshResources:[sessionId:string]
 }>()
 const filter = ref('')
 const selected = ref('')
@@ -19,6 +19,11 @@ const menuHost = ref<HTMLElement>()
 const groupTarget = ref<string>()
 const groupName = ref('')
 const collapsed = ref<string[]>([])
+const collapsedSessions=ref<string[]>([])
+function sessionExpanded(id:string){return !collapsedSessions.value.includes(id)}
+function expandSession(id:string){collapsedSessions.value=collapsedSessions.value.filter(value=>value!==id)}
+function toggleSession(id:string){collapsedSessions.value=sessionExpanded(id)?[...collapsedSessions.value,id]:collapsedSessions.value.filter(value=>value!==id)}
+watch(()=>props.sessions.map(item=>item.id),ids=>{collapsedSessions.value=collapsedSessions.value.filter(id=>ids.includes(id))})
 const dragging = ref('')
 const groupNames = computed(() => [...new Set(props.connections.map(item => item.group).filter((x): x is string => Boolean(x)))])
 const filtered = computed(() => props.connections.filter(item => [item.name, item.host, item.kind, item.group || ''].some(x => x.toLowerCase().includes(filter.value.trim().toLowerCase()))))
@@ -44,8 +49,24 @@ function open(connection: SavedConnection) {
   if (props.busy || connection.locked) return
   selected.value = connection.id
   const session = active(connection)
-  if (session) emit('activate', session.id)
+  if (session) { expandSession(session.id);emit('activate', session.id) }
   else emit('connect', connection)
+}
+function toggleConnection(connection:SavedConnection){
+ const session=active(connection)
+ if(session)toggleSession(session.id)
+ else open(connection)
+}
+function connectionTooltip(connection:SavedConnection){
+ return [connection.name,connection.host,connection.sshEnabled?'SSH':'',connection.tlsEnabled?'TLS':'',connection.proxyEnabled?'PROXY':''].filter(Boolean).join(' · ')
+}
+function resourceAction(event:MouseEvent,action:'menu'|'refresh'){
+ const connection=menuConnection.value
+ const session=connection&&active(connection)
+ if(!session||props.busy)return
+ if(action==='menu')emit('resourceMenu',event,session.id)
+ else emit('refreshResources',session.id)
+ closeMenu()
 }
 function expanded(group: string) { return Boolean(filter.value.trim()) || !collapsed.value.includes(group) }
 function toggleGroup(group: string) {
@@ -126,24 +147,40 @@ onBeforeUnmount(() => { window.removeEventListener('pointerdown', outside); wind
           <button class="group-toggle" type="button" :aria-expanded="expanded(group)" @click="toggleGroup(group)"><span class="tree-chevron" :class="{ expanded: expanded(group) }" aria-hidden="true">›</span><span class="folder-icon" aria-hidden="true"><svg viewBox="0 0 20 16" fill="currentColor"><path d="M1 3a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2Z"/></svg></span><span class="ellipsis group-name">{{ group }}</span><span class="group-count">{{ items.length }}</span></button>
         </div>
         <template v-if="!group || expanded(group)">
-          <div v-for="connection in items" :key="connection.id" class="connection-item" :class="{ 'has-color': !!connection.color, 'is-selected': selected === connection.id || active(connection)?.id === current, 'in-group': !!group, 'is-open': !!active(connection) }" :style="colorStyle(connection.color)" :data-connection-id="connection.id" :data-color="connection.color || ''" tabindex="0" :draggable="!connection.locked && !busy" @click="select(connection)" @dblclick="open(connection)" @keydown.enter.self.prevent="open(connection)" @keydown.shift.f10.prevent="showMenu($event as unknown as MouseEvent, connection, true)" @contextmenu.prevent.stop="showMenu($event, connection)" @dragstart="startDrag($event, connection)" @dragend="dragging = ''">
-            <span class="tree-chevron connection-chevron" :class="{ expanded: !!active(connection) }" aria-hidden="true">›</span>
-            <DatabaseIcon :kind="connection.kind" />
-            <div class="connection-description"><div class="connection-title"><strong :title="connection.name">{{ connection.name }}</strong><span :class="['connection-indicator', { online: !!active(connection) }]" :title="t(active(connection) ? '已连接' : '未连接')"></span></div><small :title="connection.locked ? t('旧版配置待迁移') : connection.host">{{ connection.locked ? t('旧版配置待迁移') : connection.host }}</small><div v-if="connection.locked || connection.sshEnabled || connection.tlsEnabled || connection.proxyEnabled || active(connection)?.transaction || active(connection)?.writable" class="connection-meta"><span v-if="connection.locked">{{ t('待迁移') }}</span><span v-if="connection.sshEnabled">SSH</span><span v-if="connection.tlsEnabled">TLS</span><span v-if="connection.proxyEnabled">PROXY</span><span v-if="active(connection)?.transaction" class="tiny-badge">TX</span><span v-if="active(connection)?.writable" class="tiny-badge write">RW</span></div></div>
+          <template v-for="connection in items" :key="connection.id">
+          <div class="connection-item" :class="{ 'has-color': !!connection.color, 'is-selected': selected === connection.id || active(connection)?.id === current, 'in-group': !!group, 'is-open': !!active(connection) }" :style="colorStyle(connection.color)" :data-connection-id="connection.id" :data-color="connection.color || ''" :title="connectionTooltip(connection)" tabindex="0" :draggable="!connection.locked && !busy" @click="select(connection)" @dblclick="open(connection)" @keydown.enter.self.prevent="open(connection)" @keydown.shift.f10.prevent="showMenu($event as unknown as MouseEvent, connection, true)" @contextmenu.prevent.stop="showMenu($event, connection)" @dragstart="startDrag($event, connection)" @dragend="dragging = ''">
+            <button type="button" class="tree-chevron connection-chevron" :class="{expanded:!!active(connection)&&sessionExpanded(active(connection)!.id)}" :aria-expanded="!!active(connection)&&sessionExpanded(active(connection)!.id)" :aria-label="t(active(connection)&&sessionExpanded(active(connection)!.id)?'折叠连接':'展开连接')+' '+connection.name" :disabled="busy||connection.locked" @click.stop="toggleConnection(connection)" @dblclick.stop>›</button>
+            <DatabaseIcon :kind="connection.kind" size="small" />
+            <div class="connection-description"><div class="connection-title"><strong :title="connectionTooltip(connection)">{{ connection.name }}</strong><span :class="['connection-indicator',{online:!!active(connection)}]" :title="t(active(connection)?'已连接':'未连接')"></span><span v-if="connection.locked" class="tiny-badge">{{ t('待迁移') }}</span><span v-if="active(connection)?.transaction" class="tiny-badge">TX</span><span v-if="active(connection)?.writable" class="tiny-badge write">RW</span></div></div>
             <div class="connection-actions"><button class="ghost-icon row-connect" :title="t('连接')" :aria-label="t('连接')" :disabled="busy || connection.locked" @click.stop="open(connection)" @dblclick.stop>▶</button><button class="ghost-icon row-menu" :title="t('连接菜单')" :aria-label="t('连接菜单')" :aria-expanded="menu?.id === connection.id" :disabled="busy" @pointerdown.stop @click.stop="showMenu($event, connection, true)" @dblclick.stop>···</button></div>
           </div>
+          <slot v-if="active(connection)&&sessionExpanded(active(connection)!.id)" name="resources" :session="active(connection)!" :grouped="!!group" />
+          </template>
+        </template>
+      </template>
+      <template v-if="temporary.length">
+        <div class="sidebar-label temporary-heading"><span>{{ t('活动会话') }}</span><span>{{ temporary.length }}</span></div>
+        <template v-for="session in temporary" :key="session.id">
+          <div class="temporary-session-row" :class="{selected:current===session.id}">
+            <button type="button" class="tree-chevron connection-chevron" :class="{expanded:sessionExpanded(session.id)}" :aria-expanded="sessionExpanded(session.id)" :aria-label="t(sessionExpanded(session.id)?'折叠连接':'展开连接')+' '+session.name" @click="toggleSession(session.id)">›</button>
+            <button type="button" class="active-item" @click="emit('activate',session.id)" :title="session.name+' · '+session.displayHost"><DatabaseIcon :kind="session.kind" size="small" /><span class="ellipsis">{{ session.name }}</span><span v-if="session.transaction" class="tiny-badge">TX</span><span v-if="session.writable" class="tiny-badge write">RW</span></button>
+            <button v-if="session.kind!=='redis'" type="button" class="ghost-icon" :title="t('数据库菜单')" :disabled="busy" @click="emit('resourceMenu',$event,session.id)">···</button><button class="ghost-icon" type="button" :title="t('刷新资源树')" :disabled="busy" @click="emit('refreshResources',session.id)">↻</button>
+          </div>
+          <slot v-if="sessionExpanded(session.id)" name="resources" :session="session" :grouped="false" />
         </template>
       </template>
       <div v-if="dragging" class="ungroup-drop" @dragover.prevent @drop.prevent="dropGroup($event, '')">{{ t('移出分组') }}</div>
-      <div v-if="!filtered.length" class="sidebar-empty">{{ connections.length ? t('没有匹配的连接') : t('创建连接，或导入已有连接备份。') }}</div>
+      <div v-if="!filtered.length&&!temporary.length" class="sidebar-empty">{{ connections.length ? t('没有匹配的连接') : t('创建连接，或导入已有连接备份。') }}</div>
     </div>
-    <template v-if="temporary.length"><div class="sidebar-label"><span>{{ t('活动会话') }}</span><span>{{ temporary.length }}</span></div><div class="active-list"><button v-for="session in temporary" :key="session.id" :class="['active-item', { selected: current === session.id }]" @click="emit('activate', session.id)"><DatabaseIcon :kind="session.kind" size="small" /><span class="status-dot"></span><span class="ellipsis">{{ session.name }}</span><span v-if="session.transaction" class="tiny-badge">TX</span><span v-if="session.writable" class="tiny-badge write">RW</span></button></div></template>
+
     <div class="sidebar-bottom"><button class="btn secondary small" :disabled="busy" @click="emit('import')">{{ t('导入连接') }}</button><button class="btn secondary small" :disabled="busy || !connections.length" :title="t('导出全部连接及加密凭据')" @click="emit('export')">{{ t('导出连接') }}</button></div>
     <Teleport to="body">
       <div v-if="menu && menuConnection" ref="menuHost" class="connection-context-menu" :style="{ left: menu.x + 'px', top: menu.y + 'px' }" @pointerdown.stop @contextmenu.prevent>
         <div class="context-title"><strong>{{ menuConnection.name }}</strong><small>{{ menuConnection.host }}</small></div>
         <button class="context-action" type="button" :disabled="menuConnection.locked" @click="menuAction('open')">{{ t('连接') }}</button>
         <button v-if="active(menuConnection)" class="context-action" type="button" @click="menuAction('disconnect')">{{ t('断开连接') }}</button>
+        <button v-if="active(menuConnection)&&menuConnection.kind!=='redis'" class="context-action" type="button" @click="resourceAction($event,'menu')">{{ t('数据库菜单') }}</button>
+        <button v-if="active(menuConnection)" class="context-action" type="button" @click="resourceAction($event,'refresh')">{{ t('刷新资源树') }}</button>
         <button class="context-action" type="button" :disabled="menuConnection.locked" @click="menuAction('edit')">{{ t('编辑连接') }}</button>
         <div v-if="!menuConnection.locked" class="context-color-section"><div class="context-heading">{{ t('连接颜色') }}</div><ConnectionColorPicker :model-value="menuConnection.color" :disabled="busy" @update:model-value="setColor" /></div>
         <button class="context-action" type="button" :disabled="menuConnection.locked" @click="menuAction('group')">{{ t('移动到分组') }}</button>
