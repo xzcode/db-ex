@@ -98,6 +98,7 @@ export interface ExplorerNode {
   category?: MongoCategory
   readOnly?: boolean
   objectType?: 'sequence' | 'system-versioned'
+  metrics?: import('./object-inspection').ObjectMetric[]
   database?: string
   entity?: string
 }
@@ -212,7 +213,7 @@ export interface DbExAPI {
   testConnection(config: ConnectionConfig, clearSecrets?: string[]): Promise<string>
   disconnect(sessionId: string): Promise<void>
   roots(sessionId: string): Promise<ExplorerNode[]>
-  children(sessionId: string, database: string, category?: MongoCategory): Promise<ExplorerNode[]>
+  children(sessionId: string, database: string, category?: MongoCategory, withStatistics?:boolean): Promise<ExplorerNode[]>
   preview(sessionId: string, database: string, entity: string, offset?: number): Promise<DataPreview>
   redisKeys(sessionId: string, cursor?: string, pattern?: string): Promise<DataPreview>
   redisValue(sessionId: string, key: string): Promise<DataPreview>

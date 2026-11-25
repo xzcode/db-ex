@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { readFile, readdir, stat } from 'node:fs/promises'
 import mysql from 'mysql2/promise'
 import { MongoClient, ObjectId, Long } from 'mongodb'
+import { SessionManager } from '../src/main/connections/manager'
 import { runNativeTool } from '../src/main/operations/native-tools'
 import { newConnectionConfig } from '../src/shared/connection-form'
 import type { NativeToolTask, ToolName } from '../src/shared/preferences'
@@ -47,6 +48,22 @@ try{
   await run('mongoimport','mongo-import',json,'imported')
   assert.equal((await db.collection('imported').findOne({_id:id}))?.value.toString(),'9223372036854775807')
   console.log('MongoDB authenticated archive backup/restore and canonical EJSON export/import passed')
+  const manager=new SessionManager()
+  try{
+    const sql=await manager.connect({...mysqlConfig,database})
+    const tables=await manager.children(sql.id,database,undefined,true)
+    const table=tables.find(node=>node.entity==='items')
+    assert.equal(table?.metrics?.find(metric=>metric.label==='存储引擎')?.value,'InnoDB')
+    assert.match(table?.metrics?.find(metric=>metric.label==='数据大小')?.value||'',/^\d+$/)
+    const mongo=await manager.connect({...mongoConfig,database})
+    const collections=await manager.children(mongo.id,database,'collections',true)
+    for(const name of ['items','imported']){
+      const node=collections.find(item=>item.entity===name)
+      assert.equal(node?.metrics?.find(metric=>metric.label==='文档数')?.value,'1')
+      assert.match(node?.metrics?.find(metric=>metric.label==='存储大小')?.value||'',/^\d+$/)
+    }
+    console.log('MySQL and MongoDB object catalogs returned real storage metadata')
+  }finally{await manager.closeAll()}
   assert.deepEqual((await readdir(fixture)).filter(name=>name.startsWith('dbex-tool-')||name.startsWith('.dbex-export-')),[])
   console.log('Native-tool credentials and staging directories cleaned')
 }finally{

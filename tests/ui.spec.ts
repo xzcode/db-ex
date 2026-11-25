@@ -52,7 +52,7 @@ async function installBridge(page: Page) {
       async children(id: string, database: string, category?: string) {
         if(id!=='mongo')return [{ id: database + '-users', label: 'users', database, entity: 'users', kind: 'table' }]
         if(!category)return [['collections','集合'],['views','视图'],['functions','函数'],['indexes','索引'],['mapReduce','MapReduce'],['pipelines','聚合管道'],['gridfs','GridFS 存储桶'],['queries','查询']].map(([key,label])=>({id:database+'-'+key,label,database,kind:'mongo-category',category:key}))
-        if(category==='collections')return [{id:database+'-users',label:'users',database,entity:'users',kind:'collection'}]
+        if(category==='collections')return [{id:database+'-users',label:'users',database,entity:'users',kind:'collection',metrics:[{label:'文档数',value:'10'},{label:'数据大小',value:'2048',format:'bytes'}]},...((window as any).__dbexCatalogFixture?[{id:database+'-audit',label:'audit',database,entity:'audit',kind:'collection',metrics:[{label:'文档数',value:'2'},{label:'数据大小',value:'100',format:'bytes'}]}]:[])]
         if(category==='views')return [{id:database+'-users-view',label:'users_view',database,entity:'users_view',kind:'view',readOnly:true}]
         if(category==='indexes')return [{id:database+'-users-indexes',label:'users',database,entity:'users',kind:'mongo-indexes'}]
         if(category==='gridfs')return [{id:database+'-fs',label:'fs',database,entity:'fs.files',kind:'gridfs-bucket',readOnly:true}]
@@ -470,7 +470,7 @@ test('connection settings use optional custom groups and colors, not fixed envir
   })).toEqual({ environment: false, group: 'Project A / Region 100', color: '#4b88d9' })
   await expect(page.locator('.env-tag')).toHaveCount(0)
   await connect(page, 'MySQL Local')
-  await expect(page.locator('.workbench:visible .workbench-header .eyebrow')).toHaveText('MYSQL')
+  await expect(page.locator('.workbench:visible .workbench-header .eyebrow')).toHaveCount(0)
 })
 
 test('MongoDB row and cell menu copies exact values, prepares duplicate and field drafts, and filters by value', async ({ page }) => {
@@ -866,4 +866,60 @@ test('top toolbar contains settings only; language, theme and connection creatio
  await page.locator('.preferences-button').click()
  await expect(page.locator('.preferences-dialog [data-preference="language"]')).toHaveValue('en')
  await expect(page.locator('.preferences-dialog [data-preference="theme"]')).toHaveValue('light')
+})
+
+
+test('object catalog supports numeric column sorting, independent object tabs and query tabs',async({page})=>{
+ await page.evaluate(()=>{(window as any).__dbexCatalogFixture=true})
+ await connect(page,'Mongo Local')
+ await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ await page.locator('[data-object-category="collections"]').click()
+ const list=page.locator('.object-list-panel:visible')
+ await expect(list.locator('tbody tr').first()).toContainText('audit')
+ await list.getByRole('button',{name:'文档数'}).click()
+ await expect(list.locator('tbody tr').first()).toContainText('audit')
+ await list.getByRole('button',{name:'文档数'}).click()
+ await expect(list.locator('tbody tr').first()).toContainText('users')
+ await list.locator('tbody tr').filter({hasText:'users'}).dblclick()
+ await expect(page.locator('.workbench:visible .data-table')).toContainText('Ada')
+ await page.getByRole('button',{name:'查询条件',exact:true}).click()
+ const tabs=page.locator('.object-tabbar:visible')
+ await tabs.getByRole('button',{name:'对象',exact:true}).click()
+ await list.locator('tbody tr').filter({hasText:'audit'}).dblclick()
+ await expect(page.locator('.workbench:visible .workbench-header h2')).toHaveText('audit')
+ await expect(tabs.locator('.object-tab')).toHaveCount(2)
+ await tabs.locator('.object-tab-main').filter({hasText:'users@app'}).click()
+ await expect(page.locator('.workbench:visible .browse-filter-panel')).toBeVisible()
+ await expect(page.locator('.workbench:visible .workbench-header .eyebrow')).toHaveCount(0)
+ await tabs.getByRole('button',{name:'对象',exact:true}).click()
+ await list.getByRole('button',{name:/新建查询/}).click()
+ await expect(page.locator('.mongo-library:visible')).toBeVisible()
+ await expect(tabs.locator('.object-tab')).toHaveCount(3)
+ await tabs.getByRole('button',{name:'关闭 audit',exact:true}).click()
+ await expect(tabs.locator('.object-tab')).toHaveCount(2)
+})
+
+test('column menu sorts the complete database query, retains filters and supports a filter draft',async({page})=>{
+ await connect(page,'Mongo Local');await openUsers(page)
+ await page.getByRole('button',{name:'查询条件',exact:true}).click()
+ await page.getByRole('button',{name:'文本',exact:true}).click()
+ const panel=page.locator('.workbench:visible .browse-filter-panel')
+ await panel.locator('textarea').nth(0).fill('{"score":{"$gte":7}}')
+ await panel.locator('textarea').nth(1).fill('{"_id":1,"name":1}')
+ await panel.getByRole('button',{name:'查询',exact:true}).click()
+ const grid=page.locator('.workbench:visible .data-table')
+ await grid.getByRole('button',{name:'列操作: _id',exact:true}).click()
+ await page.getByRole('menuitem',{name:'降序排序',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((c:any)=>c.action==='mongo.find').at(-1))).toMatchObject({filter:'{"score":{"$gte":7}}',projection:'{"_id":1,"name":1}',sort:'{"_id":-1}',offset:0})
+ await grid.getByRole('button',{name:'列操作: name',exact:true}).click()
+ await page.getByRole('menuitem',{name:'升序排序',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((c:any)=>c.action==='mongo.find').at(-1)?.sort)).toBe('{"_id":-1,"name":1}')
+ await grid.getByRole('button',{name:'列操作: name',exact:true}).click()
+ await page.getByRole('menuitem',{name:'移除所有排序',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((c:any)=>c.action==='mongo.find').at(-1))).toMatchObject({filter:'{"score":{"$gte":7}}',projection:'{"_id":1,"name":1}',sort:'{}'})
+ const count=await page.evaluate(()=> (window as any).__dbexCalls.filter((c:any)=>c.action==='mongo.find').length)
+ await grid.getByRole('button',{name:'列操作: name',exact:true}).click()
+ await page.getByRole('menuitem',{name:'添加筛选',exact:true}).click()
+ await expect(panel.locator('textarea').nth(0)).toHaveValue('{"$and":[{"score":{"$gte":7}},{"name":{"$eq":""}}]}')
+ expect(await page.evaluate(()=> (window as any).__dbexCalls.filter((c:any)=>c.action==='mongo.find').length)).toBe(count)
 })

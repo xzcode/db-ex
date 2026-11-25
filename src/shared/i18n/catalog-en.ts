@@ -1025,4 +1025,13 @@ export const en: Readonly<Record<string, string>> = {
   "LIMIT_EXCEEDED: 外部工具": "LIMIT_EXCEEDED: External tool output too large.",
   "SQLite 无法无损导出当前结果；请使用数据库备份。": "SQLite cannot export the current result without losing data. Use database backup instead.",
   "发现未保存的记录编辑草稿": "Unsaved record editing draft found",
+  "列操作": "Column actions",
+  "升序排序": "Sort ascending",
+  "降序排序": "Sort descending",
+  "移除所有排序": "Remove all sorting",
+  "添加筛选": "Add filter",
+  "对象": "Objects",
+  "统计信息仅对已读取的对象可用。": "Statistics are available only for loaded objects.",
+  "最多打开 12 个对象标签页，请先关闭不使用的标签页。": "At most 12 object tabs can be opened. Close unused tabs first.",
+  "关闭标签页将丢弃未保存的记录编辑。": "Closing the tab discards unsaved record edits.",
 }

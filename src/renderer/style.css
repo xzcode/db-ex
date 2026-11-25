@@ -134,8 +134,8 @@ code, pre, kbd { font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', mon
 .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .content-pane { min-width: 0; flex: 1; display: flex; min-height: 0; }
 .workbench { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
-.workbench-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 18px 20px 13px; flex: none; }
-.workbench-header h2 { font-size: 18px; margin-top: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40vw; }
+.workbench-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px; flex: none; }
+.workbench-header h2 { font-size: 15px; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40vw; }
 .eyebrow { display: block; font-size: 9px; letter-spacing: 1.5px; color: var(--muted); line-height: 1.7; }
 .header-tools { display: flex; align-items: center; gap: 7px; }
 .transaction-badge { padding: 5px 7px; background: var(--panel-raised); color: var(--warning); font-size: 11px; white-space: nowrap; }
@@ -601,3 +601,15 @@ html[dir=rtl] .tree-chevron:not(.expanded) { transform: rotate(180deg); }
 .preferences-tabs button {min-width:77px;padding:7px 9px;}
 
 .db-icon.mariadb,.db-small-icon.mariadb {color:#c99a73;background:rgba(201,154,115,.13);}
+
+.object-workspace {display:flex;flex:1;flex-direction:column;min-width:0;min-height:0;overflow:hidden}
+.object-tabbar {display:flex;align-items:stretch;overflow-x:auto;overflow-y:hidden;background:var(--panel-raised);border-bottom:1px solid var(--border);height:35px;flex:none}
+.object-list-tab,.object-tab {flex:none;display:flex;align-items:center;min-width:0;border:0;border-radius:0;border-inline-end:1px solid var(--border);border-top:2px solid transparent;background:transparent;color:var(--muted)}
+.object-list-tab {padding:0 16px;font-size:12px;font-weight:600}
+.object-tab {max-width:260px}
+.object-tab-main {display:flex;align-items:center;gap:6px;background:none;border:0;color:inherit;border-radius:0;min-width:0;padding:0 9px;height:100%;font-size:12px;text-align:start}
+.object-tab .tab-close {width:24px;height:27px;margin-inline-end:3px;flex:none}
+.object-tab.active,.object-list-tab.active {background:var(--panel);color:var(--text);border-top-color:var(--accent)}
+.object-tab.has-color {border-top-color:var(--connection-color,var(--accent))}
+.object-tab .catalog-object-icon {color:var(--accent);font-size:15px;flex:none}
+.object-dirty {color:var(--warning)}

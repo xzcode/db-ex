@@ -417,5 +417,14 @@
   "导入或恢复可能写入数据库，请确认文件来源及目标。": "La importación o restauración puede modificar la base. Verifica el origen y el destino.",
   "导出仅创建新文件，不覆盖现有文件。": "La exportación crea un archivo nuevo y no sobrescribe archivos existentes.",
   "SQLite 无法无损导出当前结果；请使用数据库备份。": "No se puede exportar el resultado SQLite sin pérdida. Usa una copia de seguridad de la base.",
-  "发现未保存的记录编辑草稿": "Se encontró un borrador de edición de registro sin guardar"
+  "发现未保存的记录编辑草稿": "Se encontró un borrador de edición de registro sin guardar",
+  "列操作": "Acciones de columna",
+  "升序排序": "Orden ascendente",
+  "降序排序": "Orden descendente",
+  "移除所有排序": "Quitar toda la ordenación",
+  "添加筛选": "Añadir filtro",
+  "对象": "Objetos",
+  "统计信息仅对已读取的对象可用。": "Las estadísticas solo están disponibles para los objetos cargados.",
+  "最多打开 12 个对象标签页，请先关闭不使用的标签页。": "Máximo 12 pestañas de objetos. Cierra las pestañas que no uses.",
+  "关闭标签页将丢弃未保存的记录编辑。": "Al cerrar la pestaña se descartan los cambios sin guardar."
 }

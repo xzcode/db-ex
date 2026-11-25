@@ -142,9 +142,10 @@ export class SessionManager {
   async roots(id:string):Promise<ExplorerNode[]>{
     return this.guard(id,({driver},context)=>driver.roots(context))
   }
-  async children(id:string,database:string,category?:MongoCategory):Promise<ExplorerNode[]>{
+  async children(id:string,database:string,category?:MongoCategory,withStatistics=false):Promise<ExplorerNode[]>{
     resourceName(database,'数据库')
-    return this.guard(id,({driver},context)=>driver.children(database,category,context))
+    if(typeof withStatistics!=='boolean')throw new Error('INVALID_OPERATION: 不支持的操作')
+    return this.guard(id,({driver},context)=>driver.children(database,category,context,withStatistics))
   }
   preview(id:string,database:string,entity:string,offset=0):Promise<DataPreview>{
     resourceName(database,'数据库');resourceName(entity,'表/集合')

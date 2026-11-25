@@ -17,7 +17,7 @@ export interface AdapterSession {
   serverVersion?:string
   execute(input:DatabaseOperation,context:OperationContext):Promise<OperationResult>
   roots(context:OperationContext):Promise<ExplorerNode[]>
-  children(database:string,category:MongoCategory|undefined,context:OperationContext):Promise<ExplorerNode[]>
+  children(database:string,category:MongoCategory|undefined,context:OperationContext,withStatistics?:boolean):Promise<ExplorerNode[]>
   close():Promise<void>
   transactionActive?:()=>boolean
   disconnected?:()=>boolean

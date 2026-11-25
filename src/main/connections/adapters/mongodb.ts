@@ -1,6 +1,7 @@
 import { MongoClient,type MongoClientOptions } from 'mongodb'
 import { checkServerIdentity } from 'node:tls'
 import { isIP } from 'node:net'
+import { metric,metrics } from '../../../shared/object-inspection'
 import type { MongoOperation } from '../../../shared/types'
 import { mongoCategory,mongoCategoryNodes,mongoCatalogNodes,type MongoCatalogEntry } from '../../../shared/mongo-catalog'
 import { MongoOperations } from '../../operations/mongodb'
@@ -48,7 +49,7 @@ export const mongoAdapter:DatabaseAdapter={
             return [{id:'db:'+db,label:db,kind:'database',database:db}]
           }
         },
-        async children(database,category,context){
+        async children(database,category,context,withStatistics){
           if(category===undefined)return mongoCategoryNodes(database)
           const group=mongoCategory(category)
           if(!group)throw new Error('INVALID_OPERATION: 不支持的操作')
@@ -58,7 +59,23 @@ export const mongoAdapter:DatabaseAdapter={
           const entries:MongoCatalogEntry[]=[]
           try{for await(const item of cursor){entries.push({name:item.name,type:item.type});if(entries.length>=500||context.signal?.aborted)break}}
           finally{await cursor.close()}
-          return mongoCatalogNodes(database,entries,category)
+          const nodes=mongoCatalogNodes(database,entries,category)
+        if(withStatistics&&category==='collections'){
+          // Metadata only, bounded per request. A denied or unavailable collStats
+          // must not hide a collection or manufacture a zero count.
+          const targets=nodes.slice(0,50),deadline=Date.now()+4500
+          let cursor=0
+          await Promise.all(Array.from({length:Math.min(3,targets.length)},async()=>{
+            while(cursor<targets.length&&!context.signal?.aborted&&Date.now()<deadline){
+              const node=targets[cursor++]!
+              try{
+                const stats=await client.db(database).command({collStats:node.entity,scale:1},{signal:context.signal,timeoutMS:Math.min(1200,Math.max(1,deadline-Date.now())),raw:false,promoteValues:true,promoteLongs:false})
+                node.metrics=metrics(metric('文档数',stats.count),metric('已固定',stats.capped,'boolean'),metric('数据大小',stats.size,'bytes'),metric('对象的平均大小',stats.avgObjSize,'bytes'),metric('存储大小',stats.storageSize,'bytes'))
+              }catch{/* unavailable metadata is represented by an empty cell */}
+            }
+          }))
+        }
+        return nodes
         },
         async close(){operations.cancel();await client.close().catch(()=>{})}
       }
