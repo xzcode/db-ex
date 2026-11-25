@@ -77,3 +77,7 @@ test('visual browsing and page controls are localized', () => {
 test('advanced visual filter and suggested value controls are localized', () => {
   for (const { locale } of languages) if (locale !== 'zh-CN') for (const key of ["不包含","开头是","开头不是","结尾是","结尾不是","是空的","是非空的","在列表","不在列表","是字段类型","不是字段类型","字段类型","自定义条件","启用条件","下一条件关系","上移条件","下移条件","编辑筛选值","建议值","来自当前查询页","暂无建议值","搜索建议值","空字符串","列表使用 JSON 字符串数组，可勾选同类型建议值。"]) assert.ok(Object.hasOwn(catalogs[locale], key), locale + ': ' + key)
 })
+
+test('friendly MongoDB value types are localized', () => {
+  for (const {locale} of languages) if(locale!=='zh-CN') for(const key of ["文本","数字","日期时间","对象 ID","自定义","自定义支持 BSON 构造语法，不执行 JavaScript。","请输入 UTC 日期时间。","当前实际类型"]) assert.ok(Object.hasOwn(catalogs[locale],key),locale+': '+key)
+})

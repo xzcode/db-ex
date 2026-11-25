@@ -882,5 +882,12 @@ export const en: Readonly<Record<string, string>> = {
   "暂无建议值": "No suggested values",
   "搜索建议值": "Search suggestions",
   "空字符串": "Empty string",
-  "列表使用 JSON 字符串数组，可勾选同类型建议值。": "Use a JSON array of strings, or select suggestions of the same type."
+  "列表使用 JSON 字符串数组，可勾选同类型建议值。": "Use a JSON array of strings, or select suggestions of the same type.",
+  "数字": "Number",
+  "日期时间": "Date and time",
+  "对象 ID": "Object ID",
+  "自定义": "Custom",
+  "自定义支持 BSON 构造语法，不执行 JavaScript。": "Custom values support BSON constructor syntax; JavaScript is not executed.",
+  "请输入 UTC 日期时间。": "Enter the date and time in UTC.",
+  "当前实际类型": "Actual value type"
 }

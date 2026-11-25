@@ -196,7 +196,14 @@ export const connectionCatalogs = {
     "暂无建议值": "暫無建議值",
     "搜索建议值": "搜尋建議值",
     "空字符串": "空字串",
-    "列表使用 JSON 字符串数组，可勾选同类型建议值。": "清單使用 JSON 字串陣列，亦可勾選同類型建議值。"
+    "列表使用 JSON 字符串数组，可勾选同类型建议值。": "清單使用 JSON 字串陣列，亦可勾選同類型建議值。",
+    "数字": "數字",
+    "日期时间": "日期時間",
+    "对象 ID": "物件 ID",
+    "自定义": "自訂",
+    "自定义支持 BSON 构造语法，不执行 JavaScript。": "自訂值支援 BSON 建構語法，不執行 JavaScript。",
+    "请输入 UTC 日期时间。": "請輸入 UTC 日期時間。",
+    "当前实际类型": "目前實際類型"
   },
   "ja": {
     "选择数据库类型": "データベースの種類を選択",
@@ -394,7 +401,14 @@ export const connectionCatalogs = {
     "暂无建议值": "候補値なし",
     "搜索建议值": "候補値を検索",
     "空字符串": "空文字列",
-    "列表使用 JSON 字符串数组，可勾选同类型建议值。": "JSON 文字列配列を入力するか、同じ型の候補を選択してください。"
+    "列表使用 JSON 字符串数组，可勾选同类型建议值。": "JSON 文字列配列を入力するか、同じ型の候補を選択してください。",
+    "数字": "数値",
+    "日期时间": "日時",
+    "对象 ID": "オブジェクト ID",
+    "自定义": "カスタム",
+    "自定义支持 BSON 构造语法，不执行 JavaScript。": "カスタム値は BSON コンストラクタ構文に対応し、JavaScript は実行しません。",
+    "请输入 UTC 日期时间。": "UTC の日時を入力してください。",
+    "当前实际类型": "実際の値の型"
   },
   "ko": {
     "选择数据库类型": "데이터베이스 유형 선택",
@@ -592,7 +606,14 @@ export const connectionCatalogs = {
     "暂无建议值": "추천 값 없음",
     "搜索建议值": "추천 값 검색",
     "空字符串": "빈 문자열",
-    "列表使用 JSON 字符串数组，可勾选同类型建议值。": "JSON 문자열 배열 또는 같은 유형의 추천 값을 선택하세요."
+    "列表使用 JSON 字符串数组，可勾选同类型建议值。": "JSON 문자열 배열 또는 같은 유형의 추천 값을 선택하세요.",
+    "数字": "숫자",
+    "日期时间": "날짜 및 시간",
+    "对象 ID": "객체 ID",
+    "自定义": "사용자 지정",
+    "自定义支持 BSON 构造语法，不执行 JavaScript。": "사용자 지정 값은 BSON 생성자 구문을 지원하며 JavaScript는 실행하지 않습니다.",
+    "请输入 UTC 日期时间。": "UTC 날짜와 시간을 입력하세요.",
+    "当前实际类型": "실제 값 유형"
   },
   "de": {
     "选择数据库类型": "Datenbanktyp wählen",
@@ -790,7 +811,14 @@ export const connectionCatalogs = {
     "暂无建议值": "Keine vorgeschlagenen Werte",
     "搜索建议值": "Vorschläge suchen",
     "空字符串": "Leerer String",
-    "列表使用 JSON 字符串数组，可勾选同类型建议值。": "JSON-String-Array eingeben oder Vorschläge desselben Typs wählen."
+    "列表使用 JSON 字符串数组，可勾选同类型建议值。": "JSON-String-Array eingeben oder Vorschläge desselben Typs wählen.",
+    "数字": "Zahl",
+    "日期时间": "Datum und Uhrzeit",
+    "对象 ID": "Objekt-ID",
+    "自定义": "Benutzerdefiniert",
+    "自定义支持 BSON 构造语法，不执行 JavaScript。": "Benutzerdefinierte Werte unterstützen BSON-Konstruktorsyntax; JavaScript wird nicht ausgeführt.",
+    "请输入 UTC 日期时间。": "Datum und Uhrzeit in UTC eingeben.",
+    "当前实际类型": "Tatsächlicher Werttyp"
   },
   "fr": {
     "选择数据库类型": "Choisir le type de base",
@@ -988,7 +1016,14 @@ export const connectionCatalogs = {
     "暂无建议值": "Aucune valeur suggérée",
     "搜索建议值": "Rechercher les valeurs",
     "空字符串": "Chaîne vide",
-    "列表使用 JSON 字符串数组，可勾选同类型建议值。": "Utilisez un tableau JSON de chaînes ou choisissez des suggestions du même type."
+    "列表使用 JSON 字符串数组，可勾选同类型建议值。": "Utilisez un tableau JSON de chaînes ou choisissez des suggestions du même type.",
+    "数字": "Nombre",
+    "日期时间": "Date et heure",
+    "对象 ID": "ID d'objet",
+    "自定义": "Personnalisé",
+    "自定义支持 BSON 构造语法，不执行 JavaScript。": "Les valeurs personnalisées acceptent les constructeurs BSON ; JavaScript n'est pas exécuté.",
+    "请输入 UTC 日期时间。": "Saisissez la date et l'heure en UTC.",
+    "当前实际类型": "Type réel de la valeur"
   },
   "es": {
     "选择数据库类型": "Elegir tipo de base de datos",
@@ -1186,7 +1221,14 @@ export const connectionCatalogs = {
     "暂无建议值": "Sin valores sugeridos",
     "搜索建议值": "Buscar sugerencias",
     "空字符串": "Cadena vacía",
-    "列表使用 JSON 字符串数组，可勾选同类型建议值。": "Usa un array JSON de cadenas o selecciona sugerencias del mismo tipo."
+    "列表使用 JSON 字符串数组，可勾选同类型建议值。": "Usa un array JSON de cadenas o selecciona sugerencias del mismo tipo.",
+    "数字": "Número",
+    "日期时间": "Fecha y hora",
+    "对象 ID": "ID de objeto",
+    "自定义": "Personalizado",
+    "自定义支持 BSON 构造语法，不执行 JavaScript。": "Los valores personalizados admiten constructores BSON; no se ejecuta JavaScript.",
+    "请输入 UTC 日期时间。": "Introduce la fecha y hora en UTC.",
+    "当前实际类型": "Tipo real del valor"
   },
   "pt-BR": {
     "选择数据库类型": "Escolher tipo de banco de dados",
@@ -1384,7 +1426,14 @@ export const connectionCatalogs = {
     "暂无建议值": "Sem valores sugeridos",
     "搜索建议值": "Buscar sugestões",
     "空字符串": "String vazia",
-    "列表使用 JSON 字符串数组，可勾选同类型建议值。": "Use um array JSON de strings ou selecione sugestões do mesmo tipo."
+    "列表使用 JSON 字符串数组，可勾选同类型建议值。": "Use um array JSON de strings ou selecione sugestões do mesmo tipo.",
+    "数字": "Número",
+    "日期时间": "Data e hora",
+    "对象 ID": "ID de objeto",
+    "自定义": "Personalizado",
+    "自定义支持 BSON 构造语法，不执行 JavaScript。": "Valores personalizados aceitam construtores BSON; JavaScript não é executado.",
+    "请输入 UTC 日期时间。": "Informe a data e hora em UTC.",
+    "当前实际类型": "Tipo real do valor"
   },
   "ru": {
     "选择数据库类型": "Выберите тип базы данных",
@@ -1582,7 +1631,14 @@ export const connectionCatalogs = {
     "暂无建议值": "Нет предлагаемых значений",
     "搜索建议值": "Поиск предложений",
     "空字符串": "Пустая строка",
-    "列表使用 JSON 字符串数组，可勾选同类型建议值。": "Введите JSON-массив строк или выберите значения одного типа."
+    "列表使用 JSON 字符串数组，可勾选同类型建议值。": "Введите JSON-массив строк или выберите значения одного типа.",
+    "数字": "Число",
+    "日期时间": "Дата и время",
+    "对象 ID": "ID объекта",
+    "自定义": "Пользовательский",
+    "自定义支持 BSON 构造语法，不执行 JavaScript。": "Пользовательские значения поддерживают конструкторы BSON; JavaScript не выполняется.",
+    "请输入 UTC 日期时间。": "Введите дату и время в UTC.",
+    "当前实际类型": "Фактический тип значения"
   },
   "it": {
     "选择数据库类型": "Scegli il tipo di database",
@@ -1780,7 +1836,14 @@ export const connectionCatalogs = {
     "暂无建议值": "Nessun valore suggerito",
     "搜索建议值": "Cerca suggerimenti",
     "空字符串": "Stringa vuota",
-    "列表使用 JSON 字符串数组，可勾选同类型建议值。": "Usa un array JSON di stringhe o seleziona suggerimenti dello stesso tipo."
+    "列表使用 JSON 字符串数组，可勾选同类型建议值。": "Usa un array JSON di stringhe o seleziona suggerimenti dello stesso tipo.",
+    "数字": "Numero",
+    "日期时间": "Data e ora",
+    "对象 ID": "ID oggetto",
+    "自定义": "Personalizzato",
+    "自定义支持 BSON 构造语法，不执行 JavaScript。": "I valori personalizzati supportano i costruttori BSON; JavaScript non viene eseguito.",
+    "请输入 UTC 日期时间。": "Inserisci data e ora in UTC.",
+    "当前实际类型": "Tipo effettivo del valore"
   },
   "ar": {
     "选择数据库类型": "اختر نوع قاعدة البيانات",
@@ -1978,7 +2041,14 @@ export const connectionCatalogs = {
     "暂无建议值": "لا توجد قيم مقترحة",
     "搜索建议值": "بحث في القيم المقترحة",
     "空字符串": "نص فارغ",
-    "列表使用 JSON 字符串数组，可勾选同类型建议值。": "استخدم مصفوفة JSON من النصوص أو اختر اقتراحات من النوع نفسه."
+    "列表使用 JSON 字符串数组，可勾选同类型建议值。": "استخدم مصفوفة JSON من النصوص أو اختر اقتراحات من النوع نفسه.",
+    "数字": "رقم",
+    "日期时间": "التاريخ والوقت",
+    "对象 ID": "معرّف الكائن",
+    "自定义": "مخصص",
+    "自定义支持 BSON 构造语法，不执行 JavaScript。": "تدعم القيم المخصصة صيغة منشئ BSON؛ لا يتم تنفيذ JavaScript.",
+    "请输入 UTC 日期时间。": "أدخل التاريخ والوقت بالتوقيت العالمي المنسق.",
+    "当前实际类型": "نوع القيمة الفعلي"
   },
   "hi": {
     "选择数据库类型": "डेटाबेस प्रकार चुनें",
@@ -2176,7 +2246,14 @@ export const connectionCatalogs = {
     "暂无建议值": "कोई सुझाया मान नहीं",
     "搜索建议值": "सुझाव खोजें",
     "空字符串": "खाली स्ट्रिंग",
-    "列表使用 JSON 字符串数组，可勾选同类型建议值。": "JSON स्ट्रिंग ऐरे का उपयोग करें या समान प्रकार के सुझाए गए मान चुनें।"
+    "列表使用 JSON 字符串数组，可勾选同类型建议值。": "JSON स्ट्रिंग ऐरे का उपयोग करें या समान प्रकार के सुझाए गए मान चुनें।",
+    "数字": "संख्या",
+    "日期时间": "तारीख और समय",
+    "对象 ID": "ऑब्जेक्ट ID",
+    "自定义": "कस्टम",
+    "自定义支持 BSON 构造语法，不执行 JavaScript。": "कस्टम मान BSON कंस्ट्रक्टर सिंटैक्स का समर्थन करते हैं; JavaScript नहीं चलता।",
+    "请输入 UTC 日期时间。": "UTC में तारीख और समय दर्ज करें।",
+    "当前实际类型": "वास्तविक मान प्रकार"
   },
   "id": {
     "选择数据库类型": "Pilih jenis basis data",
@@ -2374,6 +2451,13 @@ export const connectionCatalogs = {
     "暂无建议值": "Tidak ada nilai yang disarankan",
     "搜索建议值": "Cari saran",
     "空字符串": "String kosong",
-    "列表使用 JSON 字符串数组，可勾选同类型建议值。": "Gunakan array JSON string atau pilih saran dengan tipe yang sama."
+    "列表使用 JSON 字符串数组，可勾选同类型建议值。": "Gunakan array JSON string atau pilih saran dengan tipe yang sama.",
+    "数字": "Angka",
+    "日期时间": "Tanggal dan waktu",
+    "对象 ID": "ID objek",
+    "自定义": "Kustom",
+    "自定义支持 BSON 构造语法，不执行 JavaScript。": "Nilai kustom mendukung sintaks konstruktor BSON; JavaScript tidak dijalankan.",
+    "请输入 UTC 日期时间。": "Masukkan tanggal dan waktu dalam UTC.",
+    "当前实际类型": "Tipe nilai sebenarnya"
   }
 } as const

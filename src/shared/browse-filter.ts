@@ -55,7 +55,11 @@ function checked(input: unknown, mongo: boolean): BrowseFilter {
 function typedValue(rule: FilterRule, value = rule.value): unknown {
   if (value.length > 4096) return fail()
   if (rule.type === 'String') return value
-  if (rule.type === 'Custom') return JSON.parse(parseMongoDocumentEditor('{"v":' + value + '}')).v
+  if (rule.type === 'Custom') {
+    const document = JSON.parse(parseMongoDocumentEditor('{"v":' + value + '}'))
+    if (Object.keys(document).length !== 1 || !Object.hasOwn(document,'v')) return fail()
+    return document.v
+  }
   if (rule.type === 'Number') {
     const input = value.trim()
     // Numeric literals never pass through JSON.parse as JavaScript numbers.

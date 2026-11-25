@@ -50,3 +50,18 @@ test('advanced text, list, type and custom predicates keep typed exactness', () 
   assert.deepEqual(compileMysqlFilter('app','users',one(rule('id','["1","2"]','Long','notIn'))).parameters,['1','2'])
   assert.throws(()=>compileMysqlFilter('app','users',one(rule('id','int','String','isType'))),/INVALID_FILTER/)
 })
+
+test('friendly Number and Custom preserve BSON numeric semantics without evaluating JavaScript',()=>{
+  const compile=(type:FilterRule['type'],value:string)=>JSON.parse(compileMongoFilter({join:'and',groups:[{join:'and',rules:[rule('value',value,type)]}],sort:[]}).filter).value.$eq
+  assert.deepEqual(compile('Number','19107'),{$numberInt:'19107'})
+  assert.deepEqual(compile('Number','9223372036854775807'),{$numberLong:'9223372036854775807'})
+  assert.deepEqual(compile('Number','0.25'),{$numberDouble:'0.25'})
+  assert.deepEqual(compile('Number','12345678901234567890.1234'),{$numberDecimal:'12345678901234567890.1234'})
+  assert.deepEqual(compile('Custom','Long("7")'),{$numberLong:'7'})
+  assert.deepEqual(compile('Custom','true'),true)
+  assert.deepEqual(compile('Custom','{"x":Int32("1")}'),{x:{$numberInt:'1'}})
+  assert.throws(()=>compile('Custom','db.dropDatabase()'),/BSON_EDITOR_INVALID/)
+  assert.throws(()=>compile('Custom','1,"other":2'),/INVALID_FILTER/)
+  assert.throws(()=>compile('Number','9000abc'),/INVALID_FILTER/)
+  assert.throws(()=>compileMysqlFilter('app','users',{join:'and',groups:[{join:'and',rules:[rule('id','1','Number')]}],sort:[]}),/INVALID_FILTER/)
+})

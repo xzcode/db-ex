@@ -43,7 +43,7 @@ function changeCategory(rule:FilterRule,event:Event){
   const type=categoryType((event.target as HTMLSelectElement).value)
   if (valueCategory(rule.type)!==valueCategory(type)) { rule.type=type; rule.value=listOperators.includes(rule.operator)?'[]':'' }
 }
-function manualInput(rule:FilterRule){if(props.kind==='mongodb')rule.type=manualValueType(rule.type)}
+function manualInput(rule:FilterRule){if(props.kind==='mongodb' && !listOperators.includes(rule.operator))rule.type=manualValueType(rule.type)}
 function setField(rule:FilterRule){if(noValue(rule.operator)||stringOperators.includes(rule.operator)||rule.operator==='custom'||rule.operator==='isType'||rule.operator==='notType')return;const values=props.suggestions?.(rule.field)||[];if(values.length&&values.every(item=>item.type===values[0]!.type))rule.type=values[0]!.type}
 
 </script>

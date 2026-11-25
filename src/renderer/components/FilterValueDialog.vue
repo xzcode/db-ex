@@ -14,7 +14,7 @@ const list= listOperators.includes(props.rule.operator)
 const stringOnly=stringOperators.includes(props.rule.operator)
 const category=computed(()=>valueCategory(type.value))
 const options=computed(()=>props.suggestions.filter(item=>
-  (!list || (props.kind==='mongodb' ? valueCategory(item.type)===category.value : item.type===type.value))
+  (!list || (props.kind==='mongodb' && type.value===categoryType(category.value) ? valueCategory(item.type)===category.value : item.type===type.value))
   && (!stringOnly||item.type==='String')
   && item.value.toLowerCase().includes(search.value.toLowerCase())))
 function changeCategory(event:Event){
@@ -22,17 +22,14 @@ function changeCategory(event:Event){
   if(valueCategory(next)===category.value)return
   type.value=next;text.value=list?'[]':'';error.value=''
 }
-function manualInput(){if(props.kind==='mongodb')type.value=manualValueType(type.value);error.value=''}
-function suggestionText(item:FilterSuggestion):string {
-  if(props.kind==='mongodb'&&category.value==='custom'&&item.type==='Boolean')return item.value
-  return item.value
-}
+function manualInput(){if(props.kind==='mongodb' && !list)type.value=manualValueType(type.value);error.value=''}
 const selected=computed(()=>{if(!list)return [text.value];try{return listValues(text.value)}catch{return []}})
 function choose(item:FilterSuggestion){
   if(list){
-    const value=suggestionText(item)
-    if(props.kind==='mongodb')type.value=manualValueType(type.value)
-    const current=selected.value;const next=current.includes(value)?current.filter(v=>v!==value):[...current,value];text.value=JSON.stringify(next)
+    const current=selected.value
+    if(props.kind==='mongodb' && !current.length)type.value=item.type
+    const value=item.value
+    const next=current.includes(value)?current.filter(v=>v!==value):[...current,value];text.value=JSON.stringify(next)
   }
   else {type.value=item.type;text.value=item.value}
 }
@@ -62,7 +59,7 @@ function save(){
             <p v-if="error" class="inline-message error" role="alert">{{ localize(error) }}</p>
             <div class="filter-suggestion-header"><strong>{{ t('建议值') }}</strong><small>{{ t('来自当前查询页') }}</small></div>
             <div class="filter-suggestions">
-              <label v-for="item in options" :key="JSON.stringify([item.type,item.value])" class="filter-suggestion"><input :type="list?'checkbox':'radio'" :checked="selected.includes(item.value) && (list && kind==='mongodb' ? valueCategory(item.type)===category : type===item.type)" @change="choose(item)" /><span :title="item.value">{{ item.value === '' ? t('空字符串') : item.value }}</span><small>{{ item.type }}</small></label>
+              <label v-for="item in options" :key="JSON.stringify([item.type,item.value])" class="filter-suggestion"><input :type="list?'checkbox':'radio'" :checked="selected.includes(item.value) && (list && kind==='mongodb' && type===categoryType(category) ? valueCategory(item.type)===category : type===item.type)" @change="choose(item)" /><span :title="item.value">{{ item.value === '' ? t('空字符串') : item.value }}</span><small>{{ item.type }}</small></label>
               <p v-if="!options.length" class="helper">{{ t('暂无建议值') }}</p>
             </div>
             <input v-model="search" :aria-label="t('搜索建议值')" :placeholder="t('搜索建议值')" />
