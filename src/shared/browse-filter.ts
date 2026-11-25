@@ -81,12 +81,17 @@ export function compileMysqlFilter(database: string, entity: string, input: unkn
     }
     // Numeric inputs remain exact decimal text sent as bound values; SQL
     // column types control coercion. Never interpolate user values into SQL.
+    if (rule.type === 'Decimal128') {
+      const decimal = /^-?(\d+)(?:\.(\d+))?$/.exec(rule.value)
+      if (!decimal || decimal[1].replace(/^0+/, '').length > 35 || (decimal[2] || '').length > 30) return fail()
+    }
     const typed = typedValue(rule)
     const bound = typeof typed === 'object' && typed !== null ? Object.values(typed)[0] : typed
     if (typeof bound !== 'string' && typeof bound !== 'boolean') return fail()
     parameters.push(bound)
     const operators: Record<string, string> = { eq: '=', ne: '<>', gt: '>', gte: '>=', lt: '<', lte: '<=' }
-    return field + ' ' + operators[rule.operator] + ' ?'
+    const placeholder = rule.type === 'Int32' || rule.type === 'Long' ? 'CAST(? AS SIGNED)' : rule.type === 'Decimal128' ? 'CAST(? AS DECIMAL(65,30))' : '?'
+    return field + ' ' + operators[rule.operator] + ' ' + placeholder
   }).join(group.join === 'and' ? ' AND ' : ' OR ') + ')')
   const from = ' FROM ' + quoteBrowseIdentifier(database) + '.' + quoteBrowseIdentifier(entity) + (groups.length ? ' WHERE ' + groups.join(value.join === 'and' ? ' AND ' : ' OR ') : '')
   const order = value.sort.length ? ' ORDER BY ' + value.sort.map(rule => quoteBrowseIdentifier(rule.field) + (rule.direction === 1 ? ' ASC' : ' DESC')).join(', ') : ''

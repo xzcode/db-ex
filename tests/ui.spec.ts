@@ -43,14 +43,16 @@ async function installBridge(page: Page) {
       async execute(id: string, op: any) {
         calls.push({ sessionId: id, ...op })
         if (op.action === 'mysql.structure') return { ...grid([{ name: 'id', type: 'int', key: 'PRI' }, { name: 'name', type: 'varchar', key: '' }]), primaryKeys: ['id'] }
-        if (op.action === 'mysql.query') {
-          if (op.sql.includes('slow_query')) await new Promise(resolve => setTimeout(resolve, 400))
+        if (op.action === 'mysql.browse' && op.countOnly) return { columns: [], rows: [], totalRows: '501', countLimited: false }
+        if (op.action === 'mongo.count') return { columns: [], rows: [], totalRows: '401', countLimited: false }
+        if (op.action === 'mysql.query' || op.action === 'mysql.browse') {
+          if (op.sql?.includes('slow_query')) await new Promise(resolve => setTimeout(resolve, 400))
           const values = (window as any).__dbexLargeGrid ? Array.from({ length: 500 }, (_, index) => ({ id: String(index + 1), name: 'User ' + (index + 1), email: 'user' + (index + 1) + '@example.test' })) : id === 'sql2' ? [{ id: '2', name: 'Grace', email: 'grace@example.test' }] : rows
-          return { ...grid(values), rawRows: values, columnTypes: ['BIGINT','VARCHAR','VARCHAR'], nullCells: values.map(() => []), durationMs: 4, transaction: false }
+          return { ...grid(values), rawRows: values, columnTypes: ['BIGINT','VARCHAR','VARCHAR'], nullCells: values.map(() => []), durationMs: 4, transaction: false, nextOffset: op.action === 'mysql.browse' && (op.offset || 0) < 500 ? (op.offset || 0) + op.limit : undefined }
         }
         if (op.action === 'mysql.begin') return { columns: [], rows: [], transaction: true }
         if (op.action === 'mysql.commit' || op.action === 'mysql.rollback') return { columns: [], rows: [], transaction: false }
-        if (op.action === 'mongo.find' || op.action === 'mongo.aggregate') return { columns: ['_id', 'name', 'createdAt', 'score', 'nullable', 'nested'], rows: [{ _id: '64b000000000000000000001', name: 'Ada', createdAt: 'date', score: '7', nullable: 'NULL', nested: '{...}' }, { _id: '64b000000000000000000002', name: 'Grace', score: '7', nullable: 'NULL' }, { _id: '64b000000000000000000003', name: 'Lin', score: '7' }], documents: [document, secondDocument, thirdDocument], bsonTypes: mongoMetadata, durationMs: 3 }
+        if (op.action === 'mongo.find' || op.action === 'mongo.aggregate') return { columns: ['_id', 'name', 'createdAt', 'score', 'nullable', 'nested'], rows: [{ _id: '64b000000000000000000001', name: 'Ada', createdAt: 'date', score: '7', nullable: 'NULL', nested: '{...}' }, { _id: '64b000000000000000000002', name: 'Grace', score: '7', nullable: 'NULL' }, { _id: '64b000000000000000000003', name: 'Lin', score: '7' }], documents: [document, secondDocument, thirdDocument], bsonTypes: mongoMetadata, durationMs: 3, nextOffset: op.action === 'mongo.find' && (op.offset || 0) < 400 ? (op.offset || 0) + op.limit : undefined }
         if (op.action === 'mysql.inspect') return { columns: [], rows: [], inspection: { kind: 'table', metrics: [{ label: '存储引擎', value: 'InnoDB' }, { label: '记录数（估算）', value: '1234', format: 'estimate' }, { label: '数据大小', value: '32768', format: 'bytes' }], definition: 'CREATE TABLE users (id BIGINT PRIMARY KEY, name VARCHAR(255));' } }
         if (op.action === 'mongo.inspect') return { columns: [], rows: [], inspection: { kind: 'collection', metrics: [{ label: '文档数', value: '3' }, { label: '已固定', value: 'false', format: 'boolean' }, { label: '存储大小', value: '32768', format: 'bytes' }], definition: 'db.getSiblingDB("app").createCollection("users");\n\ndb.getSiblingDB("app").getCollection("users").createIndex({ "score": Int32("1") }, { "name": "score_1" });' } }
         if (op.action === 'redis.inspect') return { columns: [], rows: [], inspection: { kind: 'key', metrics: [{ label: '类型', value: 'string' }, { label: 'TTL（秒）', value: '-1' }, { label: '内存占用', value: '72', format: 'bytes' }], definition: JSON.stringify(['TYPE', op.key]) + '\n' + JSON.stringify(['TTL', op.key]), definitionNote: 'Redis 没有 DDL；以下是只读 Key 检查命令，不是数据备份。' } }
@@ -163,6 +165,7 @@ test('MongoDB right-click document editor uses typed syntax, validates locally a
   await editor.getByRole('button', { name: '更新', exact: true }).click()
   await expect.poll(() => page.evaluate(() => (window as any).__dbexCalls.some((call: any) => call.action === 'mongo.replace' && call.original.includes('$oid') && call.document.includes('$date') && JSON.parse(call.document).name === 'Ada Updated' && call.confirmed))).toBe(true)
   await page.getByRole('button', { name: '查询条件', exact: true }).click()
+  await page.getByRole('button', { name: '文本', exact: true }).click()
   await page.getByLabel('Projection', { exact: true }).fill('{"name":1}')
   await page.getByRole('button', { name: '查询', exact: true }).click()
   await row.click({ button: 'right' })
@@ -518,4 +521,55 @@ test('MongoDB object inspection contains collection DDL and Redis inspection ide
   await panel.getByRole('checkbox', { name: '按类型着色' }).uncheck()
   await panel.getByRole('button', { name: '保存', exact: true }).click()
   await expect(row.locator('td[data-value-type="string"]').first()).not.toHaveAttribute('data-type-color', /.+/)
+})
+
+test('visual MongoDB filters, sort, page jumps and views preserve the applied query', async ({ page }) => {
+  await connect(page, 'Mongo Local'); await openUsers(page)
+  const workbench = page.locator('.workbench:visible')
+  await workbench.getByRole('button', { name: '查询条件', exact: true }).click()
+  const builder = workbench.locator('.visual-query-builder')
+  await builder.getByRole('button', { name: '添加筛选条件', exact: true }).click()
+  const rule = builder.locator('.builder-rule').first()
+  await rule.getByLabel('字段', { exact: true }).fill('score')
+  await rule.getByLabel('类型', { exact: true }).selectOption('Int32')
+  await rule.getByLabel('字段值', { exact: true }).fill('7')
+  await builder.getByRole('button', { name: '添加排序条件', exact: true }).click()
+  await builder.getByLabel('排序字段', { exact: true }).fill('score')
+  await builder.getByLabel('排序方式', { exact: true }).selectOption('-1')
+  await builder.getByRole('button', { name: '应用筛选与排序', exact: true }).click()
+  await expect.poll(() => page.evaluate(() => (window as any).__dbexCalls.filter((c:any) => c.action === 'mongo.find').at(-1)?.filter)).toBe('{"score":{"$eq":{"$numberInt":"7"}}}')
+  await workbench.getByRole('button', { name: '文本', exact: true }).click()
+  await expect(workbench.getByLabel('Sort', { exact: true })).toHaveValue('{"score":-1}')
+  await workbench.getByRole('button', { name: '查询条件', exact: true }).click()
+  await workbench.getByRole('button', { name: '下一页', exact: true }).click()
+  await expect(workbench.getByLabel('页码', { exact: true })).toHaveValue('2')
+  await expect.poll(() => page.evaluate(() => (window as any).__dbexCalls.filter((c:any) => c.action === 'mongo.find').at(-1)?.filter)).toBe('{"score":{"$eq":{"$numberInt":"7"}}}')
+  await workbench.getByRole('button', { name: '末页', exact: true }).click()
+  await expect(workbench.getByLabel('页码', { exact: true })).toHaveValue('3')
+  await workbench.getByRole('button', { name: '首页', exact: true }).click()
+  await expect(workbench.getByLabel('页码', { exact: true })).toHaveValue('1')
+  await workbench.getByRole('button', { name: '记录视图', exact: true }).click()
+  await expect(workbench.locator('.browse-record-view')).toContainText('ObjectId')
+  await workbench.getByRole('button', { name: '文本视图', exact: true }).click()
+  await expect(workbench.locator('.browse-record-view pre')).toContainText('Int32("7")')
+  await workbench.getByRole('button', { name: '表格视图', exact: true }).click()
+  await expect(workbench.locator('.mongo-grid')).toBeVisible()
+})
+test('MySQL uses visual filters without constructing user SQL in the renderer', async ({ page }) => {
+  await connect(page, 'MySQL Local'); await openUsers(page)
+  const workbench = page.locator('.workbench:visible')
+  await workbench.getByRole('button', { name: '查询条件', exact: true }).click()
+  const builder = workbench.locator('.visual-query-builder')
+  await builder.getByRole('button', { name: '添加筛选条件', exact: true }).click()
+  await builder.getByLabel('字段', { exact: true }).selectOption('name')
+  await builder.getByLabel('比较方式', { exact: true }).selectOption('contains')
+  await builder.getByLabel('字段值', { exact: true }).fill("Ada' OR 1=1")
+  await builder.getByRole('button', { name: '应用筛选与排序', exact: true }).click()
+  await expect.poll(() => page.evaluate(() => (window as any).__dbexCalls.filter((c:any) => c.action === 'mysql.browse').at(-1)?.filter.groups[0]?.rules[0]?.value)).toBe("Ada' OR 1=1")
+  await workbench.getByRole('button', { name: '查询条件', exact: true }).click()
+  await workbench.getByLabel('页码', { exact: true }).fill('3')
+  await workbench.getByLabel('页码', { exact: true }).press('Enter')
+  await expect.poll(() => page.evaluate(() => (window as any).__dbexCalls.filter((c:any) => c.action === 'mysql.browse').at(-1)?.offset)).toBe(200)
+  await workbench.getByRole('button', { name: '记录视图', exact: true }).click()
+  await expect(workbench.locator('.browse-record-view')).toContainText('BIGINT')
 })

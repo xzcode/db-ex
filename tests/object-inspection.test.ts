@@ -10,6 +10,7 @@ test('MySQL type metadata follows field packets; Redis type names are allowliste
   assert.equal(mysqlFieldType({ columnType: 252, characterSet: 63 }), 'BLOB')
   assert.equal(mysqlFieldType({ columnType: 252, characterSet: 45 }), 'TEXT')
   assert.equal(mysqlFieldType({ columnType: 254, flags: 256 }), 'ENUM')
+  assert.equal(mysqlFieldType({ columnType: 254, flags: ['ENUM'] }), 'ENUM')
   assert.equal(mysqlFieldType({ columnType: 245 }), 'JSON')
   assert.equal(mysqlFieldType({ columnType: 999 }), 'UNKNOWN')
   assert.equal(redisTypeName('hash'), 'hash')

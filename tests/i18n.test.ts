@@ -69,3 +69,7 @@ test('MongoDB document context and editor commands are localized in every langua
 test('object inspector metadata, DDL and palette labels are localized', () => {
   for (const { locale } of languages) if (locale !== 'zh-CN') for (const key of ["对象详情","对象信息","数据类型配色","检查命令","展开面板","未选择对象","视图","表","集合","是","否","存储引擎","记录数（估算）","平均记录大小","数据大小","索引的总大小","空闲空间","自增值","排序规则","行格式","创建时间","更新时间","文档数","已固定","对象的平均大小","存储大小","索引数","元素数量","内存占用","内部编码","复制语句","导出语句","部分元数据不可用或无读取权限。","DDL 不可用或超出读取上限。","部分索引无法完整生成，请核对索引列表。","Redis 没有 DDL；以下是只读 Key 检查命令，不是数据备份。","字段数","语句已导出"]) assert.ok(Object.hasOwn(catalogs[locale], key), locale + ': ' + key)
 })
+
+test('visual browsing and page controls are localized', () => {
+  for (const { locale } of languages) if (locale !== 'zh-CN') for (const key of ["筛选","添加筛选条件","添加条件组","组间关系","组内关系","条件组","点击 + 添加筛选条件","比较方式","等于","不等于","大于","大于或等于","小于","小于或等于","包含","为 NULL","不为 NULL","字段存在","字段缺失","排序方式","添加排序条件","点击 + 添加排序条件","排序字段","升序","降序","应用筛选与排序","重置筛选","创建工具","文本","首页","上一页","下一页","末页","页码","表格视图","记录视图","文本视图","记录","上一条记录","下一条记录","INVALID_FILTER: 筛选或排序条件无效","记录数超出末页跳转上限，请缩小筛选范围。","上一批","首批"]) assert.ok(Object.hasOwn(catalogs[locale], key), locale + ': ' + key)
+})

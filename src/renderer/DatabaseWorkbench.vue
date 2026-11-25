@@ -75,6 +75,9 @@ const redisPattern = ref('*')
 const redisKey = ref('')
 const redisNode = ref('')
 const redisNodes = ref<string[]>([])
+const redisScanCursors = ref<string[]>(['0'])
+const redisScanIndex = ref(0)
+let appliedRedisScan = { pattern: '*', node: '' }
 const redisDetail = ref<OperationResult | null>(null)
 const redisType = ref<RedisValueType>('string')
 const redisText = ref('')
@@ -195,6 +198,7 @@ async function loadData(nextOffset = 0, proposedMongo = appliedMongo.value, prop
   } else return false
   offset.value = nextOffset
   browsePageSize.value = size
+  if (browseView.value !== 'grid' && result.value?.rows.length) selectedRow.value = 0
   pageInput.value = Math.floor(nextOffset / size) + 1
   totalRows.value = undefined
   countLimited.value = false
@@ -478,9 +482,17 @@ function useSnippet(item: QuerySnippet) {
   if (isMysql.value) { sql.value = item.text; tab.value = 'query' } else { pipeline.value = item.text; tab.value = 'aggregation' }
   historyOpen.value = false
 }
-async function scanRedis(cursor = '0') {
+async function scanRedis(cursor = '0', navigation: 'reset' | 'next' | 'previous' | 'first' = 'reset') {
+  if (busy.value) return
+  const version = generation
+  const target = navigation === 'reset' ? { pattern: redisPattern.value, node: redisNode.value } : { ...appliedRedisScan }
+  const next = await execute({ action: 'redis.scan', cursor, pattern: target.pattern, node: target.node || undefined })
+  if (!next || version !== generation) return
   redisDetail.value = null; redisKey.value = ''
-  await execute({ action: 'redis.scan', cursor, pattern: redisPattern.value, node: redisNode.value || undefined })
+  if (navigation === 'reset') { appliedRedisScan = target; redisScanCursors.value = ['0']; redisScanIndex.value = 0 }
+  else if (navigation === 'next') { redisScanCursors.value = [...redisScanCursors.value.slice(0, redisScanIndex.value + 1), cursor]; redisScanIndex.value++ }
+  else if (navigation === 'previous') redisScanIndex.value = Math.max(0, redisScanIndex.value - 1)
+  else redisScanIndex.value = 0
 }
 async function openRedis(key?: string, cursor?: string, nextOffset?: number) {
   const target = key || redisKey.value
@@ -563,7 +575,7 @@ async function refreshSelection(version: number) {
   }
 }
 watch(() => props.node?.id, () => {
-  generation++; visualFilter.value = newBrowseFilter(); appliedMysql.value = newBrowseFilter(); appliedMongo.value = { filter: '{}', projection: '{}', sort: '{}' }; filter.value = '{}'; projection.value = '{}'; sort.value = '{}'; filterMode.value = 'builder'; filterError.value = ''; totalRows.value = undefined; countLimited.value = false; pageInput.value = 1; sqlQuerySummary.value = ''; sqlQueryParameters.value = []; edit.value = null; documentView.value = undefined; mongoQuery.value = ''; result.value = null; structure.value = null; primaryKeys.value = []; selectedRow.value = -1; checked.value = []; offset.value = 0; editableRows.value = false
+  generation++; redisScanCursors.value = ['0']; redisScanIndex.value = 0; visualFilter.value = newBrowseFilter(); appliedMysql.value = newBrowseFilter(); appliedMongo.value = { filter: '{}', projection: '{}', sort: '{}' }; filter.value = '{}'; projection.value = '{}'; sort.value = '{}'; filterMode.value = 'builder'; filterError.value = ''; totalRows.value = undefined; countLimited.value = false; pageInput.value = 1; sqlQuerySummary.value = ''; sqlQueryParameters.value = []; edit.value = null; documentView.value = undefined; mongoQuery.value = ''; result.value = null; structure.value = null; primaryKeys.value = []; selectedRow.value = -1; checked.value = []; offset.value = 0; editableRows.value = false
   if (busy.value) { pendingSelection = true; return }
   void refreshSelection(generation)
 }, { immediate: true })
@@ -598,7 +610,7 @@ onBeforeUnmount(() => { disposed = true; generation++; if (inspectionTimer) clea
     </template>
     <template v-else-if="isRedis && tab === 'data'">
       <div class="editor-toolbar"><input v-model="redisPattern" :aria-label="t('Redis Key 匹配模式')" placeholder="Key pattern: user:*" @keyup.enter="scanRedis()" /><select v-if="redisNodes.length > 1" v-model="redisNode" :aria-label="t('Cluster 节点')"><option value="">{{ t('默认节点') }}</option><option v-for="nodeName in redisNodes" :key="nodeName" :value="nodeName">{{ nodeName }}</option></select><button class="btn primary" :disabled="busy" @click="scanRedis()">{{ t('扫描 Key') }}</button><button class="btn danger-text" :disabled="busy || !session.writable || !checked.length" @click="deleteKeys">{{ t('删除选中') }} {{ checked.length || '' }}</button></div>
-      <div class="redis-split"><div class="redis-key-list"><ResultGrid v-if="result" :columns="result.columns" :rows="result.rows" :redis-row-types="result.redisRowTypes" :checked="checked" :selected="selectedRow" selectable @check="checkRow" @check-all="checkAll" @select="selectedRow = $event" @open="openRedis(result.rows[$event].key)" /><div class="result-footer"><span>{{ t('双击 Key 打开 · 当前页') }} {{ result?.rows.length || 0 }} {{ t('个') }}</span><button v-if="result?.nextCursor" class="btn secondary small" :disabled="busy" @click="scanRedis(result.nextCursor)">{{ t('下一批 →') }}</button></div></div>
+      <div class="redis-split"><div class="redis-key-list"><ResultGrid v-if="result" :columns="result.columns" :rows="result.rows" :redis-row-types="result.redisRowTypes" :checked="checked" :selected="selectedRow" selectable @check="checkRow" @check-all="checkAll" @select="selectedRow = $event" @open="openRedis(result.rows[$event].key)" /><div class="result-footer"><span>{{ t('双击 Key 打开 · 当前页') }} {{ result?.rows.length || 0 }} {{ t('个') }}</span><div class="browse-page-buttons"><button type="button" class="browse-icon" :aria-label="t('首批')" :title="t('首批')" :disabled="busy || redisScanIndex === 0" @click="scanRedis('0', 'first')">|‹</button><button type="button" class="browse-icon" :aria-label="t('上一批')" :title="t('上一批')" :disabled="busy || redisScanIndex === 0" @click="scanRedis(redisScanCursors[redisScanIndex - 1], 'previous')">‹</button><span>{{ redisScanIndex + 1 }}</span><button type="button" class="browse-icon" :aria-label="t('下一批 →')" :title="t('下一批 →')" :disabled="busy || !result?.nextCursor" @click="result?.nextCursor && scanRedis(result.nextCursor, 'next')">›</button></div></div></div>
         <section class="redis-inspector"><div class="editor-toolbar"><input v-model="redisKey" :aria-label="t('Redis Key 名称')" :placeholder="t('输入 Key 或双击左侧列表')" @keyup.enter="openRedis()" /><button class="btn secondary" :disabled="busy || !redisKey" @click="openRedis()">{{ t('读取') }}</button></div><div class="editor-toolbar"><label class="inline-field">{{ t('类型') }}<select v-model="redisType"><option v-for="kind in Object.keys(mutationCommands)" :key="kind" :value="kind">{{ kind }}</option></select></label><label class="inline-field">{{ t('TTL（秒）') }}<input v-model.number="redisTtl" type="number" min="-1" /></label><button class="btn secondary" :disabled="busy || !session.writable || !redisKey" @click="setTtl">{{ t('保存 TTL') }}</button></div><p class="compact-help">{{ t('TTL = -1 永久，其他值须大于 0。列表与集合按页读取。') }}</p>
           <template v-if="redisType === 'string'"><div class="redis-value-editor"><CodeEditor v-model="redisText" language="plaintext" /></div><div class="editor-toolbar"><button class="btn primary" :disabled="busy || !session.writable || !redisKey || !!redisDetail?.truncated" @click="saveRedisString">{{ t('保存 String') }}</button></div></template>
           <template v-else><ResultGrid v-if="redisDetail" :columns="redisDetail.columns" :rows="redisDetail.rows" :redis-row-types="redisDetail.redisRowTypes" /><div v-if="redisDetail?.nextCursor || redisDetail?.nextOffset !== undefined" class="editor-toolbar"><button class="btn secondary" :disabled="busy" @click="openRedis(undefined, redisDetail?.nextCursor, redisDetail?.nextOffset)">{{ t('下一页元素 →') }}</button></div><div class="editor-toolbar"><select v-model="redisMutation" :aria-label="t('Redis 修改命令')"><option v-for="command in mutationCommands[redisType]" :key="command">{{ command }}</option></select><button class="btn primary" :disabled="busy || !session.writable || !redisKey" @click="mutateRedis">{{ t('执行修改') }}</button></div><label class="field mutation-arguments">{{ t('参数（不含命令与 Key）') }}<textarea v-model="redisArguments" rows="3" spellcheck="false" /></label><p class="compact-help">HSET: ["field", "value"] · LPUSH / SADD: ["value"]<br />ZADD: ["1", "member"] · XADD: ["*", "field", "value"]</p></template>
@@ -606,7 +618,7 @@ onBeforeUnmount(() => { disposed = true; generation++; if (inspectionTimer) clea
       </div>
     </template>
     <template v-else>
-      <div class="editor-toolbar browser-top-toolbar"><template v-if="tab === 'data' && !isRedis"><button class="btn secondary small" :disabled="busy || !canEditRow || !session.writable" @click="openEdit"><span aria-hidden="true">✎</span> {{ t('编辑') }}</button><button class="btn secondary small" :aria-expanded="showMongoFilters" :class="{ 'active-filter': filtersActive || showMongoFilters }" @click="showMongoFilters = !showMongoFilters"><span aria-hidden="true">⌕</span> {{ t('查询条件') }} <span v-if="filtersActive">•</span></button><button class="btn secondary small" :disabled="busy || !hasEntity || !session.writable" @click="importData">{{ t('导入') }} {{ isMysql ? 'CSV / JSON' : 'EJSON' }}</button></template><button v-if="isMongo && tab !== 'data'" class="btn secondary small" :disabled="selectedRow < 0 || !result?.documents?.[selectedRow]" @click="viewMongoDocument()">{{ t('查看文档') }}</button><span class="toolbar-spacer"></span><button class="btn secondary small" :disabled="!result?.rows.length" @click="exportData('json')">{{ t('导出当前页 JSON') }}</button><button class="btn secondary small" :disabled="!result?.rows.length" @click="exportData('csv')">CSV</button></div>
+      <div class="editor-toolbar browser-top-toolbar"><template v-if="tab === 'data' && !isRedis"><button class="btn secondary small" :aria-label="t('编辑')" :disabled="busy || !canEditRow || !session.writable" @click="openEdit"><span aria-hidden="true">✎</span> {{ t('编辑') }}</button><button class="btn secondary small" :aria-label="t('查询条件')" :aria-expanded="showMongoFilters" :class="{ 'active-filter': filtersActive || showMongoFilters }" @click="showMongoFilters = !showMongoFilters"><span aria-hidden="true">⌕</span> {{ t('查询条件') }} <span v-if="filtersActive" aria-hidden="true">•</span></button><button class="btn secondary small" :disabled="busy || !hasEntity || !session.writable" @click="importData">{{ t('导入') }} {{ isMysql ? 'CSV / JSON' : 'EJSON' }}</button></template><button v-if="isMongo && tab !== 'data'" class="btn secondary small" :disabled="selectedRow < 0 || !result?.documents?.[selectedRow]" @click="viewMongoDocument()">{{ t('查看文档') }}</button><span class="toolbar-spacer"></span><button class="btn secondary small" :disabled="!result?.rows.length" @click="exportData('json')">{{ t('导出当前页 JSON') }}</button><button class="btn secondary small" :disabled="!result?.rows.length" @click="exportData('csv')">CSV</button></div>
       <section v-if="tab === 'data' && !isRedis && showMongoFilters" class="browse-filter-panel">
         <header class="filter-panel-header"><span>{{ t('查询条件') }}</span><div v-if="isMongo" class="filter-mode-switch"><button type="button" :class="{ active: filterMode === 'builder' }" @click="filterMode = 'builder'">{{ t('创建工具') }}</button><button type="button" :class="{ active: filterMode === 'text' }" @click="filterMode = 'text'">{{ t('文本') }}</button></div></header>
         <div v-if="filterError" class="inline-message error" role="alert">{{ localize(filterError) }}</div>

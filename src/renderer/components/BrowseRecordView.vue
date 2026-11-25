@@ -11,7 +11,8 @@ const index = computed(() => Math.max(0, Math.min(props.selected, props.result.r
 const document = computed(() => props.result.documents?.[index.value])
 const row = computed(() => props.result.rawRows?.[index.value] || props.result.rows[index.value] || {})
 const formatted = computed(() => document.value !== undefined ? formatMongoDocument(document.value, props.result.bsonTypes?.[index.value]).text : JSON.stringify(row.value, null, 2))
-const record = computed(() => props.result.columns.map((field, i) => ({ field, type: props.result.nullCells?.[index.value]?.includes(i) ? 'NULL' : props.result.columnTypes?.[i] || 'UNKNOWN', value: Object.hasOwn(row.value, field) ? row.value[field] === null ? '(NULL)' : String(row.value[field]) : '—' })))
+const recordHeaders = computed(() => [t('字段'), t('类型'), t('字段值')])
+const record = computed(() => props.result.columns.map((field, i) => ({ [recordHeaders.value[0]]: field, [recordHeaders.value[1]]: props.result.nullCells?.[index.value]?.includes(i) ? 'NULL' : props.result.columnTypes?.[i] || 'UNKNOWN', [recordHeaders.value[2]]: Object.hasOwn(row.value, field) ? row.value[field] === null ? '(NULL)' : String(row.value[field]) : '—' })))
 </script>
 <template>
   <section class="browse-record-view">
@@ -22,7 +23,7 @@ const record = computed(() => props.result.columns.map((field, i) => ({ field, t
       <span class="toolbar-spacer"></span><button v-if="mongo && document !== undefined" class="btn secondary small" type="button" @click="emit('open',index)">{{ t('查看文档') }}</button>
     </div>
     <div v-if="!result.rows.length" class="empty-state">{{ t('暂无记录') }}</div>
-    <template v-else-if="mode === 'record'"><BsonDocumentTree v-if="mongo && document !== undefined" :document="document" :metadata="result.bsonTypes?.[index]" /><ResultGrid v-else :columns="['field','type','value']" :rows="record" /></template>
+    <template v-else-if="mode === 'record'"><BsonDocumentTree v-if="mongo && document !== undefined" :document="document" :metadata="result.bsonTypes?.[index]" /><ResultGrid v-else :columns="recordHeaders" :rows="record" /></template>
     <pre v-else class="bson-raw-document" dir="ltr">{{ formatted }}</pre>
   </section>
 </template>

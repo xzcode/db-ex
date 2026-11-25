@@ -39,6 +39,10 @@ test('MySQL real database: pagination, prepared CRUD, conflicts, transactions an
     assert.equal(inspected.metrics.find(item => item.label === '存储引擎')?.value, 'InnoDB')
     assert.equal(inspected.metrics.find(item => item.label === '字段数')?.value, '3')
     assert.match(inspected.definition || '', /CREATE TABLE.*records/s)
+    const browse = { join: 'and' as const, groups: [{ join: 'and' as const, rules: [{ field: 'id', operator: 'eq' as const, type: 'Long' as const, value: '9007199254740993' }] }], sort: [{ field: 'id', direction: -1 as const }] }
+    const filtered = await operations.execute({ action: 'mysql.browse', ...target, filter: browse, limit: 100 }, read)
+    assert.equal(filtered.rawRows?.[0]?.id, '9007199254740993')
+    assert.equal((await operations.execute({ action: 'mysql.browse', ...target, filter: browse, countOnly: true }, read)).totalRows, '1')
     const original = result.rawRows![0]
     const schema = await operations.execute({ action: 'mysql.structure', ...target }, read)
     assert.deepEqual(schema.primaryKeys, ['id'])
@@ -109,6 +113,7 @@ test('MongoDB real database: BSON exactness, filter, aggregation, indexes and op
     await operations.execute({ action: 'mongo.insert', ...target, documents: [canonical(document)] }, write)
     const first = await operations.execute({ action: 'mongo.find', ...target, filter: '{"score":{"$gte":5}}', sort: '{"score":-1}' }, read)
     assert.equal(first.documents?.length, 1)
+    assert.equal((await operations.execute({ action: 'mongo.count', ...target, filter: '{"score":{"$numberInt":"5"}}' }, read)).totalRows, '1')
     const parsed = BSON.EJSON.parse(first.documents![0], { relaxed: false })
     assert.equal(parsed.big.toString(), '9223372036854775807')
     assert.equal(parsed.money.toString(), '123456789.123456789')

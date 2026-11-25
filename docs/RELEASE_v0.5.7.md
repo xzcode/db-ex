@@ -6,3 +6,5 @@
 - 14 UI languages; local preferences; native macOS ARM64, Windows x64 and Linux x64 packages.
 
 - macOS icon uses a platform-specific inset opaque navy rounded-square tile in the legacy ICNS, preserving the approved database glyph and colors. This addresses the oversized icon shape that can trigger Tahoe's generated gray/white outer tile. Windows and Linux retain their previous artwork. Actual Dock appearance still depends on the OS rendering and icon cache.
+
+- Visual AND/OR filter groups, typed BSON filters, multi-field sort, separate MongoDB text mode (Filter/Projection/Sort), and parameterized MySQL table browsing. A compact bottom toolbar provides record actions, query summary, first/previous/next/last page, page jump, page size and grid/record/text views. Last-page count is on demand and capped at 1,000,001; Redis retains cursor-based batches with first/previous/next navigation. Record saves/cancels continue in the reviewed edit dialog rather than unconfirmed inline writes.
