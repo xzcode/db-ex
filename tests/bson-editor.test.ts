@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { BSON } from 'mongodb'
 import { describeBsonDocument } from '../src/main/operations/bson-metadata'
 import { validateMongoDocumentEdit } from '../src/main/operations/mongodb'
-import { formatMongoDocument, parseMongoDocumentEditor } from '../src/shared/bson-editor'
+import { canSafelyEditMongoDocument, formatMongoDocument, mongoDocumentDraft, mongoFieldFilter, mongoFieldText, parseMongoDocumentEditor } from '../src/shared/bson-editor'
 
 test('typed document editor round-trips actual BSON data and exact numeric types', () => {
   const source = {
@@ -45,4 +45,25 @@ test('unknown and literal EJSON-looking document shapes fall back without rewrit
   assert.equal(formatMongoDocument(raw).syntax, 'ejson')
   const metadata = describeBsonDocument({ x: { $oid: '507f1f77bcf86cd799439011' } }, ['x'])
   assert.equal(formatMongoDocument(raw, metadata).syntax, 'ejson')
+})
+
+test('context commands preserve values and BSON types without writing or reusing _id', () => {
+  const source = { _id: new BSON.ObjectId('507f1f77bcf86cd799439011'), long: BSON.Long.fromString('9223372036854775807'), text: 'x'.repeat(6000), nullable: null }
+  const canonical = BSON.EJSON.stringify(source, { relaxed: false })
+  const metadata = describeBsonDocument(source, Object.keys(source))
+  assert.equal(canSafelyEditMongoDocument(canonical, metadata), true)
+  assert.equal(mongoFieldText(canonical, metadata, 'long'), '9223372036854775807')
+  assert.equal(mongoFieldText(canonical, metadata, 'text'), source.text)
+  assert.deepEqual(mongoFieldFilter(canonical, metadata, 'long'), { long: { $eq: { $numberLong: '9223372036854775807' } } })
+  assert.deepEqual(mongoFieldFilter(canonical, metadata, 'nullable'), { nullable: { $eq: null, $exists: true } })
+  const duplicate = mongoDocumentDraft(canonical, metadata, 'duplicate')
+  assert.equal(duplicate.syntax, 'typed')
+  const copy = JSON.parse(parseMongoDocumentEditor(duplicate.text))
+  assert.equal(Object.hasOwn(copy, '_id'), false)
+  assert.equal(copy.long.$numberLong, '9223372036854775807')
+  const edited = mongoDocumentDraft(canonical, metadata, 'empty', 'long')
+  assert.equal(JSON.parse(parseMongoDocumentEditor(edited.text)).long, '')
+  assert.throws(() => mongoDocumentDraft(canonical, metadata, 'null', '_id'))
+  const ambiguous = { field: { $oid: '507f1f77bcf86cd799439011' } }
+  assert.equal(canSafelyEditMongoDocument(JSON.stringify(ambiguous), describeBsonDocument(ambiguous, ['field'])), false)
 })

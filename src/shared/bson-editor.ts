@@ -1,5 +1,5 @@
 import { childType, typeName, type BsonTypeTree } from './bson-types'
-import { parseBsonDocument } from './bson-display'
+import { formatBsonValue, parseBsonDocument } from './bson-display'
 
 const MAX_TEXT = 2 * 1024 * 1024
 const MAX_DEPTH = 64
@@ -230,4 +230,52 @@ export function parseMongoDocumentEditor(text: string): string {
   skip()
   if (cursor !== text.length) return fail()
   return JSON.stringify(document)
+}
+
+
+/** Refuse a known literal EJSON-looking object or an unclassified wrapper.
+ * The EJSON driver would otherwise reinterpret it as a different BSON type.
+ */
+export function canSafelyEditMongoDocument(canonical: string, metadata?: BsonTypeTree): boolean {
+  const doc = parseBsonDocument(canonical)
+  if (!doc || canonical.length > MAX_TEXT) return false
+  let nodes = 0
+  function check(value: unknown, node: BsonTypeTree | undefined, depth: number): boolean {
+    if (++nodes > MAX_NODES || depth > MAX_DEPTH) return false
+    if (!value || typeof value !== 'object') return true
+    const type = typeName(node)
+    if (type !== 'Document' && type !== 'Array' && type !== 'Unknown') return true
+    if (!Array.isArray(value) && Object.keys(value).some(key => reservedKeys.has(key) || forbiddenKeys.has(key))) return false
+    return Object.entries(value).every(([key, child]) => check(child, childType(node, key), depth + 1))
+  }
+  return check(doc, metadata, 0)
+}
+export function mongoFieldText(canonical: string, metadata: BsonTypeTree | undefined, field: string): string | undefined {
+  const doc = parseBsonDocument(canonical)
+  if (!doc || !Object.hasOwn(doc, field)) return undefined
+  const value = doc[field], type = typeName(childType(metadata, field))
+  if (typeof value === 'string') return value
+  if (value === null) return 'null'
+  if (type === 'Document' || type === 'Array' || type === 'Unknown' || type === 'Binary' || type === 'JavaScript' || type === 'JavaScriptWithScope') return JSON.stringify(value)
+  return formatBsonValue(type, value)
+}
+export function mongoFieldFilter(canonical: string, metadata: BsonTypeTree | undefined, field: string): Record<string, unknown> | undefined {
+  const doc = parseBsonDocument(canonical)
+  if (!doc || !Object.hasOwn(doc, field) || !field || field.includes('.') || field.startsWith('$') || forbiddenKeys.has(field)) return undefined
+  const type = typeName(childType(metadata, field))
+  if (!['String','ObjectId','Int32','Int64','Double','Decimal128','Number','Boolean','Date','Timestamp','Null'].includes(type)) return undefined
+  return { [field]: type === 'Null' ? { $eq: null, $exists: true } : { $eq: doc[field] } }
+}
+export function mongoDocumentDraft(canonical: string, metadata: BsonTypeTree | undefined, action: 'duplicate' | 'null' | 'empty', field?: string): { text: string; syntax: 'typed' | 'ejson' } {
+  if (!canSafelyEditMongoDocument(canonical, metadata)) throw new Error('文档包含无法安全编辑的 BSON 类型。')
+  const doc = parseBsonDocument(canonical)!
+  let next = metadata
+  if (action === 'duplicate') {
+    delete doc._id
+  } else {
+    if (!field || field === '_id' || !Object.hasOwn(doc, field) || forbiddenKeys.has(field)) throw new Error('无法修改此字段。')
+    doc[field] = action === 'null' ? null : ''
+    if (metadata && typeof metadata === 'object') next = { ...metadata, children: { ...metadata.children, [field]: action === 'null' ? 'Null' : 'String' } }
+  }
+  return formatMongoDocument(JSON.stringify(doc), next)
 }

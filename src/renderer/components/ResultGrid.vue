@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { t } from '../i18n'
 import { bsonLabel, gridBsonType, type BsonTypeBranch, type BsonType } from '../../shared/bson-types'
+import { canSafelyEditMongoDocument, mongoFieldFilter } from '../../shared/bson-editor'
 import { formatBsonValue, parseBsonDocument } from '../../shared/bson-display'
 import { activeTypeColor } from '../../shared/bson-palette'
 import { bsonPalette } from '../bson-preferences'
@@ -17,8 +18,10 @@ const props = withDefaults(defineProps<{
   documents?: string[]
   documentMenu?: boolean
   canEditDocument?: boolean
+  canAddDocument?: boolean
+  canFilterDocument?: boolean
 }>(), { selected: -1, selectable: false, checked: () => [], offset: 0 })
-const emit = defineEmits<{ select: [index: number]; open: [index: number]; check: [index: number]; checkAll: []; documentEdit: [index: number]; documentView: [index: number] }>()
+const emit = defineEmits<{ select: [index: number]; open: [index: number]; check: [index: number]; checkAll: []; documentEdit: [index: number]; documentView: [index: number]; documentAction: [action: 'add' | 'copy-value' | 'copy-document' | 'duplicate' | 'delete' | 'null' | 'empty' | 'filter', index: number, field?: string] }>()
 const mongo = computed(() => props.bsonTypes !== undefined)
 const rowHeight = computed(() => mongo.value ? 26 : 34)
 const headerHeight = computed(() => mongo.value ? 28 : 34)
@@ -30,8 +33,15 @@ const virtual = computed(() => props.rows.length > 100)
 let observer: ResizeObserver | undefined
 let frame = 0
 let stopResize: (() => void) | undefined
-const rowMenu = ref<{ index: number; x: number; y: number }>()
+const rowMenu = ref<{ index: number; x: number; y: number; field?: string }>()
 const menuHost = ref<HTMLElement>()
+const menuDocument = computed(() => rowMenu.value ? props.documents?.[rowMenu.value.index] : undefined)
+const menuMetadata = computed(() => rowMenu.value ? props.bsonTypes?.[rowMenu.value.index] : undefined)
+const menuRaw = computed(() => menuDocument.value ? parseBsonDocument(menuDocument.value) : undefined)
+const menuHasField = computed(() => !!menuRaw.value && rowMenu.value?.field !== undefined && Object.hasOwn(menuRaw.value, rowMenu.value.field))
+const menuCanEdit = computed(() => !!props.canEditDocument && !!menuDocument.value && !!menuRaw.value && Object.hasOwn(menuRaw.value, '_id') && canSafelyEditMongoDocument(menuDocument.value, menuMetadata.value))
+const menuCanSetField = computed(() => menuCanEdit.value && menuHasField.value && rowMenu.value?.field !== '_id')
+const menuCanFilter = computed(() => !!props.canFilterDocument && !!menuDocument.value && menuHasField.value && !!mongoFieldFilter(menuDocument.value, menuMetadata.value, rowMenu.value!.field!))
 function closeRowMenu() { rowMenu.value = undefined }
 async function openRowMenu(event: MouseEvent | KeyboardEvent, index: number) {
   if (!props.documentMenu || !props.documents?.[index]) return
@@ -39,18 +49,25 @@ async function openRowMenu(event: MouseEvent | KeyboardEvent, index: number) {
   emit('select', index)
   const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
   const mouse = 'clientX' in event
-  rowMenu.value = { index, x: Math.max(4, Math.min(mouse ? event.clientX : rect.left + 20, window.innerWidth - 220)), y: Math.max(4, Math.min(mouse ? event.clientY : rect.bottom, window.innerHeight - 100)) }
+  const target = event.target instanceof Element ? event.target.closest<HTMLElement>('td[data-mongo-field]') : null
+  rowMenu.value = { index, field: target?.dataset.mongoField, x: Math.max(4, Math.min(mouse ? event.clientX : rect.left + 20, window.innerWidth - 260)), y: Math.max(4, Math.min(mouse ? event.clientY : rect.bottom, window.innerHeight - 100)) }
   await nextTick()
   if (!rowMenu.value || !menuHost.value) return
   rowMenu.value.y = Math.max(4, Math.min(rowMenu.value.y, window.innerHeight - menuHost.value.getBoundingClientRect().height - 4))
   menuHost.value.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus({ preventScroll: true })
 }
-function menuAction(action: 'view' | 'edit') {
-  const index = rowMenu.value?.index
+function menuAction(action: 'view' | 'edit' | 'add' | 'copy-value' | 'copy-document' | 'duplicate' | 'delete' | 'null' | 'empty' | 'filter') {
+  const menu = rowMenu.value
+  if (!menu || !props.documents?.[menu.index]) { closeRowMenu(); return }
+  if (['edit','duplicate','delete'].includes(action) && !menuCanEdit.value) return
+  if (action === 'add' && !props.canAddDocument) return
+  if (['null','empty'].includes(action) && !menuCanSetField.value) return
+  if (action === 'copy-value' && !menuHasField.value) return
+  if (action === 'filter' && !menuCanFilter.value) return
   closeRowMenu()
-  if (index === undefined || !props.documents?.[index]) return
-  if (action === 'edit') { if (props.canEditDocument) emit('documentEdit', index) }
-  else emit('documentView', index)
+  if (action === 'edit') emit('documentEdit', menu.index)
+  else if (action === 'view') emit('documentView', menu.index)
+  else emit('documentAction', action, menu.index, menu.field)
 }
 function outside(event: PointerEvent) { if (rowMenu.value && !menuHost.value?.contains(event.target as Node)) closeRowMenu() }
 function escapeMenu(event: KeyboardEvent) { if (event.key === 'Escape') closeRowMenu() }
@@ -170,6 +187,7 @@ function display(value: unknown): string {
           <td class="number-cell">{{ offset + item.index + 1 }}</td>
           <td v-for="column in columns" :key="column"
             :class="{ 'null-cell': item.row[column] === null || !Object.hasOwn(item.row, column) || cellType(item.row, item.index, column) === 'Null' || cellType(item.row, item.index, column) === 'Undefined', 'has-bson-color': !!cellColor(cellType(item.row, item.index, column)) }"
+            :data-mongo-field="documentMenu ? column : undefined"
             :data-bson-type="cellType(item.row, item.index, column)"
             :data-bson-color="cellColor(cellType(item.row, item.index, column))"
             :style="cellColor(cellType(item.row, item.index, column)) ? { '--bson-color': cellColor(cellType(item.row, item.index, column)) } : {}"
@@ -184,8 +202,18 @@ function display(value: unknown): string {
     <Teleport to="body">
       <div v-if="rowMenu" ref="menuHost" class="connection-context-menu mongo-row-menu" :style="{ left: rowMenu.x + 'px', top: rowMenu.y + 'px' }" @contextmenu.prevent @pointerdown.stop>
         <button class="context-action" type="button" @click="menuAction('view')">{{ t('查看文档') }}</button>
-        <button class="context-action" type="button" :disabled="!canEditDocument" @click="menuAction('edit')">{{ t('编辑文档') }}</button>
-        <p v-if="!canEditDocument" class="context-edit-help">{{ t('编辑需要完整文档和写入权限。') }}</p>
+        <button class="context-action" type="button" :disabled="!menuCanEdit" @click="menuAction('edit')">{{ t('编辑文档') }}…</button>
+        <button class="context-action" type="button" :disabled="!canAddDocument" @click="menuAction('add')">{{ t('新增文档') }}…</button>
+        <button class="context-action" type="button" :disabled="!menuCanEdit" @click="menuAction('duplicate')">{{ t('复制为新文档') }}…</button>
+        <button class="context-action danger" type="button" :disabled="!menuCanEdit" @click="menuAction('delete')">{{ t('删除文档') }}</button>
+        <div class="context-menu-divider"></div>
+        <button class="context-action" type="button" :disabled="!menuHasField" @click="menuAction('copy-value')">{{ t('复制字段值') }}</button>
+        <button class="context-action" type="button" @click="menuAction('copy-document')">{{ t('复制完整文档') }}</button>
+        <div class="context-menu-divider"></div>
+        <button class="context-action" type="button" :disabled="!menuCanSetField" @click="menuAction('null')">{{ t('设为 NULL') }}</button>
+        <button class="context-action" type="button" :disabled="!menuCanSetField" @click="menuAction('empty')">{{ t('设为空字符串') }}</button>
+        <button class="context-action" type="button" :disabled="!menuCanFilter" @click="menuAction('filter')">{{ t('按此值筛选') }}</button>
+        <p v-if="!menuCanEdit" class="context-edit-help">{{ t('编辑需要完整文档和写入权限。') }}</p>
       </div>
     </Teleport>
   </div>

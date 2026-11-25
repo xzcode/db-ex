@@ -6,7 +6,7 @@ import CodeEditor from './components/CodeEditor.vue'
 import ResultGrid from './components/ResultGrid.vue'
 import BsonColorSettings from './components/BsonColorSettings.vue'
 import BsonDocumentTree from './components/BsonDocumentTree.vue'
-import { formatMongoDocument, parseMongoDocumentEditor } from '../shared/bson-editor'
+import { canSafelyEditMongoDocument, formatMongoDocument, mongoDocumentDraft, mongoFieldFilter, mongoFieldText, parseMongoDocumentEditor } from '../shared/bson-editor'
 import type { BsonTypeBranch } from '../shared/bson-types'
 import { csvFromRows, sqlRowsFromFile, validateSqlRow } from './data-format'
 
@@ -191,6 +191,7 @@ function openEdit() {
     edit.value = { mode: 'update', text: JSON.stringify(original, null, 2), original }
   } else {
     const originalDocument = result.value!.documents![selectedRow.value]
+    if (!canSafelyEditMongoDocument(originalDocument, result.value?.bsonTypes?.[selectedRow.value])) { error.value = '文档包含无法安全编辑的 BSON 类型。'; return }
     const formatted = formatMongoDocument(originalDocument, result.value?.bsonTypes?.[selectedRow.value])
     edit.value = { mode: 'update', ...formatted, originalDocument }
   }
@@ -198,6 +199,40 @@ function openEdit() {
 function editMongoRow(index: number) {
   selectedRow.value = index
   openEdit()
+}
+async function mongoContextAction(action: 'add' | 'copy-value' | 'copy-document' | 'duplicate' | 'delete' | 'null' | 'empty' | 'filter', index: number, field?: string) {
+  const document = result.value?.documents?.[index]
+  if (!isMongo.value || !document || busy.value) return
+  const metadata = result.value?.bsonTypes?.[index]
+  try {
+    if (action === 'copy-document' || action === 'copy-value') {
+      const value = action === 'copy-document' ? JSON.stringify(JSON.parse(document), null, 2) : field === undefined ? undefined : mongoFieldText(document, metadata, field)
+      if (value === undefined) return
+      await window.dbex.copyText(value)
+      notice.value = '已复制到剪贴板'
+      return
+    }
+    if (tab.value !== 'data' || !hasEntity.value) return
+    if (action === 'filter') {
+      if (field === undefined) return
+      const condition = mongoFieldFilter(document, metadata, field)
+      if (!condition) return
+      const previous = JSON.parse(filter.value || '{}')
+      if (!previous || typeof previous !== 'object' || Array.isArray(previous)) throw new Error('格式无效，请检查 JSON / BSON / SQL 输入')
+      filter.value = JSON.stringify(Object.keys(previous).length ? { $and: [previous, condition] } : condition)
+      showMongoFilters.value = true
+      await loadData(0)
+      return
+    }
+    if (!props.session.writable) return
+    if (action === 'add') { openInsert(); return }
+    selectedRow.value = index
+    if (!canEditRow.value || !canSafelyEditMongoDocument(document, metadata)) return
+    if (action === 'delete') { await deleteRow(); return }
+    editError.value = ''; editNotice.value = ''
+    const formatted = mongoDocumentDraft(document, metadata, action, field)
+    edit.value = action === 'duplicate' ? { mode: 'insert', ...formatted } : { mode: 'update', originalDocument: document, ...formatted }
+  } catch (reason) { setError(reason) }
 }
 function mongoEditText(draft: NonNullable<typeof edit.value>): string {
   return draft.syntax === 'typed' ? parseMongoDocumentEditor(draft.text) : JSON.stringify(JSON.parse(draft.text))
@@ -250,6 +285,11 @@ async function saveEdit() {
         operation = { action: 'mongo.insert', ...entity.value, documents: documents.map(item => JSON.stringify(item)), confirmed: true }
       } else {
         const document = mongoEditText(draft)
+        const version = generation
+        validatingEdit.value = true
+        try { await window.dbex.validateMongoDocument(document, draft.originalDocument) }
+        finally { validatingEdit.value = false }
+        if (disposed || version !== generation || edit.value !== draft || !props.session.writable) return
         operation = draft.mode === 'insert'
           ? { action: 'mongo.insert', ...entity.value, documents: [document], confirmed: true }
           : { action: 'mongo.replace', ...entity.value, original: draft.originalDocument!, document, confirmed: true }
@@ -261,7 +301,8 @@ async function saveEdit() {
   } catch (reason) { editError.value = messageOf(reason) }
 }
 async function deleteRow() {
-  if (!canEditRow.value) return
+  if (!canEditRow.value || busy.value || tab.value !== 'data' || !props.session.writable) return
+  if (isMongo.value && !canSafelyEditMongoDocument(result.value!.documents![selectedRow.value], result.value?.bsonTypes?.[selectedRow.value])) { error.value = '文档包含无法安全编辑的 BSON 类型。'; return }
   if (!await confirmWrite('删除记录', `${entityTitle()}\n将删除当前选中的 1 条记录。`)) return
   try {
     const original = result.value?.rawRows?.[selectedRow.value]
@@ -455,7 +496,7 @@ onBeforeUnmount(() => { disposed = true; generation++ })
     <template v-else>
       <div v-if="tab === 'data' && isMongo && showMongoFilters" class="mongo-filters"><label>Filter<textarea v-model="filter" rows="2" spellcheck="false" /></label><label>Projection<textarea v-model="projection" rows="2" spellcheck="false" /></label><label>Sort<textarea v-model="sort" rows="2" spellcheck="false" /></label><button class="btn primary" :disabled="busy || !hasEntity" @click="loadData()">{{ t('查询') }}</button></div>
       <div class="editor-toolbar"><template v-if="tab === 'data' && !isRedis"><button v-if="isMongo" class="btn secondary small" :aria-expanded="showMongoFilters" :class="{ 'active-filter': filtersActive }" @click="showMongoFilters = !showMongoFilters">{{ t('查询条件') }} <span v-if="filtersActive">•</span></button><button class="btn secondary" :disabled="busy || !hasEntity" @click="loadData(offset)">{{ t('刷新') }}</button><button class="btn secondary" :disabled="busy || !hasEntity || !session.writable" @click="openInsert">{{ t('新增') }}</button><button class="btn secondary" :disabled="busy || !canEditRow || !session.writable" @click="openEdit">{{ t('编辑') }}</button><button class="btn danger-text" :disabled="busy || !canEditRow || !session.writable" @click="deleteRow">{{ t('删除') }}</button><button class="btn secondary" :disabled="busy || !hasEntity || !session.writable" @click="importData">{{ t('导入') }} {{ isMysql ? 'CSV / JSON' : 'EJSON' }}</button></template><button v-if="isMongo" class="btn secondary small" :disabled="selectedRow < 0 || !result?.documents?.[selectedRow]" @click="viewMongoDocument()">{{ t('查看文档') }}</button><span class="toolbar-spacer"></span><button class="btn secondary small" :disabled="!result?.rows.length" @click="exportData('json')">{{ t('导出当前页 JSON') }}</button><button class="btn secondary small" :disabled="!result?.rows.length" @click="exportData('csv')">CSV</button></div>
-      <ResultGrid v-if="result" :columns="result.columns" :rows="result.rows" :selected="selectedRow" :offset="offset" :bson-types="isMongo ? result.bsonTypes : undefined"  :documents="isMongo ? result.documents : undefined" :document-menu="isMongo && !!result.documents?.length && !busy" :can-edit-document="isMongo && tab === 'data' && editableRows && session.writable && !busy" @document-edit="editMongoRow" @document-view="viewMongoDocument" @select="selectedRow = $event" @open="openResultRow" />
+      <ResultGrid v-if="result" :columns="result.columns" :rows="result.rows" :selected="selectedRow" :offset="offset" :bson-types="isMongo ? result.bsonTypes : undefined"  :documents="isMongo ? result.documents : undefined" :document-menu="isMongo && !!result.documents?.length && !busy" :can-edit-document="isMongo && tab === 'data' && editableRows && session.writable && !busy" :can-add-document="isMongo && tab === 'data' && hasEntity && session.writable && !busy" :can-filter-document="isMongo && tab === 'data' && hasEntity && !busy" @document-action="mongoContextAction" @document-edit="editMongoRow" @document-view="viewMongoDocument" @select="selectedRow = $event" @open="openResultRow" />
       <div v-else class="empty-state"><span class="empty-icon">▤</span><strong>{{ hasEntity ? t('运行查询查看结果') : t('选择数据库中的表或集合') }}</strong><span>{{ isMysql ? t('可直接切换到 SQL 编辑器执行查询。') : t('使用左侧资源树选择目标。') }}</span></div>
       <footer class="result-footer"><span>{{ result?.rows.length || 0 }} {{ t('条记录') }}<span v-if="result?.durationMs !== undefined"> · {{ result.durationMs }} ms</span><span v-if="result?.truncated"> {{ t('· 已达到单页限制') }}</span></span><span v-if="isMongo && tab === 'data' && mongoQuery" class="mongo-query-summary" dir="ltr" :title="mongoQuery">{{ mongoQuery }}</span><div class="result-page-controls"><label v-if="isMongo && tab === 'data'" class="inline-field">{{ t('每页') }}<select v-model.number="limit" :disabled="busy || !hasEntity" @change="loadData()"><option :value="100">100</option><option :value="200">200</option><option :value="500">500</option></select></label><button v-if="offset > 0 && tab !== 'aggregation'" class="btn secondary small" :disabled="busy" @click="tab === 'query' ? runQuery(Math.max(0, offset - limit)) : loadData(Math.max(0, offset - limit))">{{ t('← 上一页') }}</button><button v-if="result?.nextOffset !== undefined && tab !== 'aggregation'" class="btn secondary small" :disabled="busy" @click="tab === 'query' ? runQuery(result.nextOffset) : loadData(result.nextOffset)">{{ t('下一页 →') }}</button></div><span>{{ session.writable ? t('可写会话') : t('只读会话') }}</span></footer>
     </template>
@@ -475,7 +516,7 @@ onBeforeUnmount(() => { disposed = true; generation++ })
         <header class="dialog-header"><div><span class="eyebrow">{{ entityTitle() }}</span><h2 id="edit-title">{{ edit.mode === 'update' ? t(isMongo ? '编辑文档' : '编辑记录') : edit.mode === 'import' ? t('导入预览') : t('新增记录') }}</h2></div><button class="icon-button" :aria-label="t('关闭')" :disabled="busy || validatingEdit" @click="edit = null">×</button></header>
         <div v-if="editError" class="inline-message error" role="alert">{{ localize(editError) }}</div>
         <div v-if="editNotice" class="inline-message notice" role="status">{{ t(editNotice) }}</div>
-        <div v-if="isMongo && edit.mode !== 'import'" class="mongo-edit-mode"><span class="muted-text">{{ t(edit.syntax === 'typed' ? 'BSON 文档语法' : '原始 EJSON') }}</span><button v-if="edit.syntax === 'typed'" class="btn secondary small" type="button" :disabled="busy || validatingEdit" @click="useRawEjson">{{ t('原始 EJSON') }}</button><span class="toolbar-spacer"></span><span class="muted-text">{{ t('修改时必须保留 _id') }}</span></div>
+        <div v-if="isMongo && edit.mode !== 'import'" class="mongo-edit-mode"><span class="muted-text">{{ t(edit.syntax === 'typed' ? 'BSON 文档语法' : '原始 EJSON') }}</span><button v-if="edit.syntax === 'typed'" class="btn secondary small" type="button" :disabled="busy || validatingEdit" @click="useRawEjson">{{ t('原始 EJSON') }}</button><span class="toolbar-spacer"></span><span class="muted-text">{{ t(edit.mode === 'update' ? '修改时必须保留 _id' : '未指定 _id 时自动生成') }}</span></div>
         <p v-else class="compact-help">{{ isMysql ? t('JSON 字段值支持字符串、数字、布尔、null；BIGINT / DECIMAL 请使用字符串。省略自增字段可使用默认值。') : t('使用 Extended JSON 保留 ObjectId、Date、Decimal128 等 BSON 类型；修改时必须保留 _id。') }}</p>
         <div class="document-editor"><CodeEditor v-model="edit.text" :language="edit.syntax === 'typed' ? 'dbex-bson-document' : 'json'" :readonly="!session.writable || busy || validatingEdit" /></div>
         <footer class="dialog-footer"><button v-if="isMongo && edit.mode !== 'import'" class="btn secondary" type="button" :disabled="busy || validatingEdit" @click="validateEdit">{{ t(validatingEdit ? '处理中…' : '验证') }}</button><span v-if="isMongo && edit.mode !== 'import'" class="toolbar-spacer"></span><button class="btn secondary" :disabled="busy || validatingEdit" @click="edit = null">{{ t('取消') }}</button><button class="btn primary" :disabled="busy || validatingEdit || !session.writable" @click="saveEdit">{{ t(isMongo && edit.mode === 'update' ? '更新' : '审阅并保存') }}</button></footer>

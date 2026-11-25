@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, session as electronSession } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, session as electronSession } from 'electron'
 import { isLocale, resolveLocale, translate, localizeMessage, type Locale } from '../shared/i18n'
 import { join, basename, extname } from 'node:path'
 import { readFile, stat, writeFile } from 'node:fs/promises'
@@ -132,6 +132,10 @@ function registerIpc(): void {
       await confirm(win, '确认执行数据库写操作？', operationDetail(id, operation))
     }
     return sessions.execute(id, operation)
+  }))
+  ipcMain.handle('clipboard:copy-text', handler((_win, value: unknown) => {
+    if (typeof value !== 'string' || Buffer.byteLength(value, 'utf8') > 2 * 1024 * 1024) throw new Error('LIMIT_EXCEEDED: 剪贴板文本过大')
+    clipboard.writeText(value)
   }))
   ipcMain.handle('mongo:validate-document', handler((_win, document: string, original?: string) => validateMongoDocumentEdit(document, original)))
   ipcMain.handle('sessions:cancel', handler((_win, id: string) => sessions.cancel(id)))

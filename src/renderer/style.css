@@ -455,3 +455,7 @@ html[dir=rtl] .tree-chevron:not(.expanded) { transform: rotate(180deg); }
 .mongo-edit-mode { display: flex; align-items: center; gap: 8px; padding: 6px 14px; border-bottom: 1px solid var(--border-soft); }
 .mongo-edit-dialog .dialog-footer { padding: 10px 14px; }
 .mongo-edit-dialog .document-editor { min-height: 200px; direction: ltr; }
+
+.mongo-row-menu { width: 248px; max-height: calc(100dvh - 8px); overflow-y: auto; }
+.mongo-row-menu .context-action { padding: 6px 9px; }
+.context-menu-divider { height: 1px; background: var(--border-soft); margin: 3px 2px; }

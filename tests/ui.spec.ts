@@ -58,6 +58,7 @@ async function installBridge(page: Page) {
         return { columns: [], rows: [], affectedRows: 1, message: '操作已完成' }
       },
       async cancel(id: string) { calls.push({ action: 'cancel', id }) },
+      async copyText(value: string) { calls.push({ action: 'copyText', value }) },
       async validateMongoDocument(document: string, original?: string) { calls.push({ action: 'validateMongoDocument', document, original }) },
       async setWriteAccess(id: string, writable: boolean) { sessions[id] = { ...sessions[id], writable }; calls.push({ action: 'writeAccess', id, writable }); return sessions[id] },
       async listSnippets() { return [] }, async saveSnippet(value: any) { return { ...value, id: 'snippet', updatedAt: new Date().toISOString() } }, async deleteSnippet() {},
@@ -142,11 +143,11 @@ test('MongoDB right-click document editor uses typed syntax, validates locally a
   await connect(page, 'Mongo Local'); await openUsers(page)
   const row = page.locator('.workbench:visible .data-table tbody tr').first()
   await row.click({ button: 'right' })
-  await expect(page.locator('.mongo-row-menu').getByRole('button', { name: '编辑文档' })).toBeDisabled()
+  await expect(page.locator('.mongo-row-menu').getByRole('button', { name: '编辑文档…' })).toBeDisabled()
   await page.keyboard.press('Escape')
   await page.getByRole('button', { name: '只读 · 启用写入', exact: true }).click()
   await row.click({ button: 'right' })
-  await page.locator('.mongo-row-menu').getByRole('button', { name: '编辑文档' }).click()
+  await page.locator('.mongo-row-menu').getByRole('button', { name: '编辑文档…' }).click()
   const editor = page.getByRole('dialog', { name: '编辑文档' })
   await expect(editor.locator('.document-editor')).toContainText('ObjectId')
   await expect(editor.locator('.document-editor')).toContainText('Int32')
@@ -162,7 +163,7 @@ test('MongoDB right-click document editor uses typed syntax, validates locally a
   await page.getByLabel('Projection', { exact: true }).fill('{"name":1}')
   await page.getByRole('button', { name: '查询', exact: true }).click()
   await row.click({ button: 'right' })
-  await expect(page.locator('.mongo-row-menu').getByRole('button', { name: '编辑文档' })).toBeDisabled()
+  await expect(page.locator('.mongo-row-menu').getByRole('button', { name: '编辑文档…' })).toBeDisabled()
   await page.keyboard.press('Escape')
   await expect(page.getByRole('button', { name: '编辑', exact: true })).toBeDisabled()
 })
@@ -440,4 +441,33 @@ test('connection settings use optional custom groups and colors, not fixed envir
   await expect(page.locator('.env-tag')).toHaveCount(0)
   await connect(page, 'MySQL Local')
   await expect(page.locator('.workbench:visible .workbench-header .eyebrow')).toHaveText('MYSQL')
+})
+
+test('MongoDB row and cell menu copies exact values, prepares duplicate and field drafts, and filters by value', async ({ page }) => {
+  await connect(page, 'Mongo Local'); await openUsers(page)
+  const row = page.locator('.workbench:visible .data-table tbody tr[data-row-index="0"]')
+  const cell = row.locator('[data-mongo-field="score"]')
+  const menu = page.locator('.mongo-row-menu')
+  await cell.click({ button: 'right' })
+  await menu.getByRole('button', { name: '复制字段值', exact: true }).click()
+  await expect.poll(() => page.evaluate(() => (window as any).__dbexCalls.find((c: any) => c.action === 'copyText')?.value)).toBe('7')
+  await cell.click({ button: 'right' })
+  await menu.getByRole('button', { name: '复制完整文档', exact: true }).click()
+  await expect.poll(() => page.evaluate(() => (window as any).__dbexCalls.filter((c: any) => c.action === 'copyText').at(-1)?.value)).toContain('$numberInt')
+  await page.getByRole('button', { name: '只读 · 启用写入', exact: true }).click()
+  await cell.click({ button: 'right' })
+  await menu.getByRole('button', { name: '复制为新文档…', exact: true }).click()
+  const draft = page.getByRole('dialog', { name: '新增记录' })
+  await expect(draft.locator('.document-editor')).toContainText('Int32')
+  await expect(draft.locator('.document-editor')).not.toContainText('"_id"')
+  await draft.getByRole('button', { name: '取消', exact: true }).click()
+  await cell.click({ button: 'right' })
+  await menu.getByRole('button', { name: '设为 NULL', exact: true }).click()
+  const edit = page.getByRole('dialog', { name: '编辑文档' })
+  await expect(edit.locator('.document-editor')).toContainText('null')
+  await edit.getByRole('button', { name: '取消', exact: true }).click()
+  await expect.poll(() => page.evaluate(() => (window as any).__dbexCalls.filter((c: any) => ['mongo.insert','mongo.replace','mongo.delete'].includes(c.action)).length)).toBe(0)
+  await cell.click({ button: 'right' })
+  await menu.getByRole('button', { name: '按此值筛选', exact: true }).click()
+  await expect(page.getByLabel('Filter', { exact: true })).toHaveValue('{"score":{"$eq":{"$numberInt":"7"}}}')
 })

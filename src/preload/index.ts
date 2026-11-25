@@ -22,6 +22,7 @@ const api: DbExAPI = {
   redisValue: (id, key) => ipcRenderer.invoke('explorer:redis-value', id, key),
   execute: (id, operation) => ipcRenderer.invoke('sessions:execute', id, operation),
   validateMongoDocument: (document, original) => ipcRenderer.invoke('mongo:validate-document', document, original),
+  copyText: value => ipcRenderer.invoke('clipboard:copy-text', value),
   cancel: id => ipcRenderer.invoke('sessions:cancel', id),
   setWriteAccess: (id, enabled) => ipcRenderer.invoke('sessions:write-access', id, enabled),
   listSnippets: () => ipcRenderer.invoke('snippets:list'),
