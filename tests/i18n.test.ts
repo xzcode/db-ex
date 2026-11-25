@@ -61,3 +61,7 @@ test('BSON appearance and expanded color picker controls have translations in ev
 test('compact MongoDB grid summaries and controls are localized', () => {
   for (const { locale } of languages) if (locale !== 'zh-CN') for (const key of ['(Array) {0} 个元素','(Document) {0} 个字段','(Binary) {0} 字节','查询条件','调整列宽']) assert.ok(Object.hasOwn(catalogs[locale], key), locale + ': ' + key)
 })
+
+test('MongoDB document context and editor commands are localized in every language', () => {
+  for (const { locale } of languages) if (locale !== 'zh-CN') for (const key of ["编辑文档","新增文档","删除文档","复制为新文档","复制字段值","复制完整文档","设为 NULL","设为空字符串","按此值筛选","编辑需要完整文档和写入权限。","BSON 文档语法","修改时必须保留 _id","未指定 _id 时自动生成","验证","更新","文档验证通过","已复制到剪贴板","文档包含无法安全编辑的 BSON 类型。","无法修改此字段。","BSON_EDITOR_INVALID: 文档语法或类型无效（第 {0} 行，第 {1} 列）","INVALID_DOCUMENT: 文档 BSON 类型无效","LIMIT_EXCEEDED: 剪贴板文本过大"]) assert.ok(Object.hasOwn(catalogs[locale], key), locale + ': ' + key)
+})

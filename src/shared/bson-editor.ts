@@ -256,7 +256,7 @@ export function mongoFieldText(canonical: string, metadata: BsonTypeTree | undef
   const value = doc[field], type = typeName(childType(metadata, field))
   if (typeof value === 'string') return value
   if (value === null) return 'null'
-  if (type === 'Document' || type === 'Array' || type === 'Unknown' || type === 'Binary' || type === 'JavaScript' || type === 'JavaScriptWithScope') return JSON.stringify(value)
+  if (type === 'Document' || type === 'Array' || type === 'Unknown' || type === 'Binary' || type === 'JavaScript' || type === 'JavaScriptWithScope' || type === 'Regex' || type === 'DBRef' || type === 'Symbol') return JSON.stringify(value)
   return formatBsonValue(type, value)
 }
 export function mongoFieldFilter(canonical: string, metadata: BsonTypeTree | undefined, field: string): Record<string, unknown> | undefined {
