@@ -248,3 +248,10 @@ MySQL/MongoDB 集成测试用 `DB_EX_INTEGRATION=1` 显式开启，连接 `MYSQL
 - Based on merged v0.7.0. Table-level management views for partitions/compression, mutation tasks, replica status, and 24-hour aggregate query statistics, with scoped typed parameters, read-only settings, result limits, pagination, restored tab and 14-language UI.
 - Targeted local unit/locale/workspace regression: 22 passed. Real ClickHouse fixture tests extended; acceptance requires actual CI results, including server metadata compatibility and native package checks.
 - See [M10 management scope](M10_CLICKHOUSE_MANAGEMENT.md). Guarded mutation/partition writes, streaming data and backup workflows, additional topology compatibility and remaining common M10 enhancements are not yet complete.
+
+### M10 advanced management — development candidate (2026-11-25)
+
+- M10.1 merged-baseline candidate CI passed (run 45621004958); v0.7.0 Preview is published.
+- Implemented explicit scoped ClickHouse mutation and partition administration, bounded streaming CSV/JSONL/Parquet transfers, asynchronous authorized-disk table backup/restore and status, native tool routing/TLS policy, metadata completion cache/refresh and multi-tab encrypted query draft recovery.
+- Local unit regression: 145 passed, 8 skipped (environment dependencies); final ClickHouse unit rerun 7 passed; 6 focused UI cases passed; real ClickHouse 25.8.33.6 over SOCKS passed the advanced workflow above. Typecheck and production build passed.
+- Remaining limitations: lightweight mutations, true shard/replica topology, MariaDB-specific object expansion, interactive CLI, multi-window recovery and wider native TLS/SSH/tool verification. See [M10 management scope](M10_CLICKHOUSE_MANAGEMENT.md) for explicit boundaries. Not yet a release; require exact candidate CI and native package verification.

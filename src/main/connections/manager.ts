@@ -130,6 +130,19 @@ export class SessionManager {
     const controller=new AbortController();session.controller=controller
     try{return await work(session.config,controller.signal)}finally{session.controller=undefined}
   }
+  async routedExternal<T>(id:string,write:boolean,work:(config:ConnectionConfig,signal:AbortSignal,route?:{host:string;port:number})=>Promise<T>){
+    const session=this.session(id)
+    return this.external(id,write,async(config,signal)=>{
+      if((config.ssh.enabled||config.proxy?.enabled)&&config.tls.enabled)throw new Error('NATIVE_TOOL_CONNECTION: 不支持此原生工具连接方式。')
+      const route=config.ssh.enabled||config.proxy?.enabled?await session.transport.forward(config.host,config.port):undefined
+      return work(config,signal,route)
+    })
+  }
+  async clickhouseTransfer(id:string,input:import('../../shared/types').ClickHouseTransfer,path:string){
+    const session=this.session(id),driver=session.driver
+    if(session.info.kind!=='clickhouse'||!driver.transfer)throw new Error('INVALID_OPERATION: ClickHouse transfer')
+    return this.external(id,input.direction==='import',(_config,signal)=>driver.transfer!(input,path,{writable:session.info.writable,confirmed:true,signal}))
+  }
   async execute(id: string, input: DatabaseOperation): Promise<OperationResult> {
     if (!input || typeof input !== 'object' || !isKnownDatabaseAction(input.action)) throw new Error('INVALID_OPERATION: 不支持的操作')
     if (Buffer.byteLength(JSON.stringify(input)) > 4 * 1024 * 1024) throw new Error('LIMIT_EXCEEDED: 单次操作参数最多4 MiB')

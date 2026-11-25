@@ -23,7 +23,7 @@ import ConfirmDialog from './components/ConfirmDialog.vue'
 import { useConfirmation } from './composables/useConfirmation'
 import type { ConnectionAppearancePatch, ConnectionDraft, ExplorerNode, SavedConnection, SessionInfo } from '../shared/types'
 
-interface ObjectTab {node:ExplorerNode;tab?:WorkbenchTab;busy?:boolean;dirty?:boolean}
+interface ObjectTab {node:ExplorerNode;tab?:WorkbenchTab;busy?:boolean;dirty?:boolean;mounted?:boolean}
 interface ExplorerState { roots: ExplorerNode[]; children: Record<string, ExplorerNode[]>; expanded: string[]; selected?: ExplorerNode; tab?:WorkbenchTab; busy: boolean; loading: Set<string>; tabs:ObjectTab[]; activeObject?:string; catalog?:ExplorerNode; catalogVisible:boolean; baseBusy?:boolean; baseTab?:WorkbenchTab }
 const connections = ref<SavedConnection[]>([])
 const sessions = ref<SessionInfo[]>([])
@@ -65,7 +65,7 @@ function workspaceSnapshot(){
     if(!s.connectionId||ids.includes(s.connectionId))continue
     ids.push(s.connectionId)
     const state=explorers[s.id]
-    positions[s.connectionId]=workspacePosition(state?.selected,state?.tab)
+    positions[s.connectionId]={...workspacePosition(state?.selected,state?.tab),tabs:state?.tabs.map(item=>workspacePosition(item.node,item.tab))}
   }
   return normalizeWorkspace({ids,active:activeSession.value?.connectionId,positions})
 }
@@ -90,8 +90,9 @@ function openObject(state:ExplorerState,node:ExplorerNode,tab?:WorkbenchTab){
  let item=state.tabs.find(x=>x.node.id===node.id||!!node.queryId&&x.node.queryId===node.queryId)
  if(!item){
    if(state.tabs.length>=12){error.value='最多打开 12 个对象标签页，请先关闭不使用的标签页。';return}
-   state.tabs.push({node,tab});item=state.tabs[state.tabs.length-1]!
+   state.tabs.push({node,tab,mounted:!restoringWorkspace});item=state.tabs[state.tabs.length-1]!
  }
+ if(!restoringWorkspace)item.mounted=true
  state.activeObject=item.node.id;state.catalogVisible=false;state.selected=item.node;state.tab=item.tab||'data'
 }
 function activateObject(id:string,node:ExplorerNode){const state=explorers[id];if(!state||sessionBusy(state))return;openObject(state,node)}
@@ -139,10 +140,10 @@ async function restorePosition(session:SessionInfo,position:WorkspacePosition|un
   if(!state||!position)return
   state.tab=validWorkbenchTab(session.kind,position.tab)
   const desired=position.node
-  if(!desired){state.baseTab=state.tab;return}
+  if(!desired){state.baseTab=state.tab;if(state.tabs.length&&session.kind!=='redis')showCatalog(state);return}
   const root=state.roots.find(n=>n.database===desired.database)
   if(!root)return
-  if(desired.kind==='database'){showCatalog(state,root);state.expanded=[root.id];await loadCatalog(session.id,root);return}
+  if(desired.kind==='database'){showCatalog(state,root);state.expanded=[...new Set([...state.expanded,root.id])];await loadCatalog(session.id,root);return}
   if(desired.kind==='keyspace'){state.selected=root;state.baseTab=state.tab;return}
   if(desired.kind==='saved-query'&&desired.queryId&&session.connectionId&&session.kind!=='redis'){
     const item=await window.dbex.getSavedQuery(session.id,desired.database,desired.queryId)
@@ -151,13 +152,20 @@ async function restorePosition(session:SessionInfo,position:WorkspacePosition|un
   }
   if((desired.kind==='query-folder'||desired.kind==='mongo-category'&&(desired.category==='queries'||desired.category==='pipelines'))&&session.kind!=='redis'){
     const folder=queryFolder(desired.database,session.kind,desired.queryMode||(session.kind==='mongodb'?(desired.category==='pipelines'?'mongo-aggregation':'mongo-find'):'sql'))
-    showCatalog(state,folder);await loadCatalog(session.id,root);state.expanded=[root.id,folder.id];await loadCatalog(session.id,folder);return
+    showCatalog(state,folder);await loadCatalog(session.id,root);state.expanded=[...new Set([...state.expanded,root.id,folder.id])];await loadCatalog(session.id,folder);return
   }
   if(desired.kind==='database-query'&&databaseCapabilities(session.kind).editor==='query'){openQuery(session.id,desired.database);return}
+  if(desired.kind==='saved-query'&&desired.draftId&&session.connectionId&&session.kind!=='redis'){
+    const mode=desired.queryMode||(session.kind==='mongodb'?'mongo-find':'sql')
+    if((session.kind==='mongodb')===(mode==='sql'))return
+    state.catalog=queryFolder(desired.database,session.kind,mode)
+    openObject(state,{id:'query-draft:'+desired.draftId,draftId:desired.draftId,kind:'saved-query',label:'未命名查询',database:desired.database,queryMode:mode},position.tab)
+    return
+  }
   if(desired.kind==='saved-query'){showCatalog(state,root);return}
 
   await loadCatalog(session.id,root)
-  const children=state.children[root.id]||[];state.expanded=[root.id]
+  const children=state.children[root.id]||[];state.expanded=[...new Set([...state.expanded,root.id])]
   let found=matchWorkspaceNode(children,desired)
   if(session.kind==='mongodb'&&!found){
     const category=categoryForNode(desired)
@@ -279,13 +287,13 @@ function actualQueryFolder(state:ExplorerState,database:string,kind:import('../s
  const matches=(node:ExplorerNode|undefined):node is ExplorerNode=>!!node&&node.database===database&&isQueryFolder(node)&&folderQueryMode(node)===mode
  return Object.values(state.children).flat().find(matches)||(matches(state.catalog)?state.catalog:queryFolder(database,kind,mode))
 }
-let querySerial=0
 function openQuery(id:string,database?:string,explicitMode?:QueryMode){
  const state=explorers[id],session=sessions.value.find(item=>item.id===id)
  if(!state||!session||!database||sessionBusy(state)||session.kind==='redis')return
  const mode=explicitMode||(session.kind==='mongodb'?(state.catalog?.database===database&&isQueryFolder(state.catalog)?folderQueryMode(state.catalog!):'mongo-find'):'sql')
  state.catalog=actualQueryFolder(state,database,session.kind,mode)
- const node:ExplorerNode={id:JSON.stringify(['query-draft',database,mode,++querySerial]),kind:'saved-query',label:'未命名查询',database,queryMode:mode}
+ const draftId=crypto.randomUUID()
+ const node:ExplorerNode={id:'query-draft:'+draftId,draftId,kind:'saved-query',label:'未命名查询',database,queryMode:mode}
  openObject(state,node,mode==='sql'?'query':'data')
 }
 function querySaved(id:string,tabId:string,value:QuerySummary){
@@ -415,7 +423,13 @@ onMounted(() => {
         if(item&&!sessions.value.length)await connectSaved(item)
       }else if(preferences.value.startup==='workspace'){
         const saved=normalizeWorkspace(JSON.parse(localStorage.getItem('dbex.workspace.v1')||'{}'))
-        for(const id of saved.ids){const item=connections.value.find(value=>value.id===id&&!value.locked);if(item){await connectSaved(item);const session=sessions.value.find(s=>s.connectionId===id);if(session)try{await restorePosition(session,saved.positions[id])}catch(reason){error.value=messageOf(reason)}}}
+        for(const id of saved.ids){const item=connections.value.find(value=>value.id===id&&!value.locked);if(item){await connectSaved(item);const session=sessions.value.find(s=>s.connectionId===id);if(session){
+          const position=saved.positions[id]
+          for(const tab of position?.tabs||[])try{await restorePosition(session,tab)}catch(reason){error.value=messageOf(reason)}
+          try{await restorePosition(session,position)}catch(reason){error.value=messageOf(reason)}
+          const state=explorers[session.id],activeTab=state?.tabs.find(tab=>tab.node.id===state.activeObject)
+          if(activeTab)activeTab.mounted=true
+        }}}
         const active=sessions.value.find(s=>s.connectionId===saved.active);if(active)current.value=active.id
       }
     }catch{}finally{restoringWorkspace=false;workspaceReady.value=true;persistWorkspace()}
@@ -447,9 +461,11 @@ onBeforeUnmount(() => { stopResize?.(); window.removeEventListener('pointerdown'
     <ObjectList v-if="explorers[session.id]?.catalogVisible" :kind="session.kind" :node="explorers[session.id]?.catalog" :nodes="catalogNodes(explorers[session.id])" :busy="busy||sessionBusy(explorers[session.id])" :can-save-queries="!!session.connectionId" @query-action="(action,node,name)=>catalogQueryAction(session.id,action,node,name)" @open="toggleRoot($event,true,session.id)" @query="openQuery(session.id,explorers[session.id]?.catalog?.database)" @refresh="refreshCatalog(session.id)" />
     <DatabaseWorkbench v-if="session.kind!=='clickhouse'" v-show="!explorers[session.id]?.catalogVisible&&!explorers[session.id]?.activeObject" :session="session" :node="session.kind==='redis'?explorers[session.id]?.selected:undefined" :initial-tab="explorers[session.id]?.baseTab" :active="session.id===current&&!explorers[session.id]?.catalogVisible&&!explorers[session.id]?.activeObject" @tab-change="workbenchTabChanged(session.id,$event)" @busy-change="workbenchBusyChanged(session.id,$event)" @update-session="updateSession" @disconnect="removeSession(session.id)" @refresh-tree="refreshRoots(session.id)" />
     <template v-for="item in explorers[session.id]?.tabs||[]" :key="item.node.id">
-      <SavedQueryEditor v-if="item.node.kind==='saved-query'" v-show="explorers[session.id]?.activeObject===item.node.id" :session="session" :node="item.node" :active="session.id===current&&explorers[session.id]?.activeObject===item.node.id" :table-suggestions="Object.values(explorers[session.id]?.children||{}).flat().filter(n=>n.kind==='table'||n.kind==='view').map(n=>n.label)" @saved="querySaved(session.id,item.node.id,$event)" @busy-change="workbenchBusyChanged(session.id,$event,item.node.id)" @dirty-change="workbenchDirtyChanged(session.id,$event,item.node.id)" @update-session="updateSession" @disconnect="removeSession(session.id)" />
+    <template v-if="item.mounted">
+      <SavedQueryEditor v-if="item.node.kind==='saved-query'" v-show="explorers[session.id]?.activeObject===item.node.id" :session="session" :node="item.node" :active="session.id===current&&explorers[session.id]?.activeObject===item.node.id" :table-suggestions="Object.values(explorers[session.id]?.children||{}).flat().filter(n=>(n.kind==='table'||n.kind==='view')&&n.database===item.node.database).map(n=>n.label)" @saved="querySaved(session.id,item.node.id,$event)" @busy-change="workbenchBusyChanged(session.id,$event,item.node.id)" @dirty-change="workbenchDirtyChanged(session.id,$event,item.node.id)" @update-session="updateSession" @disconnect="removeSession(session.id)" />
     <ClickHouseWorkbench v-else-if="session.kind==='clickhouse'" v-show="explorers[session.id]?.activeObject===item.node.id" :session="session" :node="item.node" :active="session.id===current&&explorers[session.id]?.activeObject===item.node.id" :initial-tab="item.tab" @tab-change="workbenchTabChanged(session.id,$event,item.node.id)" @busy-change="workbenchBusyChanged(session.id,$event,item.node.id)" @dirty-change="workbenchDirtyChanged(session.id,$event,item.node.id)" @update-session="updateSession" @disconnect="removeSession(session.id)" />
-    <DatabaseWorkbench v-else v-show="explorers[session.id]?.activeObject===item.node.id"  :session="session" :node="item.node" :initial-tab="item.tab" :active="session.id===current&&explorers[session.id]?.activeObject===item.node.id" :table-suggestions="Object.values(explorers[session.id]?.children || {}).flat().filter(n=>n.kind==='table'||n.kind==='view').map(n=>n.label)" @tab-change="workbenchTabChanged(session.id,$event,item.node.id)" @busy-change="workbenchBusyChanged(session.id,$event,item.node.id)" @dirty-change="workbenchDirtyChanged(session.id,$event,item.node.id)" @update-session="updateSession" @disconnect="removeSession(session.id)" @refresh-tree="refreshRoots(session.id)" />
+    <DatabaseWorkbench v-else v-show="explorers[session.id]?.activeObject===item.node.id"  :session="session" :node="item.node" :initial-tab="item.tab" :active="session.id===current&&explorers[session.id]?.activeObject===item.node.id" :table-suggestions="Object.values(explorers[session.id]?.children || {}).flat().filter(n=>(n.kind==='table'||n.kind==='view')&&n.database===item.node.database).map(n=>n.label)" @tab-change="workbenchTabChanged(session.id,$event,item.node.id)" @busy-change="workbenchBusyChanged(session.id,$event,item.node.id)" @dirty-change="workbenchDirtyChanged(session.id,$event,item.node.id)" @update-session="updateSession" @disconnect="removeSession(session.id)" @refresh-tree="refreshRoots(session.id)" />
+    </template>
     </template>
   </section>
 </template></div></div>

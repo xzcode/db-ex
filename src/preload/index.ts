@@ -36,6 +36,7 @@ const api: DbExAPI = {
   redisKeys: (id, cursor, pattern) => ipcRenderer.invoke('explorer:redis-keys', id, cursor, pattern),
   redisValue: (id, key) => ipcRenderer.invoke('explorer:redis-value', id, key),
   execute: (id, operation) => ipcRenderer.invoke('sessions:execute', id, operation),
+  clickhouseTransfer: (id,input)=>ipcRenderer.invoke('sessions:clickhouse-transfer',id,input),
   validateMongoDocument: (document, original) => ipcRenderer.invoke('mongo:validate-document', document, original),
   copyText: value => ipcRenderer.invoke('clipboard:copy-text', value),
   cancel: id => ipcRenderer.invoke('sessions:cancel', id),

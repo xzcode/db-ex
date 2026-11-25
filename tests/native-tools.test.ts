@@ -15,3 +15,20 @@ test('native tools use structured args and private credential files rather than 
 test('native tool version performs a real shell-free executable invocation',async()=>{
  assert.match(await toolVersion(process.execPath),/^v\d+\./)
 })
+
+test('native tools allow verified single-host TLS and explicitly routed non-TLS endpoints without downgrading security',()=>{
+ const mysql=newConnectionConfig('mysql'),maria=newConnectionConfig('mariadb'),mongo=newConnectionConfig('mongodb')
+ const tls={...mysql.tls,enabled:true,caPath:'/tmp/ca.pem'}
+ const direct=nativeToolCommand('mysql-backup',{...mysql,tls},'app',undefined,'/tmp/client.cnf','/tmp/dump.sql')
+ assert(direct.args.includes('--ssl-mode=VERIFY_IDENTITY'));assert.match(direct.contents,/ssl-ca=/)
+ const mariadb=nativeToolCommand('mariadb-backup',{...maria,tls},'app',undefined,'/tmp/client.cnf','/tmp/dump.sql')
+ assert(mariadb.args.includes('--ssl-verify-server-cert'))
+ const routed={...mysql,ssh:{...mysql.ssh,enabled:true}}
+ const via=nativeToolCommand('mysql-backup',routed,'app',undefined,'/tmp/client.cnf','/tmp/dump.sql',{host:'127.0.0.1',port:51234})
+ assert.match(via.contents,/port=51234/);assert.match(via.contents,/host="127.0.0.1"/)
+ assert.throws(()=>nativeToolCommand('mysql-backup',{...routed,tls},'app',undefined,'/tmp/client.cnf','/tmp/dump.sql',{host:'127.0.0.1',port:51234}),/NATIVE_TOOL_CONNECTION/)
+ assert.throws(()=>nativeToolCommand('mysql-backup',routed,'app',undefined,'/tmp/client.cnf','/tmp/dump.sql',{host:'remote',port:51234}),/NATIVE_TOOL_CONNECTION/)
+ const m=nativeToolCommand('mongo-backup',{...mongo,tls},'app',undefined,'/tmp/client.yml','/tmp/dump.archive')
+ assert(m.args.includes('--sslCAFile=/tmp/ca.pem'));assert.match(m.contents,/tls=true/)
+ assert.throws(()=>nativeToolCommand('mongo-backup',{...mongo,tls:{...tls,certPath:'/tmp/cert.pem'}},'app',undefined,'/tmp/client.yml','/tmp/dump.archive'),/NATIVE_TOOL_CONNECTION/)
+})

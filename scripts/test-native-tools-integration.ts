@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { readFile, readdir, stat } from 'node:fs/promises'
 import mysql from 'mysql2/promise'
 import { MongoClient, ObjectId, Long } from 'mongodb'
+import { createTransport } from '../src/main/connections/transport'
 import { SessionManager } from '../src/main/connections/manager'
 import { runNativeTool } from '../src/main/operations/native-tools'
 import { newConnectionConfig } from '../src/shared/connection-form'
@@ -63,6 +64,17 @@ try{
       assert.match(node?.metrics?.find(metric=>metric.label==='存储大小')?.value||'',/^\d+$/)
     }
     console.log('MySQL and MongoDB object catalogs returned real storage metadata')
+    const proxy=await createTransport({ssh:mysqlConfig.ssh})
+    try{
+      const endpoint=await proxy.socks()
+      const routedSql=await manager.connect({...mysqlConfig,database,proxy:{enabled:true,type:'socks5',...endpoint}})
+      const routedMongo=await manager.connect({...mongoConfig,database,proxy:{enabled:true,type:'socks5',...endpoint}})
+      for(const [id,tool,task,output] of [[routedSql.id,'mysqldump','mysql-backup','routed.sql'],[routedMongo.id,'mongodump','mongo-backup','routed.archive']] as const){
+        await manager.routedExternal(id,false,(config,signal,route)=>runNativeTool(join(fixture,'bin',tool),task,config,database,undefined,join(fixture,output),signal,route))
+        assert((await stat(join(fixture,output))).size>0)
+      }
+      console.log('MySQL and MongoDB native backup over authenticated SOCKS transport passed')
+    }finally{await proxy.close()}
   }finally{await manager.closeAll()}
   assert.deepEqual((await readdir(fixture)).filter(name=>name.startsWith('dbex-tool-')||name.startsWith('.dbex-export-')),[])
   console.log('Native-tool credentials and staging directories cleaned')

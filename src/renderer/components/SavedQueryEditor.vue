@@ -10,6 +10,7 @@ import ResultGrid from './ResultGrid.vue'
 import {compileMongoScript,mongoPageOperation,legacyMongoScript,type MongoScriptPlan} from '../../shared/mongo-query-script'
 import {formatQuery} from '../../shared/query-format'
 import {useQueryRecovery} from '../composables/useQueryRecovery'
+import {cachedMetadata,rememberMetadata,metadataFields,metadataKey,inferMetadataTable} from '../metadata-completion'
 const props=defineProps<{session:SessionInfo;node:ExplorerNode;active:boolean;tableSuggestions?:string[]}>()
 const emit=defineEmits<{saved:[value:QuerySummary];busyChange:[value:boolean];dirtyChange:[value:boolean];updateSession:[session:SessionInfo];disconnect:[]}>()
 const database=props.node.database||''
@@ -27,6 +28,35 @@ let disposed=false
 let applied:DatabaseOperation|undefined
 let appliedMongoPlan:MongoScriptPlan|undefined
 const appliedPageSize=ref(100)
+const metadataColumns=ref<string[]>([]),metadataTables=ref<string[]>([])
+const sqlTables=computed(()=>[...new Set([...metadataTables.value,...(props.tableSuggestions||[])])])
+const selectedMetadataTable=computed(()=>inferMetadataTable(sql.value,sqlTables.value,database))
+let metadataTimer:ReturnType<typeof setTimeout>|undefined
+async function refreshMetadataTables(){
+ if(mode!=='sql'||props.session.kind==='redis')return
+ const objects=await window.dbex.children(props.session.id,database)
+ metadataTables.value=objects.filter(n=>n.kind==='table'||n.kind==='view').map(n=>n.entity||n.label)
+}
+async function loadMetadata(force=false){
+ const table=selectedMetadataTable.value
+ if(!table||mode!=='sql'||busy.value||!loaded.value||!props.active)return
+ await task(async()=>{
+  const key=metadataKey(props.session.id,database,table)
+  const cached=force?undefined:cachedMetadata(key)
+  if(cached){metadataColumns.value=cached;return}
+  if(force)await refreshMetadataTables()
+  if(!metadataTables.value.includes(table)&&!props.tableSuggestions?.includes(table)){metadataColumns.value=[];return}
+  const result=await window.dbex.execute(props.session.id,{action:clickhouse?'clickhouse.structure':'mysql.structure',database,entity:table})
+  const fields=rememberMetadata(key,metadataFields(props.session.kind,result))
+  if(selectedMetadataTable.value===table)metadataColumns.value=fields
+ })
+}
+const sqlFields=computed(()=>[...new Set([...metadataColumns.value,...(result.value?.columns||[])])])
+watch([selectedMetadataTable,loaded,()=>props.active],()=>{
+ if(metadataTimer)clearTimeout(metadataTimer)
+ metadataColumns.value=selectedMetadataTable.value?cachedMetadata(metadataKey(props.session.id,database,selectedMetadataTable.value))||[]:[]
+ if(selectedMetadataTable.value&&preferences.value.completion&&props.active&&loaded.value&&!metadataColumns.value.length)metadataTimer=setTimeout(()=>{void loadMetadata()},700)
+})
 const mongoFields=ref<string[]>([])
 const mongoCollection=ref('')
 const fieldSuggestions=computed(()=>{
@@ -49,13 +79,14 @@ function apply(value:QueryDraft){
  if(mode==='sql'){sql.value=value.text;parameters.value=value.parameters||(clickhouse?'{}':'[]')}
  else script.value=value.syntax==='mongo-shell'?value.text:legacyMongoScript(mode,value.entity,value.text)
 }
-const recovery=useQueryRecovery(()=>loaded.value&&currentId.value&&props.session.connectionId?{connectionId:props.session.connectionId,database,entity:currentId.value,kind:'saved-query'}:undefined,()=>fingerprint.value,text=>{
+const recovery=useQueryRecovery(()=>loaded.value&&(currentId.value||props.node.draftId)&&props.session.connectionId?{connectionId:props.session.connectionId,database,entity:(currentId.value||props.node.draftId)!,kind:'saved-query'}:undefined,()=>fingerprint.value,text=>{
  const value=JSON.parse(text)
  if(value.mode===mode&&typeof value.name==='string'&&typeof value.text==='string')apply(value)
 })
 function applySaved(item:SavedQuery){apply(item);currentId.value=item.id;revision.value=item.revision;baseline.value=fingerprint.value}
 onMounted(()=>{void task(async()=>{
  if(currentId.value)applySaved(await window.dbex.getSavedQuery(props.session.id,database,currentId.value))
+ if(mode==='sql'){try{await refreshMetadataTables()}catch{ /* Existing query editing remains available. */ }}
  if(mode!=='sql'){
   try{
    const collections=await window.dbex.children(props.session.id,database,'collections')
@@ -84,7 +115,7 @@ async function save(asCopy=false){
   const item=await window.dbex.saveQueryObject(props.session.id,database,input)
   if(disposed)return
   // Saving a copy keeps the original editor's recovery entry intact.
-  if(!asCopy)recovery.clear(true)
+  if(!asCopy||!currentId.value)recovery.clear(true)
   applySaved(item);saveAsOpen.value=false;notice.value='保存成功';emit('saved',querySummary(item))
  })
 }
@@ -95,7 +126,7 @@ function shortcut(event:KeyboardEvent){
  if(event.shiftKey)openSaveAs();else if(!saveAsOpen.value)void save()
 }
 onMounted(()=>window.addEventListener('keydown',shortcut,true))
-onBeforeUnmount(()=>{disposed=true;window.removeEventListener('keydown',shortcut,true)})
+onBeforeUnmount(()=>{disposed=true;if(metadataTimer)clearTimeout(metadataTimer);window.removeEventListener('keydown',shortcut,true)})
 async function execute(paging?:number,selection=false){
  if(!loaded.value||busy.value)return
  await task(async()=>{
@@ -172,7 +203,8 @@ async function exportQuery(format:'json'|'sql'){if(!currentId.value)return;await
    <template v-if="mode==='sql'&&!clickhouse"><button class="btn secondary small" :disabled="busy||!session.writable||session.transaction" @click="transaction('mysql.begin')">{{ t('开始事务') }}</button><button class="btn secondary small" :disabled="busy||!session.transaction" @click="transaction('mysql.commit')">{{ t('提交') }}</button><button class="btn secondary small" :disabled="busy||!session.transaction" @click="transaction('mysql.rollback')">{{ t('回滚') }}</button></template>
   </div>
   <template v-if="mode==='sql'">
-   <div class="query-editor"><CodeEditor ref="editor" v-model="sql" language="sql" :readonly="busy||!loaded" :suggestions="result?.columns||[]" :table-suggestions="tableSuggestions" @execute="execute(undefined,true)" /></div>
+   <div class="editor-toolbar"><span v-if="selectedMetadataTable" class="muted-text">{{t('字段补全来源')}}: {{selectedMetadataTable}}</span><button class="btn secondary small" :disabled="busy||!selectedMetadataTable" @click="loadMetadata(true)">{{t('刷新')}}</button></div>
+   <div class="query-editor"><CodeEditor ref="editor" v-model="sql" language="sql" :sql-dialect="session.kind==='mongodb'||session.kind==='redis'?undefined:session.kind" :readonly="running||!loaded" :suggestions="sqlFields" :table-suggestions="sqlTables" @execute="execute(undefined,true)" /></div>
    <label class="parameter-line">{{ t('参数') }}<input v-model="parameters" :aria-label="clickhouse?t('ClickHouse 参数 JSON 对象'):t('SQL 参数 JSON 数组')" spellcheck="false" :disabled="busy||!loaded" /></label>
   </template>
   <div v-else class="query-editor native-mongo-editor"><CodeEditor ref="editor" v-model="script" language="dbex-mongo-script" completion-kind="mongodb" :readonly="busy||!loaded" :table-suggestions="targets.map(item=>item.entity||item.label)" :suggestions="fieldSuggestions" @execute="execute(undefined,true)" /></div>

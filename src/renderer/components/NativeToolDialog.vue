@@ -23,7 +23,7 @@ async function cancel(){try{await window.dbex.cancel(props.session.id);emit('dis
     <div class="dialog-body">
       <label class="field field-wide">{{ t('操作：') }}<select v-model="task" :disabled="busy"><option v-for="item in tasks" :key="item" :value="item">{{ t(labels[item]) }} · {{ names[item] }}</option></select></label>
       <label v-if="needsEntity" class="field field-wide">{{ t('目标集合或视图') }}<select v-model="entity" :disabled="busy"><option value="">{{ t('未选择对象') }}</option><option v-for="item in objects" :key="item.id" :value="item.entity">{{ item.label }}</option></select></label>
-      <p class="helper field-wide">{{ t('外部工具当前仅支持普通直连。') }}</p>
+      <p class="helper field-wide">{{ t('外部工具支持单节点直连 TLS、SSH 或代理；隧道与数据库 TLS 组合暂不支持。') }}</p>
       <p v-if="write" class="helper field-wide">{{ t('导入或恢复可能写入数据库，请确认文件来源及目标。') }}</p>
       <button v-if="write&&!session.writable" class="btn secondary field-wide" :disabled="busy" @click="unlock">{{ t('启用写入') }}</button>
       <p v-if="error" role="alert" class="inline-message error field-wide">{{ localize(error) }}</p>
