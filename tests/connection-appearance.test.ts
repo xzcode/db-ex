@@ -30,5 +30,5 @@ test('connection colors and groups round-trip through encrypted backups and reje
   assert.throws(() => normalizeAppearance({ group: 'a\nb' }), /INVALID_CONNECTION/)
   assert.deepEqual(colorStyle('bad'), {})
   assert.deepEqual(colorStyle('#e05252'), { '--connection-color': '#e05252' })
-  assert.equal(new Set(connectionColors.map(x => x.color)).size, 9)
+  assert.equal(new Set(connectionColors.map(x => x.color)).size, 36)
 })

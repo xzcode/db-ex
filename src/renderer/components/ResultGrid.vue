@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { t } from '../i18n'
+import { bsonLabel, gridBsonType, type BsonTypeBranch, type BsonType } from '../../shared/bson-types'
+import { activeTypeColor } from '../../shared/bson-palette'
+import { bsonPalette } from '../bson-preferences'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 const props = withDefaults(defineProps<{
@@ -9,6 +12,7 @@ const props = withDefaults(defineProps<{
   selectable?: boolean
   checked?: number[]
   offset?: number
+  bsonTypes?: BsonTypeBranch[]
 }>(), { selected: -1, selectable: false, checked: () => [], offset: 0 })
 const emit = defineEmits<{ select: [index: number]; open: [index: number]; check: [index: number]; checkAll: [] }>()
 const ROW_HEIGHT = 34
@@ -48,6 +52,10 @@ watch(() => props.rows, () => {
 })
 onBeforeUnmount(() => { observer?.disconnect(); if (frame) cancelAnimationFrame(frame) })
 
+function cellType(row: Record<string, unknown>, index: number, key: string): BsonType | undefined {
+  return props.bsonTypes ? gridBsonType(row, props.bsonTypes[index], key) : undefined
+}
+function cellColor(type?: BsonType): string | undefined { return type ? activeTypeColor(bsonPalette.value, type) : undefined }
 function display(value: unknown): string {
   if (value === null) return 'NULL'
   if (value === undefined) return '—'
@@ -70,7 +78,14 @@ function display(value: unknown): string {
         <tr v-for="item in visibleRows" :key="item.index" :data-row-index="item.index" :aria-rowindex="item.index + 2" :class="{ selected: selected === item.index }" @click="emit('select', item.index)" @dblclick="emit('open', item.index)">
           <td v-if="selectable" class="number-cell"><input type="checkbox" :aria-label="t('选择第 {0} 行', [item.index + 1])" :checked="checked.includes(item.index)" @click.stop @change="emit('check', item.index)" /></td>
           <td class="number-cell">{{ offset + item.index + 1 }}</td>
-          <td v-for="column in columns" :key="column" :class="{ 'null-cell': item.row[column] === null || item.row[column] === undefined }" :title="display(item.row[column])">{{ display(item.row[column]) }}</td>
+          <td v-for="column in columns" :key="column"
+            :class="{ 'null-cell': item.row[column] === null || !Object.hasOwn(item.row, column), 'has-bson-color': !!cellColor(cellType(item.row, item.index, column)) }"
+            :data-bson-type="cellType(item.row, item.index, column)"
+            :data-bson-color="cellColor(cellType(item.row, item.index, column))"
+            :style="cellColor(cellType(item.row, item.index, column)) ? { '--bson-color': cellColor(cellType(item.row, item.index, column)) } : {}"
+            :title="(cellType(item.row, item.index, column) ? t(bsonLabel(cellType(item.row, item.index, column)!)) + ': ' : '') + display(Object.hasOwn(item.row, column) ? item.row[column] : undefined)">
+            <span v-if="bsonTypes && bsonPalette.showLabels" class="bson-type-label">{{ t(bsonLabel(cellType(item.row, item.index, column)!)) }}</span><span>{{ display(Object.hasOwn(item.row, column) ? item.row[column] : undefined) }}</span>
+          </td>
         </tr>
         <tr v-if="bottomSpace" class="virtual-spacer" aria-hidden="true"><td :colspan="columnCount" :style="{ height: bottomSpace + 'px' }"></td></tr>
         <tr v-if="!rows.length"><td :colspan="columnCount" class="empty-grid">{{ t('暂无记录') }}</td></tr>

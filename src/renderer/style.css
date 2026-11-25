@@ -392,3 +392,38 @@ html[dir=rtl] .tree-chevron:not(.expanded) { transform: rotate(180deg); }
 .connection-group-dialog .dialog-body { min-height: 0; }
 .connection-group-backdrop { z-index: 35; }
 @media (max-width: 1100px) { .connection-tree .connection-item { padding-inline: 4px; } .connection-tree .connection-actions { gap: 0; } }
+
+/* One reusable expanded swatch palette for connection labels and BSON types. */
+.extended-swatches { display: grid; grid-template-columns: repeat(auto-fill, 24px); gap: 6px; }
+.connection-context-menu .extended-swatches { grid-template-columns: repeat(8, 22px); gap: 5px; }
+.connection-context-menu .extended-swatches .color-swatch { width: 22px; height: 22px; }
+.recent-colors { display: flex; flex-direction: column; gap: 5px; }
+.extended-custom-color { flex-wrap: wrap; }
+.hex-color-input { width: 82px; font: 11px 'SFMono-Regular', Consolas, monospace; padding: 5px 6px; direction: ltr; }
+.hex-color-input[aria-invalid=true] { border-color: var(--danger); }
+.bson-type-label { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--border); padding: 1px 4px; border-radius: 3px; font: 10px system-ui, sans-serif; color: var(--muted); margin-inline-end: 7px; white-space: nowrap; vertical-align: middle; }
+.data-table td.has-bson-color { box-shadow: inset 3px 0 var(--bson-color); background: color-mix(in srgb, var(--bson-color) 10%, var(--panel)); }
+.data-table tr:hover td.has-bson-color { background: color-mix(in srgb, var(--bson-color) 13%, var(--panel-raised)); }
+.data-table tr.selected td.has-bson-color { background: color-mix(in srgb, var(--bson-color) 17%, var(--selected)); }
+.has-bson-color .bson-type-label { border-color: color-mix(in srgb, var(--bson-color) 70%, var(--border)); color: var(--text); background: color-mix(in srgb, var(--bson-color) 15%, var(--panel)); }
+.bson-palette-dialog { width: 800px; height: min(640px, 88dvh); }
+.bson-settings-controls { display: flex; gap: 20px; padding: 12px 22px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.bson-settings-body { display: grid; grid-template-columns: minmax(180px, 40%) minmax(0, 1fr); flex: 1; min-height: 0; }
+.bson-type-list { overflow-y: auto; padding: 8px; border-inline-end: 1px solid var(--border); }
+.bson-type-option { width: 100%; display: flex; align-items: center; gap: 8px; padding: 8px; background: none; border: 1px solid transparent; text-align: start; font-size: 12px; }
+.bson-type-option.selected { background: var(--selected); border-color: var(--border); }
+.bson-type-option small { margin-inline-start: auto; color: var(--muted); font: 10px monospace; }
+.type-swatch { width: 16px; height: 16px; border: 1px solid var(--border); border-radius: 3px; flex: none; }
+.bson-settings-editor { padding: 18px; display: flex; flex-direction: column; align-items: flex-start; gap: 13px; overflow-y: auto; }
+.bson-settings-editor .connection-color-picker { width: 100%; }
+.bson-sample { width: 100%; padding: 10px; border: 1px solid var(--border); background: var(--input); font: 12px monospace; }
+.bson-sample.has-bson-color { border-inline-start: 3px solid var(--bson-color); background: color-mix(in srgb, var(--bson-color) 12%, var(--panel)); }
+.bson-document-tree { flex: 1; min-height: 0; overflow: auto; }
+.bson-document-table { width: 100%; min-width: 100%; }
+.bson-document-table td { min-width: 0; }
+.bson-document-table td:nth-child(2) { width: 140px; }
+.bson-document-table tr.has-bson-color > td:nth-child(2) { background: color-mix(in srgb, var(--bson-color) 12%, var(--panel)); box-shadow: inset 3px 0 var(--bson-color); }
+.bson-tree-field { display: flex; gap: 4px; align-items: center; white-space: nowrap; overflow: hidden; }
+.bson-expand, .bson-expand-spacer { width: 19px; height: 17px; flex: none; }
+.bson-tree-value { max-width: 500px; }
+.bson-raw-document { flex: 1; min-height: 0; overflow: auto; padding: 16px 22px; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.7 'SFMono-Regular', Consolas, monospace; margin: 0; text-align: left; }

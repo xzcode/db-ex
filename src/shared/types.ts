@@ -1,3 +1,5 @@
+import type { BsonTypeBranch } from './bson-types'
+
 export type DatabaseKind = 'mysql' | 'mongodb' | 'redis'
 export type EnvironmentKind = 'development' | 'testing' | 'production'
 export type SqlValue = string | number | boolean | null
@@ -107,6 +109,8 @@ export interface OperationResult extends DataPreview {
   length?: number
   rawRows?: SqlRow[]
   documents?: string[]
+  /** Per-document metadata aligned with rows and canonical Extended JSON. */
+  bsonTypes?: BsonTypeBranch[]
   affectedRows?: number
   durationMs?: number
   truncated?: boolean

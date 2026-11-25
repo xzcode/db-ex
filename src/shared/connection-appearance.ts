@@ -1,6 +1,6 @@
 import type { ConnectionAppearance, ConnectionAppearancePatch, ConnectionConfig } from './types'
 
-export const connectionColors = [
+export const connectionColors: readonly { color: string; label: string; variant?: boolean }[] = [
   { color: '#e05252', label: '红色' },
   { color: '#e69a38', label: '橙色' },
   { color: '#d3b12c', label: '黄色' },
@@ -10,7 +10,34 @@ export const connectionColors = [
   { color: '#956ad9', label: '紫色' },
   { color: '#d16b9e', label: '粉色' },
   { color: '#8993a2', label: '灰色' },
-] as const
+  { color: '#ff8181', label: '红色', variant: true },
+  { color: '#bc3543', label: '红色', variant: true },
+  { color: '#8e2635', label: '红色', variant: true },
+  { color: '#ffc37d', label: '橙色', variant: true },
+  { color: '#cc7424', label: '橙色', variant: true },
+  { color: '#955122', label: '橙色', variant: true },
+  { color: '#f7dc73', label: '黄色', variant: true },
+  { color: '#b38d1c', label: '黄色', variant: true },
+  { color: '#7e6625', label: '黄色', variant: true },
+  { color: '#8bd6a3', label: '绿色', variant: true },
+  { color: '#2b8553', label: '绿色', variant: true },
+  { color: '#246343', label: '绿色', variant: true },
+  { color: '#7de2d8', label: '青色', variant: true },
+  { color: '#21858d', label: '青色', variant: true },
+  { color: '#22646a', label: '青色', variant: true },
+  { color: '#8ab6ff', label: '蓝色', variant: true },
+  { color: '#315eb7', label: '蓝色', variant: true },
+  { color: '#243e83', label: '蓝色', variant: true },
+  { color: '#c3a1ff', label: '紫色', variant: true },
+  { color: '#7447bb', label: '紫色', variant: true },
+  { color: '#50358a', label: '紫色', variant: true },
+  { color: '#f3a4cd', label: '粉色', variant: true },
+  { color: '#ae477e', label: '粉色', variant: true },
+  { color: '#82345f', label: '粉色', variant: true },
+  { color: '#c5cbd4', label: '灰色', variant: true },
+  { color: '#687589', label: '灰色', variant: true },
+  { color: '#454d5a', label: '灰色', variant: true },
+]
 
 export function normalizeColor(value: unknown): string | undefined {
   if (value === undefined || value === null || value === '') return undefined
