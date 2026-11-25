@@ -21,3 +21,32 @@ test('visual MySQL filters bind values, quote fields and support exact ordered p
   assert.throws(() => browseOffset(0,200),/INVALID_FILTER/)
   assert.throws(() => browseOffset(1000000,500),/INVALID_FILTER/)
 })
+
+test('mixed connectors respect AND precedence and disabled conditions are ignored', () => {
+  const input: BrowseFilter = {join:'and',groups:[{join:'and',rules:[
+    {...rule('a','x'),join:'or'},
+    {...rule('','bad','Int32'),enabled:false,join:'and'},
+    {...rule('b','y'),join:'and'},
+    rule('c','z')
+  ]}],sort:[]}
+  assert.deepEqual(JSON.parse(compileMongoFilter(input).filter),{$or:[{a:{$eq:'x'}},{$and:[{b:{$eq:'y'}},{c:{$eq:'z'}}]}]})
+  assert.equal(compileMysqlFilter('app','users',input).sql,'SELECT * FROM \x60app\x60.\x60users\x60 WHERE (\x60a\x60 = ? OR (\x60b\x60 = ? AND \x60c\x60 = ?))')
+  assert.equal(compileMongoFilter({...input,groups:[{join:'and',rules:[{...rule('','invalid'),enabled:false}]}]}).filter,'{}')
+})
+test('advanced text, list, type and custom predicates keep typed exactness', () => {
+  const one=(value:FilterRule)=>({join:'and' as const,groups:[{join:'and' as const,rules:[value]}],sort:[]})
+  const mongo=(value:FilterRule)=>JSON.parse(compileMongoFilter(one(value)).filter)
+  assert.deepEqual(mongo(rule('name','a.b','String','starts')),{name:{$regex:'^a\\.b'}})
+  assert.deepEqual(mongo(rule('name','x','String','notEnds')),{name:{$type:'string',$not:{$regex:'x$'}}})
+  assert.deepEqual(mongo(rule('score','["7","9223372036854775807"]','Long','in')),{score:{$in:[{$numberLong:'7'},{$numberLong:'9223372036854775807'}]}})
+  assert.deepEqual(mongo(rule('score','long','String','isType')),{score:{$type:'long'}})
+  assert.deepEqual(mongo(rule('score','long','String','notType')),{score:{$exists:true,$not:{$type:'long'}}})
+  assert.deepEqual(mongo(rule('score','{"$gte":{"$numberInt":"5"}}','String','custom')),{score:{$gte:{$numberInt:'5'}}})
+  assert.throws(()=>mongo(rule('score','{"$where":"return true"}','String','custom')),/INVALID_FILTER/)
+  assert.throws(()=>mongo(rule('score','[9223372036854775807]','Long','in')),/INVALID_FILTER/)
+  const sql=compileMysqlFilter('app','users',one(rule('name','a%_','String','notStarts')))
+  assert.match(sql.sql,/NOT LIKE \? ESCAPE/)
+  assert.deepEqual(sql.parameters,['a!%!_%'])
+  assert.deepEqual(compileMysqlFilter('app','users',one(rule('id','["1","2"]','Long','notIn'))).parameters,['1','2'])
+  assert.throws(()=>compileMysqlFilter('app','users',one(rule('id','int','String','isType'))),/INVALID_FILTER/)
+})

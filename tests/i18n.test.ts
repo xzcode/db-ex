@@ -73,3 +73,7 @@ test('object inspector metadata, DDL and palette labels are localized', () => {
 test('visual browsing and page controls are localized', () => {
   for (const { locale } of languages) if (locale !== 'zh-CN') for (const key of ["筛选","添加筛选条件","添加条件组","组间关系","组内关系","条件组","点击 + 添加筛选条件","比较方式","等于","不等于","大于","大于或等于","小于","小于或等于","包含","为 NULL","不为 NULL","字段存在","字段缺失","排序方式","添加排序条件","点击 + 添加排序条件","排序字段","升序","降序","应用筛选与排序","重置筛选","创建工具","文本","首页","上一页","下一页","末页","页码","表格视图","记录视图","文本视图","记录","上一条记录","下一条记录","INVALID_FILTER: 筛选或排序条件无效","记录数超出末页跳转上限，请缩小筛选范围。","上一批","首批"]) assert.ok(Object.hasOwn(catalogs[locale], key), locale + ': ' + key)
 })
+
+test('advanced visual filter and suggested value controls are localized', () => {
+  for (const { locale } of languages) if (locale !== 'zh-CN') for (const key of ["不包含","开头是","开头不是","结尾是","结尾不是","是空的","是非空的","在列表","不在列表","是字段类型","不是字段类型","字段类型","自定义条件","启用条件","下一条件关系","上移条件","下移条件","编辑筛选值","建议值","来自当前查询页","暂无建议值","搜索建议值","空字符串","列表使用 JSON 字符串数组，可勾选同类型建议值。"]) assert.ok(Object.hasOwn(catalogs[locale], key), locale + ': ' + key)
+})
