@@ -5,6 +5,9 @@ import type { DatabaseOperation, ExplorerNode, OperationResult, QuerySnippet, Re
 import CodeEditor from './components/CodeEditor.vue'
 import ResultGrid from './components/ResultGrid.vue'
 import ObjectInspector from './components/ObjectInspector.vue'
+import VisualQueryBuilder from './components/VisualQueryBuilder.vue'
+import BrowseRecordView from './components/BrowseRecordView.vue'
+import { browseOffset, compileMongoFilter, compileMysqlFilter, MAX_BROWSE_OFFSET, newBrowseFilter, type BrowseFilter } from '../shared/browse-filter'
 import type { ObjectInspection } from '../shared/object-inspection'
 import BsonDocumentTree from './components/BsonDocumentTree.vue'
 import { canSafelyEditMongoDocument, formatMongoDocument, mongoDocumentDraft, mongoFieldFilter, mongoFieldText, parseMongoDocumentEditor } from '../shared/bson-editor'
@@ -30,8 +33,20 @@ const filter = ref('{}')
 const projection = ref('{}')
 const sort = ref('{}')
 const showMongoFilters = ref(false)
+const filterMode = ref<'builder' | 'text'>('builder')
+const visualFilter = ref<BrowseFilter>(newBrowseFilter())
+const appliedMysql = ref<BrowseFilter>(newBrowseFilter())
+const appliedMongo = ref({ filter: '{}', projection: '{}', sort: '{}' })
+const browsePageSize = ref(props.session.kind === 'mongodb' ? 200 : 100)
+const pageInput = ref(1)
+const totalRows = ref<string>()
+const countLimited = ref(false)
+const browseView = ref<'grid' | 'record' | 'text'>('grid')
+const sqlQuerySummary = ref('')
+const sqlQueryParameters = ref<SqlValue[]>([])
+const filterError = ref('')
 const mongoQuery = ref('')
-const filtersActive = computed(() => [filter.value, projection.value, sort.value].some(value => { try { return Object.keys(JSON.parse(value || '{}')).length > 0 } catch { return true } }))
+const filtersActive = computed(() => props.session.kind === 'mysql' ? appliedMysql.value.groups.length > 0 || appliedMysql.value.sort.length > 0 : [appliedMongo.value.filter, appliedMongo.value.projection, appliedMongo.value.sort].some(value => { try { return Object.keys(JSON.parse(value || '{}')).length > 0 } catch { return true } }))
 const pipeline = ref('[\n  { "$limit": 100 }\n]')
 const primaryKeys = ref<string[]>([])
 const structure = ref<OperationResult | null>(null)
@@ -80,6 +95,7 @@ const isRedis = computed(() => props.session.kind === 'redis')
 const inspectorName = computed(() => isRedis.value ? (tab.value === 'data' ? result.value?.rows[selectedRow.value]?.key || (redisDetail.value ? redisKey.value : '') : '') : entity.value.entity)
 const inspectionKey = computed(() => JSON.stringify([props.session.id, props.session.kind, entity.value.database, inspectorName.value]))
 const visibleSnippets = computed(() => snippets.value.filter(item => item.kind === props.session.kind && (!historyOnlyFavorites.value || item.favorite)))
+const browseFields = computed(() => props.session.kind === 'mysql' ? (structure.value?.rows || []).map(row => String(row.name || row.Field || '')).filter(Boolean) : result.value?.columns || [])
 const canEditRow = computed(() => editableRows.value && selectedRow.value >= 0 && (isMongo.value ? !!result.value?.documents?.[selectedRow.value] : !!result.value?.rawRows?.[selectedRow.value] && primaryKeys.value.length > 0))
 const mutationCommands: Record<RedisValueType, string[]> = {
   string: ['APPEND', 'SETRANGE', 'INCRBY'], hash: ['HSET', 'HDEL', 'HINCRBY'],
@@ -155,23 +171,85 @@ async function remember(text: string) {
     await window.dbex.saveSnippet({ name: text.trim().split('\n')[0].slice(0, 80), text, database: entity.value.database, kind: props.session.kind, favorite: false })
   } catch { notice.value += ' · 查询已执行，但历史记录保存失败' }
 }
-async function loadData(nextOffset = 0) {
-  if (!hasEntity.value || busy.value) return
-  offset.value = nextOffset
-  editableRows.value = false
+async function loadData(nextOffset = 0, proposedMongo = appliedMongo.value, proposedMysql = appliedMysql.value, size = browsePageSize.value): Promise<boolean> {
+  if (!hasEntity.value || busy.value || nextOffset < 0 || nextOffset > MAX_BROWSE_OFFSET) return false
+  const version = generation
+  const target = { ...entity.value }
+  const mongo = { ...proposedMongo }
+  const mysql = JSON.parse(JSON.stringify(proposedMysql)) as BrowseFilter
   if (isMysql.value) {
-    const next = await execute({ action: 'mysql.query', database: entity.value.database, sql: `SELECT * FROM ${quote(entity.value.database)}.${quote(entity.value.entity)}`, offset: nextOffset, limit: limit.value })
-    editableRows.value = !!next?.rawRows
+    const compiled = compileMysqlFilter(target.database, target.entity, mysql)
+    const next = await execute({ action: 'mysql.browse', ...target, filter: mysql, offset: nextOffset, limit: size })
+    if (!next || version !== generation) return false
+    appliedMysql.value = mysql
+    sqlQuerySummary.value = compiled.sql + ' LIMIT ' + size + ' OFFSET ' + nextOffset
+    sqlQueryParameters.value = compiled.parameters
+    editableRows.value = !!next.rawRows
   } else if (isMongo.value) {
-    const projectionText = projection.value
-    const target = { ...entity.value }, queryFilter = filter.value, querySort = sort.value, pageSize = limit.value
-    const next = await execute({ action: 'mongo.find', ...target, filter: queryFilter, projection: projectionText, sort: querySort, offset: nextOffset, limit: pageSize })
-    if (next) {
-      const find = 'db.getCollection(' + JSON.stringify(target.entity) + ').find(' + (queryFilter.trim() || '{}') + ', ' + (projectionText.trim() || '{}') + ')'
-      mongoQuery.value = (find + '.sort(' + (querySort.trim() || '{}') + ').skip(' + nextOffset + ').limit(' + pageSize + ')').slice(0, 1000)
+    const next = await execute({ action: 'mongo.find', ...target, ...mongo, offset: nextOffset, limit: size })
+    if (!next || version !== generation) return false
+    appliedMongo.value = mongo
+    const find = 'db.getCollection(' + JSON.stringify(target.entity) + ').find(' + (mongo.filter.trim() || '{}') + ', ' + (mongo.projection.trim() || '{}') + ')'
+    mongoQuery.value = (find + '.sort(' + (mongo.sort.trim() || '{}') + ').limit(' + size + ').skip(' + nextOffset + ')').slice(0, 3000)
+    try { editableRows.value = !!next.documents && Object.keys(JSON.parse(mongo.projection || '{}')).length === 0 } catch { editableRows.value = false }
+  } else return false
+  offset.value = nextOffset
+  browsePageSize.value = size
+  pageInput.value = Math.floor(nextOffset / size) + 1
+  totalRows.value = undefined
+  countLimited.value = false
+  return true
+}
+async function applyVisualFilter() {
+  filterError.value = ''
+  try {
+    if (isMongo.value) {
+      const compiled = compileMongoFilter(visualFilter.value)
+      const proposed = { ...compiled, projection: '{}' }
+      if (await loadData(0, proposed)) { filter.value = proposed.filter; sort.value = proposed.sort; projection.value = proposed.projection }
+    } else {
+      compileMysqlFilter(entity.value.database, entity.value.entity, visualFilter.value)
+      await loadData(0, appliedMongo.value, visualFilter.value)
     }
-    try { editableRows.value = !!next?.documents && Object.keys(JSON.parse(projectionText || '{}')).length === 0 } catch { editableRows.value = false }
+  } catch (reason) { filterError.value = messageOf(reason) }
+}
+async function applyTextFilter() {
+  filterError.value = ''
+  try { await loadData(0, { filter: filter.value, projection: projection.value, sort: sort.value }) }
+  catch (reason) { filterError.value = messageOf(reason) }
+}
+async function resetBrowseFilter() {
+  visualFilter.value = newBrowseFilter()
+  filter.value = '{}'; projection.value = '{}'; sort.value = '{}'; filterError.value = ''
+  await loadData(0, { filter: '{}', projection: '{}', sort: '{}' }, newBrowseFilter())
+}
+async function jumpPage() {
+  try {
+    const next = browseOffset(Number(pageInput.value), browsePageSize.value)
+    if (!await loadData(next)) pageInput.value = Math.floor(offset.value / browsePageSize.value) + 1
+  } catch (reason) { setError(reason); pageInput.value = Math.floor(offset.value / browsePageSize.value) + 1 }
+}
+async function changeBrowseSize(event: Event) {
+  const value = Number((event.target as HTMLSelectElement).value)
+  if (![100,200,500].includes(value)) return
+  if (!await loadData(0, appliedMongo.value, appliedMysql.value, value)) (event.target as HTMLSelectElement).value = String(browsePageSize.value)
+}
+async function lastBrowsePage() {
+  if (busy.value || !hasEntity.value) return
+  const version = generation
+  const response = await execute(isMongo.value ? { action: 'mongo.count', ...entity.value, filter: appliedMongo.value.filter } : { action: 'mysql.browse', ...entity.value, filter: appliedMysql.value, countOnly: true }, false)
+  if (!response?.totalRows || generation !== version) return
+  const total = Number(response.totalRows)
+  if (response.countLimited || !Number.isSafeInteger(total) || total < 0) {
+    totalRows.value = response.totalRows; countLimited.value = true; notice.value = '记录数超出末页跳转上限，请缩小筛选范围。'; return
   }
+  const next = Math.max(0, Math.floor((total - 1) / browsePageSize.value) * browsePageSize.value)
+  if (next > MAX_BROWSE_OFFSET) { notice.value = '记录数超出末页跳转上限，请缩小筛选范围。'; return }
+  if (await loadData(next) && generation === version) totalRows.value = response.totalRows
+}
+function changeBrowseView(view: 'grid' | 'record' | 'text') {
+  browseView.value = view
+  if (selectedRow.value < 0 && result.value?.rows.length) selectedRow.value = 0
 }
 async function loadStructure() {
   if (!hasEntity.value) return
@@ -249,11 +327,12 @@ async function mongoContextAction(action: 'add' | 'copy-value' | 'copy-document'
       if (field === undefined) return
       const condition = mongoFieldFilter(document, metadata, field)
       if (!condition) return
-      const previous = JSON.parse(filter.value || '{}')
+      const previous = JSON.parse(appliedMongo.value.filter || '{}')
       if (!previous || typeof previous !== 'object' || Array.isArray(previous)) throw new Error('格式无效，请检查 JSON / BSON / SQL 输入')
       filter.value = JSON.stringify(Object.keys(previous).length ? { $and: [previous, condition] } : condition)
-      showMongoFilters.value = true
-      await loadData(0)
+      projection.value = appliedMongo.value.projection; sort.value = appliedMongo.value.sort
+      showMongoFilters.value = true; filterMode.value = 'text'
+      await applyTextFilter()
       return
     }
     if (!props.session.writable) return
@@ -484,7 +563,7 @@ async function refreshSelection(version: number) {
   }
 }
 watch(() => props.node?.id, () => {
-  generation++; edit.value = null; documentView.value = undefined; mongoQuery.value = ''; result.value = null; structure.value = null; primaryKeys.value = []; selectedRow.value = -1; checked.value = []; offset.value = 0; editableRows.value = false
+  generation++; visualFilter.value = newBrowseFilter(); appliedMysql.value = newBrowseFilter(); appliedMongo.value = { filter: '{}', projection: '{}', sort: '{}' }; filter.value = '{}'; projection.value = '{}'; sort.value = '{}'; filterMode.value = 'builder'; filterError.value = ''; totalRows.value = undefined; countLimited.value = false; pageInput.value = 1; sqlQuerySummary.value = ''; sqlQueryParameters.value = []; edit.value = null; documentView.value = undefined; mongoQuery.value = ''; result.value = null; structure.value = null; primaryKeys.value = []; selectedRow.value = -1; checked.value = []; offset.value = 0; editableRows.value = false
   if (busy.value) { pendingSelection = true; return }
   void refreshSelection(generation)
 }, { immediate: true })
@@ -497,7 +576,7 @@ onBeforeUnmount(() => { disposed = true; generation++; if (inspectionTimer) clea
     <nav class="workbench-tabs"><button :disabled="busy" :class="{ active: tab === 'data' }" @click="changeTab('data')">{{ isRedis ? t('Key 浏览器') : t('数据') }}</button><button v-if="isMysql" :disabled="busy" :class="{ active: tab === 'query' }" @click="changeTab('query')">{{ t('SQL 编辑器') }}</button><button v-if="isMongo" :disabled="busy" :class="{ active: tab === 'aggregation' }" @click="changeTab('aggregation')">Aggregation</button><button v-if="!isRedis" :disabled="busy" :class="{ active: tab === 'structure' }" @click="changeTab('structure')">{{ isMysql ? t('结构与索引') : t('索引') }}</button><button v-if="isRedis" :disabled="busy" :class="{ active: tab === 'console' }" @click="changeTab('console')">{{ t('命令台') }}</button><div class="tab-filler"></div><button :class="{ active: inspectorTab === 'info' }" @click="openInspector('info')">{{ t('对象信息') }}</button><button :class="{ active: inspectorTab === 'ddl' }" @click="openInspector('ddl')">{{ isRedis ? t('检查命令') : 'DDL' }}</button><button :class="{ active: inspectorTab === 'colors' }" @click="openInspector('colors')">{{ isMongo ? t('BSON 类型配色') : t('数据类型配色') }}</button><button v-if="!isRedis" @click="openHistory">{{ t('历史 / 收藏') }}</button></nav>
     <div v-if="error" class="inline-message error" role="alert">{{ localize(error) }}<button class="ghost-icon" :aria-label="t('关闭错误')" @click="error = ''">×</button></div>
     <div v-if="notice" class="inline-message notice" role="status">{{ localize(notice) }}</div>
-    <div v-if="busy" class="operation-progress"><span class="progress-indicator"></span> {{ t('正在执行') }} <button class="btn secondary small" @click="cancel">{{ t('取消并断开') }}</button></div>
+    <div v-if="busy" class="operation-progress"><span class="progress-indicator"></span> {{ t('正在执行') }} <button v-if="tab !== 'data' || isRedis" class="btn secondary small" @click="cancel">{{ t('取消并断开') }}</button></div>
 
     <template v-if="isMysql && tab === 'query'">
       <div class="editor-toolbar"><button class="btn primary" :disabled="busy" @click="runQuery()">{{ t('运行选中 / 全部') }} <kbd>⌘ / Ctrl ↵</kbd></button><label class="inline-field">{{ t('每页') }}<select v-model.number="limit"><option :value="100">100</option><option :value="500">500</option></select></label><span class="toolbar-spacer"></span><button class="btn secondary" :disabled="busy || !session.writable || session.transaction" @click="transaction('mysql.begin')">{{ t('开始事务') }}</button><button class="btn secondary" :disabled="busy || !session.transaction" @click="transaction('mysql.commit')">{{ t('提交') }}</button><button class="btn secondary" :disabled="busy || !session.transaction" @click="transaction('mysql.rollback')">{{ t('回滚') }}</button></div>
@@ -527,11 +606,40 @@ onBeforeUnmount(() => { disposed = true; generation++; if (inspectionTimer) clea
       </div>
     </template>
     <template v-else>
-      <div v-if="tab === 'data' && isMongo && showMongoFilters" class="mongo-filters"><label>Filter<textarea v-model="filter" rows="2" spellcheck="false" /></label><label>Projection<textarea v-model="projection" rows="2" spellcheck="false" /></label><label>Sort<textarea v-model="sort" rows="2" spellcheck="false" /></label><button class="btn primary" :disabled="busy || !hasEntity" @click="loadData()">{{ t('查询') }}</button></div>
-      <div class="editor-toolbar"><template v-if="tab === 'data' && !isRedis"><button v-if="isMongo" class="btn secondary small" :aria-expanded="showMongoFilters" :class="{ 'active-filter': filtersActive }" @click="showMongoFilters = !showMongoFilters">{{ t('查询条件') }} <span v-if="filtersActive">•</span></button><button class="btn secondary" :disabled="busy || !hasEntity" @click="loadData(offset)">{{ t('刷新') }}</button><button class="btn secondary" :disabled="busy || !hasEntity || !session.writable" @click="openInsert">{{ t('新增') }}</button><button class="btn secondary" :disabled="busy || !canEditRow || !session.writable" @click="openEdit">{{ t('编辑') }}</button><button class="btn danger-text" :disabled="busy || !canEditRow || !session.writable" @click="deleteRow">{{ t('删除') }}</button><button class="btn secondary" :disabled="busy || !hasEntity || !session.writable" @click="importData">{{ t('导入') }} {{ isMysql ? 'CSV / JSON' : 'EJSON' }}</button></template><button v-if="isMongo" class="btn secondary small" :disabled="selectedRow < 0 || !result?.documents?.[selectedRow]" @click="viewMongoDocument()">{{ t('查看文档') }}</button><span class="toolbar-spacer"></span><button class="btn secondary small" :disabled="!result?.rows.length" @click="exportData('json')">{{ t('导出当前页 JSON') }}</button><button class="btn secondary small" :disabled="!result?.rows.length" @click="exportData('csv')">CSV</button></div>
-      <ResultGrid v-if="result" :columns="result.columns" :rows="result.rows" :column-types="isMysql ? result.columnTypes : undefined" :null-cells="result.nullCells" :redis-row-types="isRedis ? result.redisRowTypes : undefined" :selected="selectedRow" :offset="offset" :bson-types="isMongo ? result.bsonTypes : undefined"  :documents="isMongo ? result.documents : undefined" :document-menu="isMongo && !!result.documents?.length && !busy" :can-edit-document="isMongo && tab === 'data' && editableRows && session.writable && !busy" :can-add-document="isMongo && tab === 'data' && hasEntity && session.writable && !busy" :can-filter-document="isMongo && tab === 'data' && hasEntity && !busy" @document-action="mongoContextAction" @document-edit="editMongoRow" @document-view="viewMongoDocument" @select="selectedRow = $event" @open="openResultRow" />
+      <div class="editor-toolbar browser-top-toolbar"><template v-if="tab === 'data' && !isRedis"><button class="btn secondary small" :disabled="busy || !canEditRow || !session.writable" @click="openEdit"><span aria-hidden="true">✎</span> {{ t('编辑') }}</button><button class="btn secondary small" :aria-expanded="showMongoFilters" :class="{ 'active-filter': filtersActive || showMongoFilters }" @click="showMongoFilters = !showMongoFilters"><span aria-hidden="true">⌕</span> {{ t('查询条件') }} <span v-if="filtersActive">•</span></button><button class="btn secondary small" :disabled="busy || !hasEntity || !session.writable" @click="importData">{{ t('导入') }} {{ isMysql ? 'CSV / JSON' : 'EJSON' }}</button></template><button v-if="isMongo && tab !== 'data'" class="btn secondary small" :disabled="selectedRow < 0 || !result?.documents?.[selectedRow]" @click="viewMongoDocument()">{{ t('查看文档') }}</button><span class="toolbar-spacer"></span><button class="btn secondary small" :disabled="!result?.rows.length" @click="exportData('json')">{{ t('导出当前页 JSON') }}</button><button class="btn secondary small" :disabled="!result?.rows.length" @click="exportData('csv')">CSV</button></div>
+      <section v-if="tab === 'data' && !isRedis && showMongoFilters" class="browse-filter-panel">
+        <header class="filter-panel-header"><span>{{ t('查询条件') }}</span><div v-if="isMongo" class="filter-mode-switch"><button type="button" :class="{ active: filterMode === 'builder' }" @click="filterMode = 'builder'">{{ t('创建工具') }}</button><button type="button" :class="{ active: filterMode === 'text' }" @click="filterMode = 'text'">{{ t('文本') }}</button></div></header>
+        <div v-if="filterError" class="inline-message error" role="alert">{{ localize(filterError) }}</div>
+        <VisualQueryBuilder v-if="isMysql || filterMode === 'builder'" v-model="visualFilter" :kind="isMysql ? 'mysql' : 'mongodb'" :fields="browseFields" :disabled="busy || !hasEntity" @apply="applyVisualFilter" @reset="resetBrowseFilter" />
+        <div v-else class="mongo-filters"><label>Filter<textarea v-model="filter" rows="3" spellcheck="false" /></label><label>Projection<textarea v-model="projection" rows="3" spellcheck="false" /></label><label>Sort<textarea v-model="sort" rows="3" spellcheck="false" /></label><button class="btn primary" :disabled="busy || !hasEntity" @click="applyTextFilter">{{ t('查询') }}</button><button class="btn secondary" :disabled="busy || !hasEntity" @click="resetBrowseFilter">{{ t('重置筛选') }}</button></div>
+      </section>
+      <BrowseRecordView v-if="result && tab === 'data' && !isRedis && browseView !== 'grid'" :result="result" :selected="selectedRow" :mongo="isMongo" :mode="browseView" :offset="offset" @select="selectedRow = $event" @open="viewMongoDocument" />
+      <ResultGrid v-else-if="result" :columns="result.columns" :rows="result.rows" :column-types="isMysql ? result.columnTypes : undefined" :null-cells="result.nullCells" :redis-row-types="isRedis ? result.redisRowTypes : undefined" :selected="selectedRow" :offset="offset" :bson-types="isMongo ? result.bsonTypes : undefined"  :documents="isMongo ? result.documents : undefined" :document-menu="isMongo && !!result.documents?.length && !busy" :can-edit-document="isMongo && tab === 'data' && editableRows && session.writable && !busy" :can-add-document="isMongo && tab === 'data' && hasEntity && session.writable && !busy" :can-filter-document="isMongo && tab === 'data' && hasEntity && !busy" @document-action="mongoContextAction" @document-edit="editMongoRow" @document-view="viewMongoDocument" @select="selectedRow = $event" @open="openResultRow" />
       <div v-else class="empty-state"><span class="empty-icon">▤</span><strong>{{ hasEntity ? t('运行查询查看结果') : t('选择数据库中的表或集合') }}</strong><span>{{ isMysql ? t('可直接切换到 SQL 编辑器执行查询。') : t('使用左侧资源树选择目标。') }}</span></div>
-      <footer class="result-footer"><span>{{ result?.rows.length || 0 }} {{ t('条记录') }}<span v-if="result?.durationMs !== undefined"> · {{ result.durationMs }} ms</span><span v-if="result?.truncated"> {{ t('· 已达到单页限制') }}</span></span><span v-if="isMongo && tab === 'data' && mongoQuery" class="mongo-query-summary" dir="ltr" :title="mongoQuery">{{ mongoQuery }}</span><div class="result-page-controls"><label v-if="isMongo && tab === 'data'" class="inline-field">{{ t('每页') }}<select v-model.number="limit" :disabled="busy || !hasEntity" @change="loadData()"><option :value="100">100</option><option :value="200">200</option><option :value="500">500</option></select></label><button v-if="offset > 0 && tab !== 'aggregation'" class="btn secondary small" :disabled="busy" @click="tab === 'query' ? runQuery(Math.max(0, offset - limit)) : loadData(Math.max(0, offset - limit))">{{ t('← 上一页') }}</button><button v-if="result?.nextOffset !== undefined && tab !== 'aggregation'" class="btn secondary small" :disabled="busy" @click="tab === 'query' ? runQuery(result.nextOffset) : loadData(result.nextOffset)">{{ t('下一页 →') }}</button></div><span>{{ session.writable ? t('可写会话') : t('只读会话') }}</span></footer>
+      <footer v-if="tab === 'data' && !isRedis" class="result-footer browse-footer">
+        <div class="browse-record-actions">
+          <button class="browse-icon" type="button" :title="t('新增')" :aria-label="t('新增')" :disabled="busy || !hasEntity || !session.writable" @click="openInsert">＋</button>
+          <button class="browse-icon" type="button" :title="t('删除')" :aria-label="t('删除')" :disabled="busy || !canEditRow || !session.writable" @click="deleteRow">−</button>
+          <button class="browse-icon" type="button" :title="t('刷新')" :aria-label="t('刷新')" :disabled="busy || !hasEntity" @click="loadData(offset)">↻</button>
+          <button class="browse-icon" type="button" :title="t('取消并断开')" :aria-label="t('取消并断开')" :disabled="!busy" @click="cancel">■</button>
+        </div>
+        <span v-if="isMongo && mongoQuery" class="mongo-query-summary" dir="ltr" :title="mongoQuery">{{ mongoQuery }}</span><span v-else-if="isMysql && sqlQuerySummary" class="mongo-query-summary" dir="ltr" :title="sqlQuerySummary + (sqlQueryParameters.length ? '\n' + JSON.stringify(sqlQueryParameters) : '')">{{ sqlQuerySummary }}</span><span v-else class="toolbar-spacer"></span>
+        <span class="browse-count">{{ result?.rows.length || 0 }} {{ t('条记录') }}<template v-if="totalRows"> / {{ countLimited ? '≥' : '' }}{{ totalRows }}</template></span>
+        <div class="browse-page-buttons">
+          <button class="browse-icon" type="button" :aria-label="t('首页')" :title="t('首页')" :disabled="busy || offset === 0" @click="loadData(0)">|‹</button>
+          <button class="browse-icon" type="button" :aria-label="t('上一页')" :title="t('上一页')" :disabled="busy || offset === 0" @click="loadData(Math.max(0, offset - browsePageSize))">‹</button>
+          <form class="browse-page-input" @submit.prevent="jumpPage"><input v-model.number="pageInput" :aria-label="t('页码')" type="number" min="1" :max="Math.floor(1000000 / browsePageSize) + 1" :disabled="busy || !hasEntity" /></form>
+          <button class="browse-icon" type="button" :aria-label="t('下一页')" :title="t('下一页')" :disabled="busy || result?.nextOffset === undefined || result.nextOffset > 1000000" @click="result?.nextOffset !== undefined && loadData(result.nextOffset)">›</button>
+          <button class="browse-icon" type="button" :aria-label="t('末页')" :title="t('末页')" :disabled="busy || !hasEntity" @click="lastBrowsePage">›|</button>
+          <label class="inline-field browse-page-size" :title="t('每页')"><span aria-hidden="true">⚙</span><select :value="browsePageSize" :aria-label="t('每页')" :disabled="busy || !hasEntity" @change="changeBrowseSize"><option :value="100">100</option><option :value="200">200</option><option :value="500">500</option></select></label>
+        </div>
+        <div class="browse-view-buttons">
+          <button class="browse-icon" type="button" :class="{ active: browseView === 'grid' }" :aria-label="t('表格视图')" :title="t('表格视图')" :aria-pressed="browseView === 'grid'" @click="changeBrowseView('grid')">▦</button>
+          <button class="browse-icon" type="button" :class="{ active: browseView === 'record' }" :aria-label="t('记录视图')" :title="t('记录视图')" :aria-pressed="browseView === 'record'" @click="changeBrowseView('record')">▤</button>
+          <button class="browse-icon" type="button" :class="{ active: browseView === 'text' }" :aria-label="t('文本视图')" :title="t('文本视图')" :aria-pressed="browseView === 'text'" @click="changeBrowseView('text')">{{ '{}' }}</button>
+        </div>
+      </footer>
+      <footer v-else class="result-footer"><span>{{ result?.rows.length || 0 }} {{ t('条记录') }}<span v-if="result?.durationMs !== undefined"> · {{ result.durationMs }} ms</span><span v-if="result?.truncated"> {{ t('· 已达到单页限制') }}</span></span><div class="result-page-controls"><button v-if="offset > 0 && tab === 'query'" class="btn secondary small" :disabled="busy" @click="runQuery(Math.max(0, offset - limit))">{{ t('← 上一页') }}</button><button v-if="result?.nextOffset !== undefined && tab === 'query'" class="btn secondary small" :disabled="busy" @click="runQuery(result.nextOffset)">{{ t('下一页 →') }}</button></div><span>{{ session.writable ? t('可写会话') : t('只读会话') }}</span></footer>
     </template>
 
     <div v-if="documentView" class="modal-backdrop" @keydown.esc.stop="documentView = undefined">
