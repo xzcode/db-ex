@@ -20,6 +20,7 @@ const props = withDefaults(defineProps<{
   offset?: number
   bsonTypes?: BsonTypeBranch[]
   columnTypes?: string[]
+  sqliteTypes?: string[][]
   nullCells?: number[][]
   redisRowTypes?: string[]
   documents?: string[]
@@ -170,6 +171,7 @@ function cellType(row: Record<string, unknown>, index: number, key: string): Bso
   return cellRows.value[index]?.[key]?.type ?? (props.bsonTypes ? gridBsonType(row, props.bsonTypes[index], key) : undefined)
 }
 function genericType(index: number, column: number): string | undefined {
+  if(props.sqliteTypes)return props.sqliteTypes[index]?.[column]||'NULL'
   if (props.columnTypes) return props.nullCells?.[index]?.includes(column) ? 'NULL' : props.columnTypes[column] || 'UNKNOWN'
   if (props.redisRowTypes) return props.redisRowTypes[index] || 'unknown'
   return undefined
@@ -178,7 +180,7 @@ function gridType(row: Record<string, unknown>, index: number, key: string, colu
 function gridColor(row: Record<string, unknown>, index: number, key: string, column: number): string | undefined {
   const bson = cellType(row, index, key)
   if (bson) return activeTypeColor(bsonPalette.value, bson)
-  const kind = props.columnTypes ? 'mysql' : props.redisRowTypes ? 'redis' : undefined
+  const kind = props.sqliteTypes?'sqlite':props.columnTypes ? 'mysql' : props.redisRowTypes ? 'redis' : undefined
   const type = genericType(index, column)
   return kind && type && databasePalettes.value[kind].enabled ? databaseTypeColor(kind, databasePalettes.value[kind], type) : undefined
 }
@@ -186,7 +188,7 @@ function gridLabel(row: Record<string, unknown>, index: number, key: string, col
   const bson = cellType(row, index, key)
   return bson ? t(bsonLabel(bson)) : genericType(index, column) || ''
 }
-const showTypeLabels = computed(() => mongo.value ? bsonPalette.value.showLabels : props.columnTypes ? databasePalettes.value.mysql.showLabels : props.redisRowTypes ? databasePalettes.value.redis.showLabels : false)
+const showTypeLabels = computed(() => mongo.value ? bsonPalette.value.showLabels : props.sqliteTypes?databasePalettes.value.sqlite.showLabels:props.columnTypes ? databasePalettes.value.mysql.showLabels : props.redisRowTypes ? databasePalettes.value.redis.showLabels : false)
 function display(value: unknown): string {
   if (value === null) return 'NULL'
   if (value === undefined) return '—'
@@ -199,7 +201,7 @@ function display(value: unknown): string {
 
 <template>
   <div ref="scrollHost" class="grid-scroll" tabindex="0" :aria-label="t('结果表格')" @scroll.passive="onScroll">
-    <table :class="['data-table', 'configured-grid', { 'virtual-grid': virtual, 'mongo-grid': mongo, 'typed-grid': !!columnTypes || !!redisRowTypes }]" :style="gridStyle" :aria-rowcount="rows.length + 1" :dir="mongo ? 'ltr' : undefined">
+    <table :class="['data-table', 'configured-grid', { 'virtual-grid': virtual, 'mongo-grid': mongo, 'typed-grid': !!columnTypes || !!redisRowTypes || !!sqliteTypes }]" :style="gridStyle" :aria-rowcount="rows.length + 1" :dir="mongo ? 'ltr' : undefined">
       <colgroup v-if="mongo"><col style="width: 38px" /><col v-for="column in columns" :key="column" :style="{ width: columnWidth(column) + 'px' }" /></colgroup>
       <thead><tr>
         <th v-if="selectable" class="number-cell"><input type="checkbox" :aria-label="t('选择当前页')" :checked="rows.length > 0 && checked.length === rows.length" @change="emit('checkAll')" /></th>

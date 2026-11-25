@@ -8,7 +8,7 @@ import FilePathField from './components/FilePathField.vue'
 import ConnectionColorPicker from './components/ConnectionColorPicker.vue'
 const props = defineProps<{ draft?: ConnectionDraft }>()
 const emit = defineEmits<{ close: []; saved: [connection: SavedConnection]; connected: [session: SessionInfo] }>()
-const pages = [{ key: 'basic', label: '基本设置' }, { key: 'tls', label: 'TLS / SSL' }, { key: 'ssh', label: 'SSH / 多跳' }, { key: 'proxy', label: '代理' }, { key: 'advanced', label: '高级设置' }]
+const allPages = [{ key: 'basic', label: '基本设置' }, { key: 'tls', label: 'TLS / SSL' }, { key: 'ssh', label: 'SSH / 多跳' }, { key: 'proxy', label: '代理' }, { key: 'advanced', label: '高级设置' }]
 const page = ref('basic')
 const stage = ref<'choose' | 'form'>(props.draft ? 'form' : 'choose')
 const busy = ref(false)
@@ -27,8 +27,9 @@ const entry = ref<EntryMode>(initialEntry(props.draft))
 const authMode = ref<DatabaseAuthMode>(initialAuth(config.value, props.draft))
 const revealPassword = ref(false)
 const revealUri = ref(false)
-const kinds: DatabaseKind[] = ['mysql', 'mongodb', 'redis']
-const symbols: Record<DatabaseKind, string> = { mysql: '▤', mongodb: '◈', redis: '⬡' }
+const pages=computed(()=>config.value.kind==='sqlite'?allPages.filter(p=>p.key==='basic'||p.key==='advanced'):allPages)
+const kinds: DatabaseKind[] = ['mysql', 'mongodb', 'redis','sqlite']
+const symbols: Record<DatabaseKind, string> = { mysql: '▤', mongodb: '◈', redis: '⬡', sqlite:'▧' }
 const mongoUriActive = computed(() => config.value.kind === 'mongodb' && entry.value === 'uri')
 const usesSeeds = computed(() => config.value.kind === 'mongodb' ? !mongoUriActive.value && Boolean(config.value.nodes?.length) : config.value.kind === 'redis' && config.value.redisMode !== 'standalone')
 const showSeedEditor = computed(() => config.value.kind === 'mongodb' && !mongoUriActive.value && (config.value.mongoTopology !== 'direct' || Boolean(config.value.nodes?.length)) || config.value.kind === 'redis' && config.value.redisMode !== 'standalone')
@@ -66,6 +67,7 @@ function addSeed() {
 }
 function snapshot(allowUnnamed = false) { return prepareConnection(config.value, { entry: entry.value, auth: authMode.value, draft: props.draft, clearSecrets: clearSecrets.value, allowUnnamed }) }
 function failure(reason: unknown) { error.value = reason instanceof Error ? reason.message : String(reason) }
+async function chooseSqlite(create=false){try{const path=await window.dbex.pickConnectionFile(create?'sqlite-create':'sqlite');if(path)config.value.filePath=path}catch(reason){failure(reason)}}
 async function test() {
   busy.value = true; error.value = ''; notice.value = ''
   try { const input = snapshot(true); notice.value = await window.dbex.testConnection(input.config, input.clearSecrets) }
@@ -107,7 +109,7 @@ function secretLabel(path: string) {
       <header class="dialog-header"><h2 id="picker-title">{{ t('选择数据库类型') }}</h2><button class="icon-button" :aria-label="t('关闭弹窗')" @click="emit('close')">×</button></header>
       <div class="connection-picker-body">
         <button v-for="kind in kinds" :key="kind" class="connection-choice" type="button" :aria-label="databaseNames[kind]" @click="chooseKind(kind)">
-          <span :class="['db-icon', kind]">{{ symbols[kind] }}</span><span class="choice-name">{{ databaseNames[kind] }}</span><span class="choice-port">{{ defaultPorts[kind] }}</span><span class="choice-arrow">›</span>
+          <span :class="['db-icon', kind]">{{ symbols[kind] }}</span><span class="choice-name">{{ databaseNames[kind] }}</span><span class="choice-port">{{ kind==='sqlite'?'Local':defaultPorts[kind] }}</span><span class="choice-arrow">›</span>
         </button>
         <div class="connection-picker-divider"></div>
         <button class="connection-choice uri-choice" type="button" :aria-label="t('使用 MongoDB URI')" @click="chooseKind('mongodb', 'uri')"><span class="choice-uri-icon">URI</span><span class="choice-name">{{ t('使用 MongoDB URI') }}</span><span class="choice-arrow">›</span></button>
@@ -124,7 +126,7 @@ function secretLabel(path: string) {
           <template v-if="page === 'basic'">
             <div class="general-connection-fields field-wide">
               <label class="connection-row"><span>{{ t('连接名称') }}</span><input v-model.trim="config.name" required maxlength="100" :placeholder="databaseNames[config.kind]" autofocus /></label>
-              <template v-if="config.kind === 'mongodb'">
+              <template v-if="config.kind==='sqlite'"><div class="connection-row"><span>SQLite {{ t('数据文件') }}</span><div class="pref-inline"><input v-model="config.filePath" aria-label="SQLite" spellcheck="false" /><button type="button" class="btn secondary small" @click="chooseSqlite()">{{ t('选择数据文件') }}</button><button type="button" class="btn secondary small" @click="chooseSqlite(true)">{{ t('新建') }}</button></div></div></template><template v-if="config.kind === 'mongodb'">
                 <div class="connection-row"><span>{{ t('连接方式') }}</span><div class="connection-mode-buttons"><button type="button" :class="['mode-button', { selected: entry === 'fields' }]" :aria-pressed="entry === 'fields'" @click="setEntry('fields')">{{ t('主机和端口') }}</button><button type="button" :class="['mode-button', { selected: entry === 'uri' }]" :aria-pressed="entry === 'uri'" @click="setEntry('uri')">MongoDB URI</button></div></div>
                 <template v-if="mongoUriActive">
                   <div class="connection-row align-start"><label for="mongo-uri">{{ t('MongoDB URI（优先于主机设置）') }}</label><div class="password-input"><input id="mongo-uri" v-model.trim="config.uri" :type="revealUri ? 'text' : 'password'" autocomplete="new-password" spellcheck="false" :placeholder="props.draft?.secretFields.includes('uri') ? t('已保存 URI · 留空保留') : t('mongodb:// 或 mongodb+srv://')" /><button type="button" class="btn secondary small" :aria-label="t(revealUri ? '隐藏密码' : '显示密码')" @click="revealUri = !revealUri">{{ t(revealUri ? '隐藏' : '显示') }}</button></div></div>
@@ -134,7 +136,7 @@ function secretLabel(path: string) {
                 <label v-else class="connection-row"><span>{{ t('连接拓扑') }}</span><select v-model="config.mongoTopology"><option value="auto">{{ t('自动（单地址直连，副本集自动发现）') }}</option><option value="direct">{{ t('直连指定节点') }}</option><option value="discover">{{ t('副本集 / 分片集群（自动发现）') }}</option></select></label>
               </template>
               <label v-if="config.kind === 'redis'" class="connection-row"><span>{{ t('Redis 拓扑') }}</span><select v-model="config.redisMode" @change="changeRedisMode"><option value="standalone">{{ t('单机') }}</option><option value="cluster">{{ t('集群') }}</option><option value="sentinel">Sentinel</option></select></label>
-              <template v-if="!mongoUriActive">
+              <template v-if="!mongoUriActive && config.kind!=='sqlite'">
                 <template v-if="!usesSeeds">
                   <label class="connection-row"><span>{{ t('主机') }}</span><input v-model.trim="config.host" placeholder="127.0.0.1" spellcheck="false" /></label>
                   <label class="connection-row"><span>{{ t('端口') }}</span><input v-model.number="config.port" class="connection-port" type="number" min="1" max="65535" /></label>
@@ -175,8 +177,8 @@ function secretLabel(path: string) {
             <label class="checkbox-row field-wide"><input v-model="config.proxy!.enabled" type="checkbox" /> {{ t('启用网络代理') }}</label><template v-if="config.proxy!.enabled"><label class="field">{{ t('代理协议') }}<select v-model="config.proxy!.type"><option value="socks5">SOCKS5</option><option value="http-connect">HTTP CONNECT</option></select></label><label class="field">{{ t('代理主机') }}<input v-model.trim="config.proxy!.host" /></label><label class="field">{{ t('代理端口') }}<input v-model.number="config.proxy!.port" type="number" min="1" max="65535" /></label><label class="field">{{ t('用户名') }}<input v-model="config.proxy!.username" autocomplete="off" /></label><label class="field field-wide">{{ t('密码') }}<input v-model="config.proxy!.password" type="password" autocomplete="new-password" :placeholder="t('已保存的凭据留空保留')" /></label><p class="helper field-wide">{{ t('代理会承载数据库连接；同时启用 SSH 时，代理用于到达第一级 SSH 服务器。') }}</p></template>
           </template>
           <template v-else>
-            <label class="field">{{ t('连接超时（毫秒）') }}<input v-model.number="config.connectTimeoutMs" type="number" min="1000" max="60000" /></label>
-            <label v-if="config.kind !== 'redis' && !mongoUriActive" class="field field-wide">{{ t('默认数据库') }}<input v-model.trim="config.database" :placeholder="t('可留空')" /></label>
+            <label v-if="config.kind!=='sqlite'" class="field">{{ t('连接超时（毫秒）') }}<input v-model.number="config.connectTimeoutMs" type="number" min="1000" max="60000" /></label>
+            <label v-if="config.kind !== 'redis' && config.kind!=='sqlite' && !mongoUriActive" class="field field-wide">{{ t('默认数据库') }}<input v-model.trim="config.database" :placeholder="t('可留空')" /></label>
             <label v-if="config.kind === 'redis'" class="field">Redis DB<input v-model.number="config.redisDb" type="number" min="0" max="1023" :disabled="config.redisMode === 'cluster'" /></label>
             <p v-if="config.kind === 'redis' && config.redisMode === 'cluster'" class="helper field-wide">{{ t('Cluster 使用 DB 0；Key 扫描按主节点进行，可在浏览器中切换节点。') }}</p>
             <label class="field field-wide">{{ t('分组名称') }}<input v-model.trim="config.group" maxlength="80" :placeholder="t('可留空')" /></label>

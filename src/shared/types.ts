@@ -2,7 +2,7 @@ import type { BsonTypeBranch } from './bson-types'
 import type { BrowseFilter } from './browse-filter'
 import type { ObjectInspection } from './object-inspection'
 
-export type DatabaseKind = 'mysql' | 'mongodb' | 'redis'
+export type DatabaseKind = 'mysql' | 'mongodb' | 'redis' | 'sqlite'
 export type SqlValue = string | number | boolean | null
 export type SqlRow = Record<string, SqlValue>
 
@@ -48,6 +48,7 @@ export interface ConnectionConfig extends ConnectionAppearance {
   username?: string
   password?: string
   database?: string
+  filePath?: string
   authSource?: string
   redisDb?: number
   uri?: string
@@ -110,6 +111,7 @@ export interface OperationResult extends DataPreview {
   totalRows?: string
   countLimited?: boolean
   columnTypes?: string[]
+  sqliteTypes?: string[][]
   nullCells?: number[][]
   redisRowTypes?: string[]
   redisType?: string
@@ -178,17 +180,21 @@ export interface QuerySnippet {
 }
 export interface FileImport { name: string; text: string; format: 'csv' | 'json' | 'text' }
 export interface SshImportResult { hosts: { name: string; ssh: SshOptions }[]; warnings: string[] }
-export type ConnectionFileKind = 'certificate' | 'private-key'
+export type ConnectionFileKind = 'certificate' | 'private-key' | 'sqlite' | 'sqlite-create'
 export interface DbExAPI {
   getNativePreferences():Promise<import('./preferences').NativePreferences>
   saveNativePreferences(value:import('./preferences').NativePreferences):Promise<import('./preferences').NativePreferences>
   pickTool(name:import('./preferences').ToolName):Promise<string|null>
   checkTool(name:import('./preferences').ToolName,path:string):Promise<boolean>
+  toolVersion(name:import('./preferences').ToolName,path:string):Promise<string>
+  backupSqlite(id:string):Promise<boolean>
+  runNativeTool(id:string,task:import('./preferences').NativeToolTask,database:string,entity?:string):Promise<boolean>
   logPath():Promise<string>
   openLogs():Promise<void>
   saveRecovery(value:import('./preferences').RecoveryDraft):Promise<void>
   loadRecovery(value:import('./preferences').RecoveryDraft):Promise<import('./preferences').RecoveryDraft|null>
   clearRecovery():Promise<void>
+  deleteRecovery(value:import('./preferences').RecoveryDraft):Promise<void>
   pickConnectionFile(kind: ConnectionFileKind): Promise<string | null>
   getSystemLanguage(): Promise<string>
   setLocale(locale: import('./i18n').Locale): Promise<void>

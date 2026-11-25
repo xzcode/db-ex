@@ -118,7 +118,7 @@ onBeforeUnmount(()=>{disposed=true})
       <label class="field">{{ t('目标集合或视图') }}<select v-model="entity" :aria-label="t('目标集合或视图')" :disabled="busyAll"><option value="">{{ t('未选择对象') }}</option><option v-for="item in targets" :key="item.id" :value="item.entity">{{ item.label }}</option></select></label>
       <label class="field">{{ t('每页') }}<select v-model.number="limit" :disabled="busyAll"><option :value="100">100</option><option :value="200">200</option><option :value="500">500</option></select></label>
     </div>
-    <div v-if="kind==='aggregation'" class="query-editor"><CodeEditor v-model="pipeline" language="json" :readonly="busyAll" @execute="runQuery()" /></div>
+    <div v-if="kind==='aggregation'" class="query-editor"><CodeEditor v-model="pipeline" language="json" completion-kind="mongodb" :suggestions="result?.columns || []" :readonly="busyAll" @execute="runQuery()" /></div>
     <div v-else class="library-query-parts"><label class="field">Filter<textarea v-model="filter" aria-label="Filter" :disabled="busyAll" spellcheck="false" /></label><label class="field">Projection<textarea v-model="projection" aria-label="Projection" :disabled="busyAll" spellcheck="false" /></label><label class="field">Sort<textarea v-model="sort" aria-label="Sort" :disabled="busyAll" spellcheck="false" /></label></div>
     <ResultGrid v-if="result" :columns="result.columns" :rows="result.rows" :documents="result.documents" :bson-types="result.bsonTypes" :offset="offset" />
     <div v-else class="empty-state"><strong>{{ t('运行查询查看结果') }}</strong><span>{{ t('请选择目标集合或视图。') }}</span></div>

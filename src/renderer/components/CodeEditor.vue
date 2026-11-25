@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { t } from '../i18n'
+import { sqlContext,sqlKeywords,sqlFunctions,mongoSuggestions,redisSuggestions } from '../../shared/editor-completion'
 import { preferences } from '../preferences'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as monaco from 'monaco-editor/editor/editor.api'
@@ -19,12 +20,14 @@ const props = withDefaults(defineProps<{
   language?: string
   readonly?: boolean
   suggestions?: string[]
+  tableSuggestions?: string[]
+  completionKind?: 'mongodb'|'redis'
 }>(), { language: 'sql', readonly: false, suggestions: () => [] })
 const emit = defineEmits<{ 'update:modelValue': [value: string]; execute: [] }>()
 const host = ref<HTMLElement>()
 let editor: monaco.editor.IStandaloneCodeEditor | undefined
 let observer: MutationObserver | undefined
-let completion: monaco.IDisposable | undefined
+let completion: monaco.IDisposable[] = []
 let change: monaco.IDisposable | undefined
 
 self.MonacoEnvironment = {
@@ -97,14 +100,35 @@ onMounted(() => {
   applyTheme(); applyOptions()
   change = editor.onDidChangeModelContent(() => emit('update:modelValue', editor!.getValue()))
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => emit('execute'))
-  completion = monaco.languages.registerCompletionItemProvider('sql', {
-    provideCompletionItems(model, position) {
-      if (model !== editor?.getModel() || !preferences.value.completion || activeLanguage()==='plaintext') return { suggestions: [] }
-      const word = model.getWordUntilPosition(position)
-      const range = new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn)
-      return { suggestions: props.suggestions.map(label => ({ label, insertText: '`' + label.replace(/`/g, '``') + '`', range, kind: monaco.languages.CompletionItemKind.Field })) }
-    },
-  })
+  function provider(language:string){
+    return monaco.languages.registerCompletionItemProvider(language,{
+      triggerCharacters:language==='sql'?['.',' ']:['$','"'],
+      provideCompletionItems(model,position){
+        if(model!==editor?.getModel()||!preferences.value.completion||activeLanguage()==='plaintext'||props.readonly)return {suggestions:[]}
+        const word=model.getWordUntilPosition(position)
+        const range=new monaco.Range(position.lineNumber,language==='json'&&model.getLineContent(position.lineNumber)[word.startColumn-2]==='$'?word.startColumn-1:word.startColumn,position.lineNumber,word.endColumn)
+        const kinds=monaco.languages.CompletionItemKind
+        const prefix=model.getValueInRange(new monaco.Range(position.lineNumber,1,position.lineNumber,position.column))
+        const entries:monaco.languages.CompletionItem[]=[]
+        function add(labels:readonly string[],kind:monaco.languages.CompletionItemKind,priority:string,format:(s:string)=>string=(s=>s)){
+          for(const label of [...new Set(labels)].filter(Boolean).slice(0,500))entries.push({label,insertText:format(label),kind,range,sortText:priority+label})
+        }
+        if(language==='sql'){
+          const context=sqlContext(prefix)
+          const quote=(name:string)=>'\x60'+name.replaceAll('\x60','\x60\x60')+'\x60'
+          add(props.tableSuggestions||[],kinds.Class,context==='table'?'0':'2',quote)
+          add(props.suggestions||[],kinds.Field,context==='field'?'0':'2',quote)
+          add(sqlKeywords,kinds.Keyword,'3')
+          add(sqlFunctions,kinds.Function,'4',name=>name+'()')
+        }else if(props.completionKind==='mongodb'){
+          add(mongoSuggestions,kinds.Keyword,'1')
+          add(props.suggestions||[],kinds.Field,'2')
+        }else if(props.completionKind==='redis')add(redisSuggestions,kinds.Keyword,'1')
+        return {suggestions:entries}
+      }
+    })
+  }
+  completion=[provider('sql'),provider('json')]
   observer = new MutationObserver(applyTheme)
   observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
 })
@@ -113,7 +137,7 @@ watch(() => props.language,applyOptions)
 watch(preferences,()=>{applyTheme();applyOptions()},{deep:true})
 watch(() => props.readonly, value => editor?.updateOptions({ readOnly: value }))
 onBeforeUnmount(() => {
-  observer?.disconnect(); completion?.dispose(); change?.dispose()
+  observer?.disconnect(); completion.forEach(item=>item.dispose()); change?.dispose()
   const model = editor?.getModel(); editor?.dispose(); model?.dispose()
 })
 defineExpose({

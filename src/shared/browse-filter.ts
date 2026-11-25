@@ -144,7 +144,7 @@ export function compileMongoFilter(input: unknown): { filter: string; sort: stri
   return { filter:JSON.stringify(filter), sort:JSON.stringify(Object.fromEntries(value.sort.map(rule=>[rule.field,rule.direction]))) }
 }
 export function quoteBrowseIdentifier(value: unknown): string { return '\x60'+fieldName(value,false).replace(/\x60/g,'\x60\x60')+'\x60' }
-function mysqlBound(rule: FilterRule, value: string): { value: SqlValue; placeholder: string } {
+function mysqlBound(rule: FilterRule, value: string, dialect:'mysql'|'sqlite'='mysql'): { value: SqlValue; placeholder: string } {
   if (rule.type === 'Decimal128') {
     const decimal = /^-?(\d+)(?:\.(\d+))?$/.exec(value)
     if (!decimal || decimal[1].replace(/^0+/,'').length>35 || (decimal[2]||'').length>30) return fail()
@@ -153,25 +153,26 @@ function mysqlBound(rule: FilterRule, value: string): { value: SqlValue; placeho
   const bound = typeof typed === 'object' && typed !== null ? Object.values(typed)[0] : typed
   if (typeof bound !== 'string' && typeof bound !== 'boolean') return fail()
   if (rule.type === 'Double' && typeof bound === 'string' && !Number.isFinite(Number(bound))) return fail()
+  if(dialect==='sqlite')return {value:bound,placeholder:rule.type==='Int32'||rule.type==='Long'?'CAST(? AS INTEGER)':rule.type==='Decimal128'||rule.type==='Double'?'CAST(? AS REAL)':'?'}
   return { value:bound, placeholder:rule.type === 'Int32' || rule.type === 'Long' ? 'CAST(? AS SIGNED)' : rule.type === 'Decimal128' ? 'CAST(? AS DECIMAL(65,30))' : '?' }
 }
-export function compileMysqlFilter(database:string, entity:string,input:unknown): { sql:string; countSql:string; parameters:SqlValue[] } {
+export function compileMysqlFilter(database:string, entity:string,input:unknown,dialect:'mysql'|'sqlite'='mysql'): { sql:string; countSql:string; parameters:SqlValue[] } {
   const value=checked(input,false), parameters:SqlValue[]=[]
   const sqlJoin=(items:string[],mode:'and'|'or')=>items.length===1?items[0]!: '('+items.join(mode==='and'?' AND ':' OR ')+')'
   function sqlRule(rule:FilterRule):string {
     const field=quoteBrowseIdentifier(rule.field), op=rule.operator
     if (op==='null'||op==='notNull') return field+(op==='null'?' IS NULL':' IS NOT NULL')
-    if (op==='empty'||op==='notEmpty') return '('+field+' IS NOT NULL AND CHAR_LENGTH('+field+') '+(op==='empty'?'=':'>')+' 0)'
+    if (op==='empty'||op==='notEmpty') return '('+field+' IS NOT NULL AND '+(dialect==='sqlite'?'LENGTH':'CHAR_LENGTH')+'('+field+') '+(op==='empty'?'=':'>')+' 0)'
     if (stringOperators.includes(op)) {
       const literal=rule.value.replace(/[!%_]/g,char=>'!'+char)
       parameters.push((op==='starts'||op==='notStarts'?'':'%')+literal+(op==='ends'||op==='notEnds'?'':'%'))
       return field+(op.startsWith('not')?' NOT LIKE ?':' LIKE ?')+" ESCAPE '!'"
     }
     if (listOperators.includes(op)) {
-      const placeholders=listValues(rule.value).map(item=>{const bound=mysqlBound(rule,item);parameters.push(bound.value);return bound.placeholder})
+      const placeholders=listValues(rule.value).map(item=>{const bound=mysqlBound(rule,item,dialect);parameters.push(bound.value);return bound.placeholder})
       return field+(op==='in'?' IN (':' NOT IN (')+placeholders.join(', ')+')'
     }
-    const bound=mysqlBound(rule,rule.value); parameters.push(bound.value)
+    const bound=mysqlBound(rule,rule.value,dialect); parameters.push(bound.value)
     const operators:Record<string,string>={eq:'=',ne:'<>',gt:'>',gte:'>=',lt:'<',lte:'<='}
     return field+' '+operators[op]+' '+bound.placeholder
   }

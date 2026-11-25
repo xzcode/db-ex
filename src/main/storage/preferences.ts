@@ -52,4 +52,5 @@ export function loadRecovery(input:unknown){
  const value=normalizeRecoveryDraft(input)
  return recoveryWrites.run(async()=> (await readDrafts()).find(x=>recoveryKey(x)===recoveryKey(value))||null)
 }
+export function deleteRecovery(input:unknown){const value=normalizeRecoveryDraft(input);return recoveryWrites.run(async()=>{const old=await readDrafts();await writeJson('recovery.secure.json',{version:1,encrypted:encrypt(old.filter(x=>recoveryKey(x)!==recoveryKey(value)))})})}
 export function clearRecovery(){return recoveryWrites.run(()=>writeJson('recovery.secure.json',{version:1,encrypted:encrypt([])}))}

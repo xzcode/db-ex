@@ -1,16 +1,19 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, shell, session as electronSession } from 'electron'
 import { isLocale, resolveLocale, translate, localizeMessage, type Locale } from '../shared/i18n'
-import { join, basename, extname } from 'node:path'
-import { readFile, stat, writeFile, mkdir } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { join, basename, extname, dirname } from 'node:path'
+import { readFile, stat, writeFile, mkdir, mkdtemp, copyFile, rm } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 import type { ConnectionConfig, DatabaseOperation, FileImport, QuerySnippet } from '../shared/types'
 import { ConnectionStore } from './connections/store'
 import { SessionManager } from './connections/manager'
 import { validateId } from './connections/validation'
 import { SnippetStore } from './storage/snippets'
-import { initNativePreferences, getNativePreferences, saveNativePreferences, checkTool, diagnosticDirectory, diagnostic, saveRecovery, loadRecovery, clearRecovery } from './storage/preferences'
-import { toolNames, type ToolName } from '../shared/preferences'
+import { initNativePreferences, getNativePreferences, saveNativePreferences, checkTool, diagnosticDirectory, diagnostic, saveRecovery, loadRecovery, clearRecovery, deleteRecovery } from './storage/preferences'
+import { nativeTasks,runNativeTool,toolVersion } from './operations/native-tools'
+import { nativeToolTasks,toolNames, type ToolName,type NativeToolTask } from '../shared/preferences'
 import { parseSshConfig } from './connections/ssh-config'
+import { inspectSqliteSql } from './operations/sqlite-policy'
 import { inspectSql } from './operations/sql-policy'
 import { validateMongoDocumentEdit } from './operations/mongodb'
 import { redisCommandWrites, validateRedisCommand } from './operations/redis'
@@ -45,10 +48,10 @@ async function confirm(win: BrowserWindow, message: string, detail: string, acti
   const answer = await dialog.showMessageBox(win, { type: 'warning', title: tr('DB EX · 操作确认'), message: tr(message), detail, buttons: [tr('取消'), tr(action)], defaultId: 0, cancelId: 0, noLink: true })
   if (answer.response !== 1) throw new Error('CANCELLED: 已取消操作')
 }
-function writes(op: DatabaseOperation, writable: boolean): boolean {
+function writes(op: DatabaseOperation, writable: boolean, kind:import('../shared/types').DatabaseKind): boolean {
   if (!op || typeof op !== 'object' || typeof op.action !== 'string') throw new Error('INVALID_OPERATION: 操作参数无效')
   if (Buffer.byteLength(JSON.stringify(op)) > 4 * 1024 * 1024) throw new Error('LIMIT_EXCEEDED: 操作参数最多4 MiB')
-  if (op.action === 'mysql.query') return inspectSql(op.sql, writable).mode === 'write'
+  if (op.action === 'mysql.query') return (kind==='sqlite'?inspectSqliteSql(op.sql):inspectSql(op.sql,writable)).mode === 'write'
   if (op.action === 'redis.command') return redisCommandWrites(validateRedisCommand(op.args))
   return new Set(['mysql.createDatabase', 'mysql.dropDatabase', 'mongo.createDatabase', 'mongo.dropDatabase', 'mysql.insert', 'mysql.update', 'mysql.delete', 'mysql.import', 'mysql.begin', 'mysql.commit', 'mongo.insert', 'mongo.replace', 'mongo.delete', 'mongo.createIndex', 'mongo.dropIndex', 'redis.set', 'redis.mutate', 'redis.ttl', 'redis.delete']).has(op.action)
 }
@@ -87,13 +90,29 @@ function registerIpc(): void {
     return result.canceled?null:result.filePaths[0]||null
   }))
   ipcMain.handle('preferences:check-tool',handler((_win,name:ToolName,path:unknown)=>checkTool(name,path)))
+  ipcMain.handle('preferences:tool-version',handler(async(win,name:ToolName,path:string)=>{
+    if(!await checkTool(name,path))throw new Error('INVALID_TOOL_PATH: 请输入可执行文件的绝对路径')
+    await confirm(win,'确认执行外部工具？',name+' --version\n'+path)
+    return toolVersion(path)
+  }))
   ipcMain.handle('preferences:log-path',handler(()=>diagnosticDirectory()))
   ipcMain.handle('preferences:open-logs',handler(async()=>{const dir=diagnosticDirectory();await mkdir(dir,{recursive:true,mode:0o700});const error=await shell.openPath(dir);if(error)throw new Error('无法打开日志目录')}))
   ipcMain.handle('recovery:save',handler((_win,value:unknown)=>saveRecovery(value)))
   ipcMain.handle('recovery:load',handler((_win,value:unknown)=>loadRecovery(value)))
+  ipcMain.handle('recovery:delete',handler((_win,value:unknown)=>deleteRecovery(value)))
   ipcMain.handle('recovery:clear',handler(()=>clearRecovery()))
 
   ipcMain.handle('connections:pick-file', handler(async (win, kind: unknown) => {
+    if(kind==='sqlite-create'){
+      const answer=await dialog.showSaveDialog(win,{title:'SQLite',defaultPath:'database.sqlite',filters:[{name:'SQLite',extensions:['sqlite','sqlite3','db']}]})
+      if(answer.canceled||!answer.filePath)return null
+      await writeFile(answer.filePath,'',{flag:'wx',mode:0o600})
+      return answer.filePath
+    }
+    if(kind==='sqlite'){
+      const answer=await dialog.showOpenDialog(win,{title:'SQLite',properties:['openFile'],filters:[{name:'SQLite',extensions:['sqlite','sqlite3','db','db3']},{name:tr('所有文件'),extensions:['*']}]})
+      return answer.canceled?null:answer.filePaths[0]||null
+    }
     if (kind !== 'certificate' && kind !== 'private-key') throw new Error('INVALID_FILE_KIND')
     const all = { name: tr('所有文件'), extensions: ['*'] }
     const answer = await dialog.showOpenDialog(win, { title: tr(kind === 'certificate' ? '客户端证书 PEM 路径' : '私钥文件'),
@@ -144,7 +163,7 @@ function registerIpc(): void {
   }))
   ipcMain.handle('sessions:execute', handler(async (win, id: string, operation: DatabaseOperation) => {
     const info = sessions.info(id)
-    if (writes(operation, info.writable)) {
+    if (writes(operation, info.writable, info.kind)) {
       if (!info.writable || !('confirmed' in operation) || operation.confirmed !== true) throw new Error('WRITE_CONFIRMATION_REQUIRED: 请先解锁会话，并主动确认写入')
       await confirm(win, operation.action === 'mongo.dropDatabase' || operation.action === 'mysql.dropDatabase' ? '确认永久删除整个数据库？' : '确认执行数据库写操作？', operationDetail(id, operation))
     }
@@ -157,6 +176,31 @@ function registerIpc(): void {
     clipboard.writeText(value)
   }))
   ipcMain.handle('mongo:validate-document', handler((_win, document: string, original?: string) => validateMongoDocumentEdit(document, original)))
+  ipcMain.handle('sessions:sqlite-backup',handler(async(win,id:string)=>{
+    const info=sessions.info(id)
+    if(info.kind!=='sqlite'||info.transaction)throw new Error('INVALID_OPERATION: 不支持的操作')
+    const answer=await dialog.showSaveDialog(win,{title:tr('备份数据库'),defaultPath:'backup.sqlite',filters:[{name:'SQLite',extensions:['sqlite','sqlite3','db']}]})
+    if(answer.canceled||!answer.filePath)return false
+    await confirm(win,'备份数据库',info.name+'\n'+answer.filePath+'\n'+tr('导出仅创建新文件，不覆盖现有文件。'))
+    const dir=await mkdtemp(join(dirname(answer.filePath),'.dbex-sqlite-'))
+    try{const temp=join(dir,'backup.sqlite');await sessions.backupSqlite(id,temp);await copyFile(temp,answer.filePath,constants.COPYFILE_EXCL);return true}
+    finally{await rm(dir,{recursive:true,force:true})}
+  }))
+  ipcMain.handle('sessions:native-tool',handler(async(win,id:string,task:NativeToolTask,database:string,entity?:string)=>{
+    if(!nativeToolTasks.includes(task))throw new Error('INVALID_OPERATION: 不支持的操作')
+    const spec=nativeTasks[task],info=sessions.info(id)
+    if(info.kind!==spec.kind)throw new Error('INVALID_OPERATION: 操作与连接类型不匹配')
+    if(spec.write&&!info.writable)throw new Error('READ_ONLY: 请先启用当前会话的写入权限')
+    const executable=getNativePreferences().tools[spec.tool]
+    if(!executable||!await checkTool(spec.tool,executable))throw new Error('INVALID_TOOL_PATH: 请输入可执行文件的绝对路径')
+    const filters=[{name:spec.tool,extensions:[spec.extension]}]
+    const result=spec.write?await dialog.showOpenDialog(win,{properties:['openFile'],filters}):await dialog.showSaveDialog(win,{defaultPath:'database.'+spec.extension,filters})
+    const file='filePaths'in result?result.filePaths[0]:result.filePath
+    if(result.canceled||!file)return false
+    await confirm(win,'确认执行外部工具？',spec.tool+'\n'+info.name+' · '+database+(entity?'.'+entity:'')+'\n'+file+'\n'+tr(spec.write?'导入或恢复可能写入数据库，请确认文件来源及目标。':'导出仅创建新文件，不覆盖现有文件。'))
+    await sessions.external(id,spec.write,(config,signal)=>runNativeTool(executable,task,config,database,entity,file,signal))
+    return true
+  }))
   ipcMain.handle('sessions:cancel', handler((_win, id: string) => sessions.cancel(id)))
   ipcMain.handle('snippets:list', handler(() => snippets.list()))
   ipcMain.handle('snippets:save', handler((_win, value: Omit<QuerySnippet, 'id' | 'updatedAt'> & { id?: string }) => snippets.save(value)))

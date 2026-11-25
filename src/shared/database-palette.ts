@@ -8,11 +8,12 @@ const mysqlDefaults: Record<string, string | null> = {
   CHAR:'#4b88d9', VARCHAR:'#4b88d9', TEXT:'#8ab6ff', BINARY:'#ae477e', VARBINARY:'#ae477e',
   BLOB:'#ae477e', JSON:'#e69a38', ENUM:'#d3b12c', SET:'#cc7424', GEOMETRY:'#687589', NULL:null, UNKNOWN:null,
 }
+const sqliteDefaults:Record<string,string|null>={INTEGER:'#4da96b',REAL:'#32a8aa',TEXT:'#4b88d9',BLOB:'#ae477e',NULL:null}
 const redisDefaults: Record<string, string | null> = { string:'#4b88d9', hash:'#4da96b', list:'#e69a38', set:'#32a8aa', zset:'#956ad9', stream:'#d16b9e', none:null, unknown:null }
 export function newDatabasePalette(): DatabasePalette { return { enabled: true, showLabels: false, overrides: Object.create(null) } }
-export function databaseTypes(kind: Exclude<DatabaseKind, 'mongodb'>): readonly string[] { return kind === 'mysql' ? mysqlTypes : redisTypes }
+export function databaseTypes(kind: Exclude<DatabaseKind, 'mongodb'>): readonly string[] { return kind==='sqlite'?Object.keys(sqliteDefaults):kind === 'mysql' ? mysqlTypes : redisTypes }
 export function defaultDatabaseColor(kind: Exclude<DatabaseKind, 'mongodb'>, type: string): string | undefined {
-  const defaults = kind === 'mysql' ? mysqlDefaults : redisDefaults
+  const defaults = kind==='sqlite'?sqliteDefaults:kind === 'mysql' ? mysqlDefaults : redisDefaults
   return Object.hasOwn(defaults, type) ? defaults[type] || undefined : undefined
 }
 export function normalizeDatabasePalette(kind: Exclude<DatabaseKind, 'mongodb'>, value: unknown): DatabasePalette {

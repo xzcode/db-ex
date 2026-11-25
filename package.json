@@ -3,11 +3,11 @@
   "version": "0.5.7",
   "private": true,
   "type": "module",
-  "description": "DB EX — local-first database explorer for MySQL, MongoDB and Redis",
+  "description": "DB EX — local-first database explorer for MySQL, MongoDB, Redis and SQLite",
   "main": "dist-electron/main.cjs",
   "scripts": {
     "dev": "concurrently -k \"vite --host 127.0.0.1\" \"wait-on http://127.0.0.1:5173 && npm run build:main && npm run build:preload && electron . --dev\"",
-    "build:main": "esbuild src/main/index.ts --bundle --platform=node --format=cjs --target=node22 --outfile=dist-electron/main.cjs --packages=external --external:electron",
+    "build:main": "esbuild src/main/index.ts --bundle --platform=node --format=cjs --target=node22 --outfile=dist-electron/main.cjs --packages=external --external:electron && esbuild src/main/operations/sqlite-worker.ts --bundle --platform=node --format=cjs --target=node22 --outfile=dist-electron/sqlite-worker.cjs --packages=external",
     "build:preload": "esbuild src/preload/index.ts --bundle --platform=node --format=cjs --target=node22 --outfile=dist-electron/preload.cjs --external:electron",
     "build": "npm run icons && npm run build:main && npm run build:preload && vite build",
     "typecheck": "vue-tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.main.json",
@@ -96,7 +96,7 @@
     }
   },
   "engines": {
-    "node": ">=22.12"
+    "node": ">=22.18"
   },
   "homepage": "https://github.com/xzcode/db-ex",
   "repository": {

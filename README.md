@@ -144,3 +144,7 @@ The MongoDB row context menu supports document viewing/editing/creation/duplicat
 Shared collapsible object inspector with information, DDL (MongoDB/MySQL) or read-only Redis inspection commands, and per-engine type colors. Statistics are retrieved from the connected database; DDL is copyable and exportable, not executed. MySQL uses server field packet types, MongoDB preserves per-value BSON metadata, Redis uses server key types. Palette preferences are independent per engine and saved locally.
 
 Visual filter and sort builder for MongoDB/MySQL, compact navigation footer, bounded on-demand last-page counts, table/record/text views, and Redis cursor batch navigation. All data updates continue through explicit record review and confirmation.
+
+## Development: SQLite and unified preferences
+
+See [SQLite and preferences continuation](docs/SQLITE_AND_PREFERENCES.md) for the new local SQLite engine, supported operations, recovery and native tool limitations. This development work is not an independently released installer.

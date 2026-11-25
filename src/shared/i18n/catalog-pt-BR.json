@@ -406,5 +406,14 @@
   "已选择": "Selecionado",
   "数据库": "Banco de dados",
   "集合": "Coleção",
-  "主键": "Chave primária"
+  "主键": "Chave primária",
+  "恢复工作区": "Restaurar área de trabalho",
+  "恢复已保存的连接选项卡，不会自动执行查询或启用写入。": "Restaurar abas de conexão salvas sem executar consultas nem habilitar gravações.",
+  "配置工具绝对路径并检查版本。数据库菜单可执行受控导入、导出和备份恢复。": "Configurar caminhos absolutos e verificar versões. O menu do banco permite importar, exportar, fazer backup e restaurar.",
+  "备份数据库": "Fazer backup do banco",
+  "恢复数据库": "Restaurar banco de dados",
+  "确认执行外部工具？": "Executar ferramenta externa?",
+  "外部工具当前仅支持普通直连。": "As ferramentas externas atualmente aceitam apenas conexões diretas.",
+  "导入或恢复可能写入数据库，请确认文件来源及目标。": "A importação ou restauração pode alterar o banco. Verifique a origem e o destino.",
+  "导出仅创建新文件，不覆盖现有文件。": "A exportação cria um novo arquivo sem sobrescrever arquivos existentes."
 }

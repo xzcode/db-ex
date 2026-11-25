@@ -16,11 +16,12 @@ const tab=ref<Tab>('general')
 const draft=ref(normalizePreferences(preferences.value))
 const native=ref<NativePreferences>({tools:{},diagnostics:false})
 const status=ref<Partial<Record<ToolName,boolean>>>({})
+const versions=ref<Partial<Record<ToolName,string>>>({})
 const busy=ref(false), ready=ref(false),error=ref(''),notice=ref(''),logPath=ref('')
-const paletteKind=ref<'mongodb'|'mysql'|'redis'>('mongodb')
-const palettes=ref<Record<'mongodb'|'mysql'|'redis',DatabasePalette>>({
+const paletteKind=ref<'mongodb'|'mysql'|'redis'|'sqlite'>('mongodb')
+const palettes=ref<Record<'mongodb'|'mysql'|'redis'|'sqlite',DatabasePalette>>({
  mongodb:{...normalizeBsonPalette(bsonPalette.value),overrides:{...bsonPalette.value.overrides}},
- mysql:normalizeDatabasePalette('mysql',databasePalettes.value.mysql),redis:normalizeDatabasePalette('redis',databasePalettes.value.redis)
+ mysql:normalizeDatabasePalette('mysql',databasePalettes.value.mysql),redis:normalizeDatabasePalette('redis',databasePalettes.value.redis),sqlite:normalizeDatabasePalette('sqlite',databasePalettes.value.sqlite)
 })
 const activePalette=computed(()=>palettes.value[paletteKind.value])
 const activeTypes=computed<readonly string[]>(()=>paletteKind.value==='mongodb'?bsonTypes:databaseTypes(paletteKind.value))
@@ -35,7 +36,9 @@ const colorLabels:Record<SyntaxRole,string>={foreground:'常规',keyword:'关键
 const colors=computed(()=>draft.value.editor.customColors?draft.value.editor.colors:syntaxDefaults(resolvedTheme(draft.value.theme)==='light'))
 function fail(reason:unknown){error.value=reason instanceof Error?reason.message:String(reason)}
 async function action(fn:()=>Promise<void>){if(busy.value)return;busy.value=true;error.value='';notice.value='';try{await fn()}catch(reason){fail(reason)}finally{busy.value=false}}
+function openLogs(){return action(()=>window.dbex.openLogs())}
 async function browse(name:ToolName){await action(async()=>{const path=await window.dbex.pickTool(name);if(path){native.value.tools[name]=path;status.value[name]=await window.dbex.checkTool(name,path)}})}
+async function version(name:ToolName){await action(async()=>{versions.value[name]=await window.dbex.toolVersion(name,native.value.tools[name]||'')})}
 async function check(name:ToolName){await action(async()=>{status.value[name]=await window.dbex.checkTool(name,native.value.tools[name]||'')})}
 function reset(){
  const d=defaultPreferences()
@@ -46,14 +49,14 @@ function reset(){
  else if(tab.value==='records')draft.value.records=d.records
  else if(tab.value==='colors')palettes.value[paletteKind.value]=paletteKind.value==='mongodb'?{...newBsonPalette(),overrides:{}}:newDatabasePalette()
  else if(tab.value==='recovery')draft.value.recoverySeconds=d.recoverySeconds
- else if(tab.value==='tools'){native.value.tools={};status.value={}}
+ else if(tab.value==='tools'){native.value.tools={};status.value={};versions.value={}}
  else if(tab.value==='advanced')native.value.diagnostics=false
 }
 function customColorsChanged(){if(draft.value.editor.customColors)draft.value.editor.colors=syntaxDefaults(resolvedTheme(draft.value.theme)==='light')}
 async function save(){await action(async()=>{
  await window.dbex.saveNativePreferences(normalizeNativePreferences(native.value))
  savePreferences(normalizePreferences(draft.value))
- saveBsonPalette(normalizeBsonPalette(palettes.value.mongodb));saveDatabasePalette('mysql',palettes.value.mysql);saveDatabasePalette('redis',palettes.value.redis)
+ saveBsonPalette(normalizeBsonPalette(palettes.value.mongodb));saveDatabasePalette('mysql',palettes.value.mysql);saveDatabasePalette('redis',palettes.value.redis);saveDatabasePalette('sqlite',palettes.value.sqlite)
  emit('close')
 })}
 onMounted(()=>{void action(async()=>{native.value=normalizeNativePreferences(await window.dbex.getNativePreferences());logPath.value=await window.dbex.logPath();ready.value=true})})
@@ -72,9 +75,9 @@ onMounted(()=>{void action(async()=>{native.value=normalizeNativePreferences(awa
           <label class="pref-row"><span>{{ t('主题') }}</span><select v-model="draft.theme" :aria-label="t('主题')"><option value="system">{{ t('跟随系统') }}</option><option value="light">{{ t('浅色主题') }}</option><option value="dark">{{ t('深色主题') }}</option></select></label>
         </template>
         <template v-else-if="tab==='tabs'">
-          <label class="pref-row"><span>{{ t('启动画面') }}</span><select v-model="draft.startup" :aria-label="t('启动画面')"><option value="welcome">{{ t('欢迎') }}</option><option value="lastConnection">{{ t('重新打开上次连接') }}</option></select></label>
+          <label class="pref-row"><span>{{ t('启动画面') }}</span><select v-model="draft.startup" :aria-label="t('启动画面')"><option value="welcome">{{ t('欢迎') }}</option><option value="lastConnection">{{ t('重新打开上次连接') }}</option><option value="workspace">{{ t('恢复工作区') }}</option></select></label>
           <div class="pref-row"><span></span><label class="checkbox-row"><input v-model="draft.alwaysShowTabs" type="checkbox" /> {{ t('始终显示选项卡栏') }}</label></div>
-          <p class="helper">{{ t('仅恢复上次保存的连接，不会自动执行查询或启用写入。') }}</p>
+          <p class="helper">{{ t('恢复已保存的连接选项卡，不会自动执行查询或启用写入。') }}</p>
         </template>
         <template v-else-if="tab==='completion'">
           <label class="checkbox-row"><input v-model="draft.completion" type="checkbox" /> {{ t('使用代码补全') }}</label>
@@ -101,7 +104,7 @@ onMounted(()=>{void action(async()=>{native.value=normalizeNativePreferences(awa
           <div class="pref-section-title">{{ t('默认每页记录数') }}</div>
           <label class="pref-row"><span>MySQL</span><select v-model.number="draft.records.mysqlPageSize" aria-label="MySQL"><option v-for="size in [100,200,500]" :key="size" :value="size">{{ size }}</option></select></label>
           <label class="pref-row"><span>MongoDB</span><select v-model.number="draft.records.mongoPageSize" aria-label="MongoDB"><option v-for="size in [100,200,500]" :key="size" :value="size">{{ size }}</option></select></label>
-          <div class="pref-section-title">{{ t('结果表格') }}</div>
+          <label class="pref-row"><span>SQLite</span><select v-model.number="draft.records.sqlitePageSize" aria-label="SQLite"><option v-for="size in [100,200,500]" :key="size" :value="size">{{ size }}</option></select></label><div class="pref-section-title">{{ t('结果表格') }}</div>
           <label class="pref-row"><span>{{ t('字体') }}</span><select v-model="draft.records.fontFamily" :aria-label="t('字体')"><option v-for="font in gridFonts" :key="font" :value="font">{{ font==='default'?t('默认字体'):font }}</option></select></label>
           <label class="pref-row"><span>{{ t('字号') }}</span><input v-model.number="draft.records.fontSize" :aria-label="t('字号')" type="number" min="10" max="22" /></label>
           <label class="pref-row"><span>{{ t('行高') }}</span><select v-model.number="draft.records.rowHeight" :aria-label="t('行高')"><option :value="0">{{ t('自动') }}</option><option v-for="size in [26,30,34,40]" :key="size" :value="size">{{ size }} px</option></select></label>
@@ -110,7 +113,7 @@ onMounted(()=>{void action(async()=>{native.value=normalizeNativePreferences(awa
           <p class="helper">{{ t('每页数量适用于新打开的数据对象；现有读取上限和写入确认保持不变。') }}</p>
         </template>
         <template v-else-if="tab==='colors'">
-          <label class="pref-row"><span>{{ t('数据库类型') }}</span><select v-model="paletteKind" :aria-label="t('数据库类型')"><option value="mongodb">MongoDB</option><option value="mysql">MySQL</option><option value="redis">Redis</option></select></label>
+          <label class="pref-row"><span>{{ t('数据库类型') }}</span><select v-model="paletteKind" :aria-label="t('数据库类型')"><option value="mongodb">MongoDB</option><option value="mysql">MySQL</option><option value="redis">Redis</option><option value="sqlite">SQLite</option></select></label>
           <label class="checkbox-row"><input v-model="activePalette.enabled" type="checkbox" /> {{ t('按类型着色') }}</label><label class="checkbox-row"><input v-model="activePalette.showLabels" type="checkbox" /> {{ t('显示类型标记') }}</label>
           <div class="inspector-type-list"><button v-for="type in activeTypes" :key="type" type="button" :class="['bson-type-option',{selected:activeType===type}]" @click="selectedType=type"><span class="type-swatch" :style="{background:paletteColor(type)||'transparent'}"></span><span>{{ paletteLabel(type) }}</span><small>{{ paletteColor(type)?.toUpperCase()||'—' }}</small></button></div>
           <strong>{{ paletteLabel(activeType) }}</strong><ConnectionColorPicker :model-value="paletteColor(activeType)" group-label="数据类型配色" @update:model-value="activePalette.overrides[activeType]=$event||null" /><button class="btn secondary small" @click="delete activePalette.overrides[activeType]">{{ t('恢复此类型默认颜色') }}</button>
@@ -121,12 +124,12 @@ onMounted(()=>{void action(async()=>{native.value=normalizeNativePreferences(awa
         </template>
         <template v-else-if="tab==='tools'">
           <div class="pref-section-title">{{ t('可执行文件') }}</div>
-          <div v-for="name in toolNames" :key="name" class="tool-path"><label :for="'tool-'+name">{{ name }}</label><input :id="'tool-'+name" :value="native.tools[name]||''" :aria-label="name" spellcheck="false" :disabled="busy" @input="native.tools[name]=($event.target as HTMLInputElement).value;delete status[name]" /><button class="btn secondary small" :aria-label="t('选择可执行文件')+' '+name" :disabled="busy" @click="browse(name)">…</button><button class="btn secondary small" :disabled="busy||!native.tools[name]" @click="check(name)">{{ t('验证') }}</button><span></span><span v-if="status[name]!==undefined" class="tool-status">{{ t(status[name]?'文件可用':'文件不可用') }}</span></div>
-          <p class="helper">{{ t('配置工具绝对路径并检查文件权限；工具执行及完整备份恢复尚未接入。') }}</p>
+          <div v-for="name in toolNames" :key="name" class="tool-path"><label :for="'tool-'+name">{{ name }}</label><input :id="'tool-'+name" :value="native.tools[name]||''" :aria-label="name" spellcheck="false" :disabled="busy" @input="native.tools[name]=($event.target as HTMLInputElement).value;delete status[name];delete versions[name]" /><button class="btn secondary small" :aria-label="t('选择可执行文件')+' '+name" :disabled="busy" @click="browse(name)">…</button><button class="btn secondary small" :disabled="busy||!native.tools[name]" @click="check(name)">{{ t('验证') }}</button><button class="btn secondary small" :disabled="busy||!native.tools[name]" @click="version(name)">--version</button><span v-if="versions[name]" class="tool-version" style="grid-column:2/-1;white-space:pre-wrap;overflow-wrap:anywhere">{{ versions[name] }}</span><span></span><span v-if="status[name]!==undefined" class="tool-status">{{ t(status[name]?'文件可用':'文件不可用') }}</span></div>
+          <p class="helper">{{ t('配置工具绝对路径并检查版本。数据库菜单可执行受控导入、导出和备份恢复。') }}</p>
         </template>
         <template v-else>
           <div class="pref-section-title">{{ t('诊断日志') }}</div><label class="checkbox-row"><input v-model="native.diagnostics" type="checkbox" /> {{ t('启用诊断日志') }}</label>
-          <div class="pref-log-path">{{ logPath }}</div><button class="btn secondary" :disabled="busy||!ready" @click="action(()=>window.dbex.openLogs())">{{ t('打开日志目录') }}</button>
+          <div class="pref-log-path">{{ logPath }}</div><button class="btn secondary" :disabled="busy||!ready" @click="openLogs">{{ t('打开日志目录') }}</button>
           <p class="helper">{{ t('日志只记录操作类别、耗时及成功状态，不记录连接地址、查询内容或凭据。') }}</p>
           <div class="pref-section-title">{{ t('本地数据') }}</div><p class="helper">{{ t('所有设置保存在本机，不需要账户或云服务。') }}</p>
         </template>

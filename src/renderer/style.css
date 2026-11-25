@@ -590,8 +590,10 @@ html[dir=rtl] .tree-chevron:not(.expanded) { transform: rotate(180deg); }
 .pref-color-grid label {display:flex;flex-direction:column;gap:6px;align-items:center;font-size:11px;}
 .pref-color-grid input {width:44px;height:29px;padding:3px;}
 .pref-preview {border:1px solid var(--border);padding:14px;font-family:monospace;font-size:12px;white-space:pre-wrap;overflow:auto;min-height:110px;direction:ltr;}
-.tool-path {display:grid;grid-template-columns:minmax(112px,25%) minmax(0,1fr) 32px auto;align-items:center;gap:6px;}
-.tool-path input {width:100%;min-width:0;}
+.tool-path {display:grid;grid-template-columns:minmax(100px,22%) minmax(0,1fr) 32px auto auto;align-items:center;gap:6px;}
+ .tool-path input {width:100%;min-width:0;}
+.tool-path .tool-status {grid-column:2/-1;}
+.db-icon.sqlite {color:#55a6de;background:rgba(85,166,222,.13);}
 .tool-status {font-size:11px;color:var(--muted);}
 .pref-log-path {overflow-wrap:anywhere;user-select:text;font-size:12px;color:var(--muted);}
 .pref-reset {margin-inline-end:auto;}

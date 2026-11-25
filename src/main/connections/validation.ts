@@ -1,4 +1,5 @@
 import { isIP } from 'node:net'
+import { isAbsolute } from 'node:path'
 import { normalizeAppearance } from '../../shared/connection-appearance'
 import type { ConnectionConfig, Endpoint, ProxyOptions, SshOptions, TlsOptions } from '../../shared/types'
 
@@ -78,9 +79,14 @@ function proxy(value: unknown): ProxyOptions | undefined {
 export function validateConnection(value: unknown, allowMissingSecrets = false): ConnectionConfig {
   const v = object(value, '连接')
   const name = text(v.name, '连接名称', 100, true)!
-  if (!['mysql', 'mongodb', 'redis'].includes(String(v.kind))) throw new Error('INVALID_CONNECTION: 数据库类型错误')
+  if (!['mysql', 'mongodb', 'redis', 'sqlite'].includes(String(v.kind))) throw new Error('INVALID_CONNECTION: 数据库类型错误')
   // Legacy profiles may contain an environment field; it is no longer used.
   const kind = v.kind as ConnectionConfig['kind']
+  if(kind==='sqlite'){
+    const filePath=text(v.filePath,'SQLite',4096,true)!
+    if(!isAbsolute(filePath)||/[\u0000-\u001f]/.test(filePath))throw new Error('INVALID_CONNECTION: SQLite')
+    return {id:text(v.id,'连接 ID',128),name,kind,host:'',port:0,filePath,...normalizeAppearance(v),ssh:{enabled:false,host:'',port:22,username:'',authMode:'password'},tls:{enabled:false},connectTimeoutMs:12000}
+  }
   const uri = text(v.uri, 'MongoDB URI', 8192)
   if (uri) {
     if (kind !== 'mongodb' || !/^mongodb(?:\+srv)?:\/\//i.test(uri)) throw new Error('INVALID_CONNECTION: URI 仅支持 mongodb:// 或 mongodb+srv://')
