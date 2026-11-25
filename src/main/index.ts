@@ -54,7 +54,7 @@ function operationDetail(id: string, op: DatabaseOperation): string {
   const target = 'entity' in op ? `${op.database}.${op.entity}` : 'key' in op ? op.key : 'keys' in op ? tr('{0} 个已选择的Key', [op.keys.length]) : ''
   const count = 'rows' in op ? '\n' + tr('导入 {0} 行', [op.rows.length]) : 'documents' in op ? '\n' + tr('写入 {0} 个文档', [op.documents.length]) : ''
   const sql = op.action === 'mysql.query' ? `\n\n${op.sql.slice(0, 1500)}` : op.action === 'redis.command' ? '\n' + tr('命令：') + ' ' + op.args[0] : ''
-  return `${tr('连接：')} ${info.name}\n${tr('环境：')} ${info.environment}\n${tr('操作：')} ${op.action}${target ? '\n' + tr('目标：') + ' ' + target : ''}${count}\n${tr(info.transaction ? '当前有未提交事务。' : '本操作可能立即持久化。')}${sql}`
+  return `${tr('连接：')} ${info.name}\n${tr('地址：')} ${info.displayHost}\n${tr('操作：')} ${op.action}${target ? '\n' + tr('目标：') + ' ' + target : ''}${count}\n${tr(info.transaction ? '当前有未提交事务。' : '本操作可能立即持久化。')}${sql}`
 }
 async function openText(win: BrowserWindow, title: string, limit = 4 * 1024 * 1024): Promise<FileImport | null> {
   const selected = await dialog.showOpenDialog(win, { title: tr(title), properties: ['openFile'], filters: [{ name: tr('数据文件'), extensions: ['csv', 'json', 'jsonl', 'sql', 'txt', 'conf'] }, { name: tr('所有文件'), extensions: ['*'] }] })
@@ -121,14 +121,14 @@ function registerIpc(): void {
   ipcMain.handle('sessions:write-access', handler(async (win, id: string, enabled: boolean) => {
     if (typeof enabled !== 'boolean') throw new Error('权限参数无效')
     const info = sessions.info(id)
-    if (enabled && !info.writable) await confirm(win, tr('允许修改 {0} 的数据？', [info.name]), `${tr('环境：')} ${info.environment}\n${tr('地址：')} ${info.displayHost}\n${tr('本会话将允许执行写操作，断开连接后恢复只读。数据库账号权限仍然有效。')}`, '解锁此会话')
+    if (enabled && !info.writable) await confirm(win, tr('允许修改 {0} 的数据？', [info.name]), `${tr('地址：')} ${info.displayHost}\n${tr('本会话将允许执行写操作，断开连接后恢复只读。数据库账号权限仍然有效。')}`, '解锁此会话')
     return sessions.setWriteAccess(id, enabled)
   }))
   ipcMain.handle('sessions:execute', handler(async (win, id: string, operation: DatabaseOperation) => {
     const info = sessions.info(id)
     if (writes(operation, info.writable)) {
       if (!info.writable || !('confirmed' in operation) || operation.confirmed !== true) throw new Error('WRITE_CONFIRMATION_REQUIRED: 请先解锁会话，并主动确认写入')
-      await confirm(win, info.environment === 'production' ? '确认修改生产环境数据？' : '确认执行数据库写操作？', operationDetail(id, operation))
+      await confirm(win, '确认执行数据库写操作？', operationDetail(id, operation))
     }
     return sessions.execute(id, operation)
   }))

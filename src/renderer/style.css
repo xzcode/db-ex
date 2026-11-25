@@ -90,7 +90,6 @@ code, pre, kbd { font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', mon
 .saved-list { overflow-y: auto; min-height: 90px; max-height: 57%; flex: 1; }
 .connection-item { position: relative; display: flex; gap: 10px; align-items: flex-start; padding: 13px 12px; border-left: 3px solid transparent; border-bottom: 1px solid var(--border-soft); }
 .connection-item:hover { background: var(--panel-raised); }
-.connection-item.production { border-left-color: #c87558; }
 .db-icon { display: grid; place-content: center; width: 30px; height: 32px; flex: none; font-size: 24px; color: #80a9f8; }
 .db-icon.mongodb, .db-small-icon.mongodb { color: #73c8a7; }
 .db-icon.redis, .db-small-icon.redis { color: #ed8c8f; }
@@ -99,8 +98,6 @@ code, pre, kbd { font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', mon
 .connection-description strong { font-size: 12px; line-height: 1.7; }
 .connection-description small { color: var(--muted); font-size: 10px; }
 .connection-meta { display: flex; align-items: center; gap: 7px; font-size: 9px; color: var(--muted); margin-top: 7px; }
-.env-tag { border: 1px solid var(--border); padding: 1px 4px; border-radius: 2px; font-size: 9px; letter-spacing: .5px; }
-.env-tag.production { color: var(--warning); border-color: var(--warning); }
 .connection-actions { display: flex; flex-direction: column; position: absolute; right: 4px; top: 5px; background: var(--panel); opacity: 0; }
 .connection-item:hover .connection-actions, .connection-item:focus-within .connection-actions { opacity: 1; }
 .connection-actions .ghost-icon { width: 23px; height: 23px; font-size: 13px; }
@@ -276,7 +273,6 @@ kbd { color: #ffffffb0; font-size: 9px; }
 .top-actions .top-hint { max-width: 195px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Arabic mirrors the workspace. Code, numeric values and result columns stay LTR. */
 .connection-item { border-left: none; border-inline-start: 3px solid transparent; }
-.connection-item.production { border-inline-start-color: #c87558; }
 .connection-actions { right: auto; inset-inline-end: 4px; }
 .active-item, .resource-node { text-align: start; }
 .child-node { padding-left: 10px; padding-inline-start: 38px; }
@@ -332,7 +328,7 @@ html[dir=rtl] .choice-arrow { transform: scaleX(-1); }
 .connection-dialog-footer .btn { min-height: 34px; }
 
 /* Navicat-inspired navigation hierarchy. Colors mark connection identity,
-   not permissions; production and read/write badges remain independent. */
+   not permissions; read/write badges remain independent. */
 .connection-sidebar .sidebar-label { padding: 11px 12px 8px; letter-spacing: .3px; }
 .sidebar-heading-actions { display: flex; align-items: center; gap: 4px; }
 .connection-sidebar .saved-list { max-height: none; min-height: 100px; flex: 1 1 auto; padding: 3px 6px 8px; }
@@ -352,7 +348,6 @@ html[dir=rtl] .choice-arrow { transform: scaleX(-1); }
 .connection-tree .row-menu { font-size: 16px; opacity: .7; }
 .connection-tree .connection-actions .ghost-icon { width: 20px; height: 23px; }
 .connection-tree .connection-item.is-selected { background: var(--selected); box-shadow: inset 0 0 0 1px var(--border); }
-.connection-tree .connection-item.production:not(.has-color) { border-inline-start-color: #c87558; }
 .connection-tree .connection-item.has-color { border-inline-start-color: var(--connection-color); background: color-mix(in srgb, var(--connection-color) 16%, var(--panel)); }
 .connection-tree .connection-item.has-color:hover, .connection-tree .connection-item.has-color.is-selected { background: color-mix(in srgb, var(--connection-color) 26%, var(--panel)); }
 .connection-group { margin-top: 7px; }
