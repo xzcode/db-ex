@@ -1,4 +1,4 @@
-import { computed,onBeforeUnmount,ref,watch,type Ref } from 'vue'
+import { computed,onBeforeUnmount,ref,watch } from 'vue'
 import { preferences } from '../preferences'
 import { recoveryKey,type RecoveryDraft } from '../../shared/preferences'
 export function useQueryRecovery(scope:()=>Omit<RecoveryDraft,'text'|'updatedAt'>|undefined, text:()=>string, apply:(text:string)=>void){

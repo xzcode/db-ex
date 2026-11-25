@@ -596,3 +596,7 @@ html[dir=rtl] .tree-chevron:not(.expanded) { transform: rotate(180deg); }
 .pref-log-path {overflow-wrap:anywhere;user-select:text;font-size:12px;color:var(--muted);}
 .pref-reset {margin-inline-end:auto;}
 .preferences-body .type-color-panel {padding:0;}
+
+.pref-tab-icon {font-size:24px;line-height:26px;font-weight:500;}
+.preferences-backdrop {z-index:100;}
+.preferences-tabs button {min-width:77px;padding:7px 9px;}

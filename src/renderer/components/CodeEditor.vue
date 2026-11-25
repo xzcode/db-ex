@@ -76,7 +76,7 @@ function applyTheme() {
 }
 function activeLanguage(){
  const p=preferences.value.editor
- return p.syntax&&props.modelValue.length<=p.maxHighlightMB*1024*1024?props.language:'plaintext'
+ return p.syntax&&new TextEncoder().encode(props.modelValue).length<=p.maxHighlightMB*1024*1024?props.language:'plaintext'
 }
 function applyOptions(){
  const p=preferences.value.editor,completionOn=preferences.value.completion&&activeLanguage()!=='plaintext'
