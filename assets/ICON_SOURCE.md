@@ -18,3 +18,6 @@
 `npm run build` 已自动调用此生成器。该 PNG 源不是透明棋盘截图：仅保留实际深色应用图标，透明角被单独处理。`tests/icon-generator.test.ts` 校验源 SHA、图标色彩／三颗指示点／边缘透明度，以及 ICO/ICNS 容器格式。安装包必须在对应平台构建检查通过后发布。
 
 **发布版本不会自动更新**：旧 Release 的 DMG/EXE/AppImage 仍含旧图标；必须重新构建并创建新的 Release，不能改写旧文件冒充更新。
+
+
+运行时图标同样由上述源资源生成：build/icon-mac.png 与 ICNS 内的 1024×1024 PNG 完全一致；build/icon.png 供 Windows/Linux 窗口使用。安装包通过 extraResources 携带二者。macOS 启动时将对应 PNG 设置为原生 Dock 图标，Windows 设置与 appId 一致的应用用户模型 ID。不会另行绘制图标或变更应用数据目录。实际 Dock、任务栏外观仍需对应平台安装后验证。

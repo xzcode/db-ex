@@ -4,6 +4,7 @@ import { t } from '../i18n'
 import type { ConnectionAppearancePatch, SavedConnection, SessionInfo } from '../../shared/types'
 import { colorStyle } from '../../shared/connection-appearance'
 import ConnectionColorPicker from './ConnectionColorPicker.vue'
+import DatabaseIcon from './DatabaseIcon.vue'
 
 const props = defineProps<{ connections: SavedConnection[]; sessions: SessionInfo[]; current: string | null; busy: boolean }>()
 const emit = defineEmits<{
@@ -106,7 +107,6 @@ function dropGroup(event: DragEvent, group: string) {
 }
 function outside(event: PointerEvent) { if (menu.value && !menuHost.value?.contains(event.target as Node)) closeMenu() }
 function key(event: KeyboardEvent) { if (event.key === 'Escape') { closeMenu(); groupTarget.value = undefined } }
-function dbIcon(kind: string) { return kind==='clickhouse'?'▥':kind==='mariadb'?'▥':kind === 'sqlite'?'▧':kind === 'mysql' ? '▤' : kind === 'mongodb' ? '◈' : '⬡' }
 onMounted(() => {
   try { const saved = JSON.parse(localStorage.getItem('dbex.collapsed-groups') || '[]'); if (Array.isArray(saved)) collapsed.value = saved.filter(x => typeof x === 'string').slice(0, 200) } catch { /* Optional preference. */ }
   window.addEventListener('pointerdown', outside)
@@ -128,7 +128,7 @@ onBeforeUnmount(() => { window.removeEventListener('pointerdown', outside); wind
         <template v-if="!group || expanded(group)">
           <div v-for="connection in items" :key="connection.id" class="connection-item" :class="{ 'has-color': !!connection.color, 'is-selected': selected === connection.id || active(connection)?.id === current, 'in-group': !!group, 'is-open': !!active(connection) }" :style="colorStyle(connection.color)" :data-connection-id="connection.id" :data-color="connection.color || ''" tabindex="0" :draggable="!connection.locked && !busy" @click="select(connection)" @dblclick="open(connection)" @keydown.enter.self.prevent="open(connection)" @keydown.shift.f10.prevent="showMenu($event as unknown as MouseEvent, connection, true)" @contextmenu.prevent.stop="showMenu($event, connection)" @dragstart="startDrag($event, connection)" @dragend="dragging = ''">
             <span class="tree-chevron connection-chevron" :class="{ expanded: !!active(connection) }" aria-hidden="true">›</span>
-            <span :class="['db-icon', connection.kind]" aria-hidden="true">{{ dbIcon(connection.kind) }}</span>
+            <DatabaseIcon :kind="connection.kind" />
             <div class="connection-description"><div class="connection-title"><strong :title="connection.name">{{ connection.name }}</strong><span :class="['connection-indicator', { online: !!active(connection) }]" :title="t(active(connection) ? '已连接' : '未连接')"></span></div><small :title="connection.locked ? t('旧版配置待迁移') : connection.host">{{ connection.locked ? t('旧版配置待迁移') : connection.host }}</small><div v-if="connection.locked || connection.sshEnabled || connection.tlsEnabled || connection.proxyEnabled || active(connection)?.transaction || active(connection)?.writable" class="connection-meta"><span v-if="connection.locked">{{ t('待迁移') }}</span><span v-if="connection.sshEnabled">SSH</span><span v-if="connection.tlsEnabled">TLS</span><span v-if="connection.proxyEnabled">PROXY</span><span v-if="active(connection)?.transaction" class="tiny-badge">TX</span><span v-if="active(connection)?.writable" class="tiny-badge write">RW</span></div></div>
             <div class="connection-actions"><button class="ghost-icon row-connect" :title="t('连接')" :aria-label="t('连接')" :disabled="busy || connection.locked" @click.stop="open(connection)" @dblclick.stop>▶</button><button class="ghost-icon row-menu" :title="t('连接菜单')" :aria-label="t('连接菜单')" :aria-expanded="menu?.id === connection.id" :disabled="busy" @pointerdown.stop @click.stop="showMenu($event, connection, true)" @dblclick.stop>···</button></div>
           </div>
@@ -137,7 +137,7 @@ onBeforeUnmount(() => { window.removeEventListener('pointerdown', outside); wind
       <div v-if="dragging" class="ungroup-drop" @dragover.prevent @drop.prevent="dropGroup($event, '')">{{ t('移出分组') }}</div>
       <div v-if="!filtered.length" class="sidebar-empty">{{ connections.length ? t('没有匹配的连接') : t('创建连接，或导入已有连接备份。') }}</div>
     </div>
-    <template v-if="temporary.length"><div class="sidebar-label"><span>{{ t('活动会话') }}</span><span>{{ temporary.length }}</span></div><div class="active-list"><button v-for="session in temporary" :key="session.id" :class="['active-item', { selected: current === session.id }]" @click="emit('activate', session.id)"><span class="status-dot"></span><span class="ellipsis">{{ session.name }}</span><span v-if="session.transaction" class="tiny-badge">TX</span><span v-if="session.writable" class="tiny-badge write">RW</span></button></div></template>
+    <template v-if="temporary.length"><div class="sidebar-label"><span>{{ t('活动会话') }}</span><span>{{ temporary.length }}</span></div><div class="active-list"><button v-for="session in temporary" :key="session.id" :class="['active-item', { selected: current === session.id }]" @click="emit('activate', session.id)"><DatabaseIcon :kind="session.kind" size="small" /><span class="status-dot"></span><span class="ellipsis">{{ session.name }}</span><span v-if="session.transaction" class="tiny-badge">TX</span><span v-if="session.writable" class="tiny-badge write">RW</span></button></div></template>
     <div class="sidebar-bottom"><button class="btn secondary small" :disabled="busy" @click="emit('import')">{{ t('导入连接') }}</button><button class="btn secondary small" :disabled="busy || !connections.length" :title="t('导出全部连接及加密凭据')" @click="emit('export')">{{ t('导出连接') }}</button></div>
     <Teleport to="body">
       <div v-if="menu && menuConnection" ref="menuHost" class="connection-context-menu" :style="{ left: menu.x + 'px', top: menu.y + 'px' }" @pointerdown.stop @contextmenu.prevent>

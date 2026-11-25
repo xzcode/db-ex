@@ -1117,3 +1117,27 @@ test('MongoDB index syntax help preserves the draft and inserts examples without
  await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.find((c:any)=>c.action==='mongo.createIndex'))).toMatchObject({database:'app',entity:'users',confirmed:true})
  await expect(dialog).toHaveCount(0)
 })
+
+
+test('database brand icons are consistent in sidebar, session tabs and connection dialogs; welcome is empty',async({page})=>{
+ const sidebar=page.locator('.connection-sidebar')
+ await expect(page.locator('.empty-workspace')).toBeVisible()
+ await expect(page.locator('.empty-workspace')).toBeEmpty()
+ await expect(page.locator('.welcome-mark,.welcome-features')).toHaveCount(0)
+ const mongo=sidebar.locator('.connection-item').filter({hasText:'Mongo Local'})
+ await expect(mongo.locator('[data-database-icon="mongodb"] img')).toBeVisible()
+ await expect.poll(()=>mongo.locator('img').evaluate((img:HTMLImageElement)=>img.complete&&img.naturalWidth>0)).toBe(true)
+ await page.getByRole('button',{name:'＋ 新建连接',exact:true}).click()
+ const choices=page.locator('.connection-choice:not(.uri-choice)')
+ await expect(choices.locator('[data-database-icon]')).toHaveCount(6)
+ for(const kind of ['mysql','mariadb','mongodb','redis','sqlite','clickhouse']){
+  const image=choices.locator('[data-database-icon="'+kind+'"] img')
+  await expect(image).toBeVisible()
+  await expect.poll(()=>image.evaluate((el:HTMLImageElement)=>el.complete&&el.naturalWidth>0)).toBe(true)
+ }
+ await page.getByRole('button',{name:'MongoDB',exact:true}).click()
+ await expect(page.locator('.connection-dialog-title [data-database-icon="mongodb"] img')).toBeVisible()
+ await page.getByRole('button',{name:'取消',exact:true}).click()
+ await connect(page,'Mongo Local')
+ await expect(page.locator('.session-tab.active [data-database-icon="mongodb"] img')).toBeVisible()
+})

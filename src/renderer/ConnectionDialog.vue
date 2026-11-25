@@ -7,6 +7,7 @@ import { databaseNames, defaultPorts, initialAuth, initialEntry, mongoUriAddress
 import SshHostFields from './components/SshHostFields.vue'
 import FilePathField from './components/FilePathField.vue'
 import ConnectionColorPicker from './components/ConnectionColorPicker.vue'
+import DatabaseIcon from './components/DatabaseIcon.vue'
 const props = defineProps<{ draft?: ConnectionDraft }>()
 const emit = defineEmits<{ close: []; saved: [connection: SavedConnection]; connected: [session: SessionInfo] }>()
 const allPages = [{ key: 'basic', label: '基本设置' }, { key: 'tls', label: 'TLS / SSL' }, { key: 'ssh', label: 'SSH / 多跳' }, { key: 'proxy', label: '代理' }, { key: 'advanced', label: '高级设置' }]
@@ -30,7 +31,6 @@ const revealPassword = ref(false)
 const revealUri = ref(false)
 const pages=computed(()=>config.value.kind==='sqlite'?allPages.filter(p=>p.key==='basic'||p.key==='advanced'):allPages)
 const kinds: DatabaseKind[] = ['mysql','mariadb','mongodb','redis','sqlite','clickhouse']
-const symbols: Record<DatabaseKind, string> = { mysql: '▤',mariadb:'▥', mongodb: '◈', redis: '⬡', sqlite:'▧',clickhouse:'▥' }
 watch(()=>config.value.tls.enabled,(enabled,previous)=>{if(config.value.kind==='clickhouse'&&enabled!==previous){if(enabled&&config.value.port===8123)config.value.port=8443;else if(!enabled&&config.value.port===8443)config.value.port=8123}})
 const mongoUriActive = computed(() => config.value.kind === 'mongodb' && entry.value === 'uri')
 const usesSeeds = computed(() => config.value.kind === 'mongodb' ? !mongoUriActive.value && Boolean(config.value.nodes?.length) : config.value.kind === 'redis' && config.value.redisMode !== 'standalone')
@@ -111,15 +111,15 @@ function secretLabel(path: string) {
       <header class="dialog-header"><h2 id="picker-title">{{ t('选择数据库类型') }}</h2><button class="icon-button" :aria-label="t('关闭弹窗')" @click="emit('close')">×</button></header>
       <div class="connection-picker-body">
         <button v-for="kind in kinds" :key="kind" class="connection-choice" type="button" :aria-label="databaseNames[kind]" @click="chooseKind(kind)">
-          <span :class="['db-icon', kind]">{{ symbols[kind] }}</span><span class="choice-name">{{ databaseNames[kind] }}</span><span class="choice-port">{{ kind==='sqlite'?'Local':defaultPorts[kind] }}</span><span class="choice-arrow">›</span>
+          <DatabaseIcon :kind="kind" size="large" /><span class="choice-name">{{ databaseNames[kind] }}</span><span class="choice-port">{{ kind==='sqlite'?'Local':defaultPorts[kind] }}</span><span class="choice-arrow">›</span>
         </button>
         <div class="connection-picker-divider"></div>
-        <button class="connection-choice uri-choice" type="button" :aria-label="t('使用 MongoDB URI')" @click="chooseKind('mongodb', 'uri')"><span class="choice-uri-icon">URI</span><span class="choice-name">{{ t('使用 MongoDB URI') }}</span><span class="choice-arrow">›</span></button>
+        <button class="connection-choice uri-choice" type="button" :aria-label="t('使用 MongoDB URI')" @click="chooseKind('mongodb', 'uri')"><DatabaseIcon kind="mongodb" size="large" /><span class="choice-name">{{ t('使用 MongoDB URI') }}</span><span class="choice-arrow">›</span></button>
       </div>
       <footer class="dialog-footer"><button class="btn secondary" type="button" @click="emit('close')">{{ t('取消') }}</button></footer>
     </section>
     <section v-else class="dialog connection-dialog" role="dialog" aria-modal="true" aria-labelledby="conn-title">
-      <header class="dialog-header"><div class="connection-dialog-title"><span :class="['db-icon', config.kind]">{{ symbols[config.kind] }}</span><div><div class="eyebrow">{{ databaseNames[config.kind] }}</div><h2 id="conn-title">{{ props.draft ? t('编辑数据库连接') : t('创建数据库连接') }}</h2></div></div><button class="icon-button" :aria-label="t('关闭弹窗')" :disabled="busy" @click="emit('close')">×</button></header>
+      <header class="dialog-header"><div class="connection-dialog-title"><DatabaseIcon :kind="config.kind" size="large" /><div><div class="eyebrow">{{ databaseNames[config.kind] }}</div><h2 id="conn-title">{{ props.draft ? t('编辑数据库连接') : t('创建数据库连接') }}</h2></div></div><button class="icon-button" :aria-label="t('关闭弹窗')" :disabled="busy" @click="emit('close')">×</button></header>
       <nav class="subtabs"><button v-for="item in pages" :key="item.key" type="button" :class="{ active: page === item.key }" :disabled="busy" @click="page = item.key">{{ t(item.label) }}<span v-if="(item.key === 'ssh' && config.ssh.enabled) || (item.key === 'tls' && config.tls.enabled) || (item.key === 'proxy' && config.proxy?.enabled)" class="enabled-dot"></span></button></nav>
       <div v-if="error" class="inline-message error connection-error" role="alert">{{ localize(error) }}<p v-if="error.includes('SSH_HOST_KEY')">{{ t('请独立核对提示中的服务器公钥指纹，再在对应 SSH 主机配置中填写；工具不会自动信任未知主机。') }}</p></div>
       <div v-if="notice" class="inline-message notice" role="status">{{ localize(notice) }}</div>

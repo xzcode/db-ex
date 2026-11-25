@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, shell, utilityProcess, session as electronSession } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, shell, utilityProcess, nativeImage, session as electronSession } from 'electron'
 import { windowChromeOptions } from '../shared/window-chrome'
 import { isLocale, resolveLocale, translate, localizeMessage, type Locale } from '../shared/i18n'
 import { constants } from 'node:fs'
@@ -249,9 +249,19 @@ function registerIpc(): void {
   ipcMain.handle('files:import', handler(win => openText(win, '选择数据文件（最多4 MiB）')))
   ipcMain.handle('files:export', handler((win, name: string, content: string, format: 'csv' | 'json' | 'text') => saveText(win, name, content, format)))
 }
+// Use the same approved generated artwork as the installed app bundle.
+function runtimeIconPath():string {
+  const mac=process.platform==='darwin'
+  return app.isPackaged?join(process.resourcesPath,'icons',mac?'db-ex-mac.png':'db-ex.png'):join(app.getAppPath(),'build',mac?'icon-mac.png':'icon.png')
+}
+function runtimeIcon(){
+  const image=nativeImage.createFromPath(runtimeIconPath())
+  return image.isEmpty()?undefined:image
+}
 function createWindow(): void {
   const win = new BrowserWindow({ title: 'DB EX', width: 1440, height: 900, minWidth: 1040, minHeight: 640,
     backgroundColor: '#111821', show: false,
+    icon: runtimeIcon(),
     // On macOS retain AppKit's real traffic-light controls and extend web content
     // into the old title bar. Other operating systems keep their native frames.
     ...windowChromeOptions(process.platform),
@@ -268,6 +278,11 @@ function createWindow(): void {
 }
 app.whenReady().then(async () => {
   currentLocale = resolveLocale('system', getSystemLanguage())
+  if(process.platform==='win32')app.setAppUserModelId('dev.dbex.desktop')
+  if(process.platform==='darwin'){
+    const image=runtimeIcon()
+    if(image)app.dock?.setIcon(image)
+  }
   electronSession.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))
   electronSession.defaultSession.setPermissionCheckHandler(() => false)
   electronSession.defaultSession.on('will-download', event => event.preventDefault())
