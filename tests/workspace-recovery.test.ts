@@ -27,3 +27,13 @@ test('legacy MapReduce workspace restores the database catalog instead',()=>{
  const saved=normalizeWorkspace({ids:['abc'],positions:{abc:{tab:'aggregation',node:{kind:'mongo-category',database:'app',category:'mapReduce'}}}})
  assert.deepEqual(saved.positions.abc,{tab:'data',node:{kind:'database',database:'app'}})
 })
+
+test('workspace restores multiple validated object tabs and stable draft identities without write state',()=>{
+ const draft={tab:'query',node:{database:'app',kind:'saved-query',draftId:'draft_123',queryMode:'sql',sql:'SECRET SELECT'},writable:true}
+ const other={tab:'structure',node:{database:'app',kind:'table',entity:'events'}}
+ const result=normalizeWorkspace({ids:['abc'],positions:{abc:{...draft,tabs:[other,draft,other,{tab:'data',node:{kind:'saved-query',database:'app',draftId:'../../bad'}},{tab:'data',node:{kind:'database',database:'app'}}]}}})
+ assert.equal(result.positions.abc?.tabs?.length,2)
+ assert.equal(result.positions.abc?.node?.draftId,'draft_123')
+ assert.equal(result.positions.abc?.tabs?.[0]?.tab,'structure')
+ assert(!JSON.stringify(result).includes('SECRET'));assert(!JSON.stringify(result).includes('writable'))
+})

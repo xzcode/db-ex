@@ -242,3 +242,28 @@ MySQL/MongoDB 集成测试用 `DB_EX_INTEGRATION=1` 显式开启，连接 `MYSQL
 ### v0.7.0 发行候选
 
 - 修正 lockfile 中 11 个内网 npm 镜像 URL，全部改为公开 HTTPS registry，保留原版本和 integrity；添加项目 registry 设置及可移植性回归断言。修复原生 smoke 对 Electron 不存在的 Dock getter 调用，继续检查打包图标实际资源及启动行为。补齐前一轮已验证的批量写入真实引擎回归到现有 CI 集成测试。版本号 0.7.0，发布仅允许 exact master commit 的完整 CI 成功且所有安装包和 SHA256 上传校验通过后自动公开。当前仍为候选版本，未发布。
+
+### M10.1 — ClickHouse management reports (2026-11-25)
+
+- Based on merged v0.7.0. Table-level management views for partitions/compression, mutation tasks, replica status, and 24-hour aggregate query statistics, with scoped typed parameters, read-only settings, result limits, pagination, restored tab and 14-language UI.
+- Targeted local unit/locale/workspace regression: 22 passed. Real ClickHouse fixture tests extended; acceptance requires actual CI results, including server metadata compatibility and native package checks.
+- See [M10 management scope](M10_CLICKHOUSE_MANAGEMENT.md). Guarded mutation/partition writes, streaming data and backup workflows, additional topology compatibility and remaining common M10 enhancements are not yet complete.
+
+### M10 advanced management — development candidate (2026-11-25)
+
+- M10.1 merged-baseline candidate CI passed (run 45621004958); v0.7.0 Preview is published.
+- Implemented explicit scoped ClickHouse mutation and partition administration, bounded streaming CSV/JSONL/Parquet transfers, asynchronous authorized-disk table backup/restore and status, native tool routing/TLS policy, metadata completion cache/refresh and multi-tab encrypted query draft recovery.
+- Local unit regression: 145 passed, 8 skipped (environment dependencies); final ClickHouse unit rerun 7 passed; 6 focused UI cases passed; real ClickHouse 25.8.33.6 over SOCKS passed the advanced workflow above. Typecheck and production build passed.
+- Remaining limitations: lightweight mutations, true shard/replica topology, MariaDB-specific object expansion, interactive CLI, multi-window recovery and wider native TLS/SSH/tool verification. See [M10 management scope](M10_CLICKHOUSE_MANAGEMENT.md) for explicit boundaries. Not yet a release; require exact candidate CI and native package verification.
+
+### M10 feature batch: lightweight mutations, engine-specific tools and workspaces
+
+- Added the approved header logo, ClickHouse lightweight mutations with server capability checks, configured topology and replica queue, MariaDB sequence and temporal/partition metadata, explicitly launched SQL-native CLI, native multi-window restoration and scoped recovery/session ownership, and MongoDB verified TLS tunneling for native tools.
+- Actual local verification: ClickHouse 25.8.33.6 lightweight writes and Keeper replication between two replica identities (one server), sqlite3 3.45.1 CLI transaction lifecycle, 22 targeted tests, 5 UI cases, typecheck/build. MariaDB local fixture authentication prevented the new real-engine cases; added real 10.11/11.4 CI coverage. TLS transport verified through an authenticated SOCKS route, but native Mongo tools still need full TLS workload acceptance.
+- M10 implementation candidate retains explicitly documented limits: no cross-host mutation/topology administration, no arbitrary native-shell execution, SQL CLI limited to MySQL/MariaDB/SQLite, no MySQL-family TLS inside SSH/proxy native CLI/tool route. Exact integrated CI and native multi-window verification remain release gates; M11 handles the wider compatibility matrix.
+
+### M10 final acceptance / M11 release candidate (2026-11-25)
+
+- Integrated CI on `078b160` passed 168 tests and 46 UI cases. MariaDB 10.11.19 and 11.4.13 real-engine sequence, temporal history and partition checks passed. ClickHouse 25.8.33.6 lightweight mutation and Keeper replication fixtures passed.
+- All three installer builds finished, but the packaged smoke failed; Linux/macOS test incorrectly relied on Electron reporting additionalArguments, and Windows had an empty renderer root. Corrected the window test to use the real BrowserWindow handle; added startup diagnostics and a real application quit/restart check with two workspaces, independent sessions and recovery drafts, no restored write access. Local Linux built and packaged applications pass these tests. Windows failure root cause remains unverified pending the new CI.
+- Prepare separate v0.7.1 Preview candidate without altering v0.7.0. The new publisher is deferred pending workflow write authorization; the existing verification gates remain unchanged. See [M11 compatibility matrix](M11_COMPATIBILITY.md) for evidence, remaining limits, and release gates.

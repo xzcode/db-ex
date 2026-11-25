@@ -78,7 +78,7 @@ code, pre, kbd { font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', mon
   -webkit-app-region: no-drag; app-region: no-drag;
 }
 .brand, .top-actions { display: flex; align-items: center; gap: 13px; }
-.brand-symbol { width: 31px; height: 31px; display: grid; place-content: center; background: var(--accent-button); color: #fff; font-size: 23px; border-radius: 4px; }
+.brand-symbol { width: 32px; height: 32px; display: block; flex: none; object-fit: contain; user-select: none; -webkit-user-drag: none; }
 .brand strong { letter-spacing: 1px; font-size: 19px; }
 .brand-subtitle { color: var(--muted); font-size: 10px; letter-spacing: 1.6px; margin-left: 5px; }
 .btn { border: 1px solid transparent; background: none; padding: 7px 12px; display: inline-flex; justify-content: center; align-items: center; gap: 7px; line-height: 1.35; white-space: nowrap; }

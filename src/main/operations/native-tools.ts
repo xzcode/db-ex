@@ -22,22 +22,30 @@ function safeName(value:string, collection=false){
  return value
 }
 function mysqlOption(value:string){if(/[\u0000-\u001f]/.test(value))throw new Error('INVALID_CONNECTION: 数据库类型错误');return '"'+value.replaceAll('\\','\\\\').replaceAll('"','\\"')+'"'}
-export function nativeToolCommand(task:NativeToolTask,config:ConnectionConfig,database:string,entity:string|undefined,credentials:string,input:string){
+export type NativeRoute={host:string;port:number;tlsVerified?:true}
+export function nativeToolCommand(task:NativeToolTask,config:ConnectionConfig,database:string,entity:string|undefined,credentials:string,input:string,route?:NativeRoute){
  const spec=nativeTasks[task]
- if(!spec||spec.kind!==config.kind||config.ssh.enabled||config.tls.enabled||config.proxy?.enabled||config.uri||config.nodes?.length||config.mongoReplicaSet||config.mongoTopology==='discover')throw new Error('NATIVE_TOOL_CONNECTION: 外部工具当前仅支持普通直连。')
+ const routed=config.ssh.enabled||config.proxy?.enabled
+ const unsupported=()=>new Error('NATIVE_TOOL_CONNECTION: 不支持此原生工具连接方式。')
+ if(!spec||spec.kind!==config.kind||config.uri||config.nodes?.length||config.mongoReplicaSet||config.mongoTopology==='discover')throw unsupported()
+ if(routed&&(!route||route.host!=='127.0.0.1'||!Number.isInteger(route.port)||route.port<1||route.port>65535||config.tls.enabled&&!(config.kind==='mongodb'&&route.tlsVerified))||!routed&&route)throw unsupported()
+ if(route?.tlsVerified&&(!routed||!config.tls.enabled||config.kind!=='mongodb'))throw unsupported()
+ const localTls=config.tls.enabled&&!route?.tlsVerified
+ if(localTls&&(config.tls.servername&&config.tls.servername!==config.host||config.kind==='mongodb'&&(config.tls.certPath||config.tls.keyPath)))throw unsupported()
+ const endpoint=route||config
  safeName(database)
  if(isMysqlFamily(config.kind)){
-   const contents=['[client]','host='+mysqlOption(config.host),'port='+config.port,'protocol=TCP','user='+mysqlOption(config.username||''),'password='+mysqlOption(config.password||'')].join('\n')+'\n'
-   const args=['--defaults-file='+credentials,...(config.kind==='mariadb'?['--skip-ssl']:['--no-login-paths','--ssl-mode=DISABLED'])]
+   const contents=['[client]','host='+mysqlOption(endpoint.host),'port='+endpoint.port,'protocol=TCP','user='+mysqlOption(config.username||''),'password='+mysqlOption(config.password||''),...(config.tls.enabled?[...(config.tls.caPath?['ssl-ca='+mysqlOption(config.tls.caPath)]:[]),...(config.tls.certPath?['ssl-cert='+mysqlOption(config.tls.certPath)]:[]),...(config.tls.keyPath?['ssl-key='+mysqlOption(config.tls.keyPath)]:[])]:[])].join('\n')+'\n'
+   const args=['--defaults-file='+credentials,...(config.kind==='mariadb'?(config.tls.enabled?['--ssl','--ssl-verify-server-cert']:['--skip-ssl']):['--no-login-paths',config.tls.enabled?'--ssl-mode=VERIFY_IDENTITY':'--ssl-mode=DISABLED'])]
    if(task==='mysql-backup'||task==='mariadb-backup')args.push('--single-transaction','--skip-lock-tables',...(config.kind==='mysql'?['--no-tablespaces']:[]),'--hex-blob','--',database)
    else args.push('--binary-mode','--local-infile=0','--database='+database)
    return {args,contents}
  }
  const auth=config.username?encodeURIComponent(config.username)+':'+encodeURIComponent(config.password||'')+'@':''
- const host=config.host.includes(':')?'['+config.host+']':config.host
- const uri='mongodb://'+auth+host+':'+config.port+'/?directConnection=true'+(config.username?'&authSource='+encodeURIComponent(config.authSource||'admin'):'')
+ const host=endpoint.host.includes(':')?'['+endpoint.host+']':endpoint.host
+ const uri='mongodb://'+auth+host+':'+endpoint.port+'/?directConnection=true'+(localTls?'&tls=true':'')+(config.username?'&authSource='+encodeURIComponent(config.authSource||'admin'):'')
  const contents='uri: '+JSON.stringify(uri)+'\n'
- const args=['--config='+credentials]
+ const args=['--config='+credentials,...(localTls?['--ssl',...(config.tls.caPath?['--sslCAFile='+config.tls.caPath]:[])]:[])]
  if(task==='mongo-backup')args.push('--db='+database,'--archive')
  else if(task==='mongo-restore')args.push('--archive='+input,'--nsInclude='+database+'.*','--stopOnError')
  else{
@@ -66,7 +74,7 @@ function child(path:string,args:string[],options:{stdin?:number;stdout?:number;s
  })
 }
 export async function toolVersion(path:string){return child(path,['--version'],{capture:true,timeout:8000})}
-export async function runNativeTool(path:string,task:NativeToolTask,config:ConnectionConfig,database:string,entity:string|undefined,file:string,signal:AbortSignal){
+export async function runNativeTool(path:string,task:NativeToolTask,config:ConnectionConfig,database:string,entity:string|undefined,file:string,signal:AbortSignal,route?:NativeRoute){
  const spec=nativeTasks[task]
  if(!spec)throw new Error('INVALID_OPERATION: 不支持的操作')
  const secretDir=await mkdtemp(join(tmpdir(),'dbex-tool-'))
@@ -74,7 +82,7 @@ export async function runNativeTool(path:string,task:NativeToolTask,config:Conne
  let inputHandle:Awaited<ReturnType<typeof open>>|undefined,outputHandle:Awaited<ReturnType<typeof open>>|undefined
  try{
    const credentials=join(secretDir,isMysqlFamily(config.kind)?'client.cnf':'mongo.yml')
-   const command=nativeToolCommand(task,config,database,entity,credentials,file)
+   const command=nativeToolCommand(task,config,database,entity,credentials,file,route)
    await writeFile(credentials,command.contents,{mode:0o600,flag:'wx'})
    let resultPath:string|undefined
    if(spec.write){

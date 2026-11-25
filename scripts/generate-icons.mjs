@@ -205,6 +205,7 @@ const images = new Map(sizes.map(size => [size, png(size)]))
 const macImages = new Map([16, 32, 64, 128, 256, 512, 1024].map(size => [size, png(size, true)]))
 await Promise.all([
   writeFile('build/icon.png', images.get(1024)),
+  writeFile('build/icon-brand.png', images.get(64)),
   writeFile('build/icon.ico', ico(images)),
   writeFile('build/icon.icns', icns(macImages)),
   writeFile('build/icon-mac.png', macImages.get(1024))

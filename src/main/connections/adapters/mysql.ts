@@ -10,9 +10,9 @@ export const mysqlActions = ['mysql.query','mysql.createDatabase','mysql.dropDat
 const writes=new Set<OperationAction>(['mysql.createDatabase','mysql.dropDatabase','mysql.insert','mysql.update','mysql.updateBatch','mysql.delete','mysql.import','mysql.begin','mysql.commit'])
 export function createMysqlFamilyAdapter(kind:'mysql'|'mariadb'):DatabaseAdapter{return {
   kind,
-  actions:mysqlActions,
+  actions:kind==='mariadb'?[...mysqlActions,'mariadb.object','mariadb.sequenceRestart']:mysqlActions,
   rollback:{action:'mysql.rollback'},
-  writes(input,writable){return input.action==='mysql.query'?inspectSql(input.sql,writable).mode==='write':writes.has(input.action)},
+  writes(input,writable){return input.action==='mysql.query'?inspectSql(input.sql,writable).mode==='write':input.action==='mariadb.sequenceRestart'||writes.has(input.action)},
   async connect({config,transport,tls}){
     const stream=await transport.open(config.host,config.port)
     let client:Awaited<ReturnType<typeof mysql.createConnection>>|undefined

@@ -10,8 +10,8 @@ import type {DatabaseAdapter} from './types'
 
 export const clickhouseAdapter:DatabaseAdapter={
  kind:'clickhouse',
- actions:['clickhouse.query','clickhouse.browse','clickhouse.structure','clickhouse.inspect','clickhouse.insert'],
- writes(input){return input.action==='clickhouse.insert'||input.action==='clickhouse.query'&&inspectClickHouseSql(input.sql).mode==='write'},
+ actions:['clickhouse.query','clickhouse.browse','clickhouse.structure','clickhouse.inspect','clickhouse.management','clickhouse.mutationPreview','clickhouse.change','clickhouse.backupStatus','clickhouse.insert'],
+ writes(input){return input.action==='clickhouse.change'||input.action==='clickhouse.insert'||input.action==='clickhouse.query'&&inspectClickHouseSql(input.sql).mode==='write'},
  async connect({config,transport,tls}){
   const forward=await transport.forward(config.host,config.port)
   const identity=config.tls.servername||config.host
@@ -20,14 +20,14 @@ export const clickhouseAdapter:DatabaseAdapter={
   const host=isIP(config.host)===6?'['+config.host+']':config.host
   const url=(config.tls.enabled?'https':'http')+'://'+host+':'+config.port
   const clients=new Set<ClickHouseClient>()
-  function make(database:string){
+  function make(database:string,timeout?:number){
    // Each client owns its agent. Closing a database-specific query client
    // must not destroy sockets belonging to the persistent session.
    const agent=config.tls.enabled?new HttpsAgent({keepAlive:false,maxSockets:2}):new HttpAgent({keepAlive:false,maxSockets:2})
    if(config.tls.enabled){
     agent.createConnection=()=>connectTls({...tls,host:forward.host,port:forward.port,servername:isIP(identity)?undefined:identity,rejectUnauthorized:true,checkServerIdentity:(_host,cert)=>checkServerIdentity(identity,cert)})
    }else agent.createConnection=()=>connectTcp(forward.port,forward.host)
-   const client=createClient({url,username:config.username||'default',password:config.password||'',database,request_timeout:Math.min(config.connectTimeoutMs||12000,25000),http_agent:agent,compression:{response:false,request:false}})
+   const client=createClient({url,username:config.username||'default',password:config.password||'',database,request_timeout:timeout??Math.min(config.connectTimeoutMs||12000,25000),http_agent:agent,compression:{response:false,request:false}})
    clients.add(client)
    const close=client.close.bind(client)
    client.close=async()=>{try{await close()}finally{agent.destroy();clients.delete(client)}}
@@ -41,6 +41,7 @@ export const clickhouseAdapter:DatabaseAdapter={
    return {
     serverVersion:version,
     execute:(input,context)=>operations.execute(input as ClickHouseOperation,context),
+    transfer:(input,path,context)=>operations.transfer(input,path,context),
     roots:context=>operations.roots(context),
     children:(database,_category,context,statistics)=>operations.children(database,context,statistics),
     async close(){await Promise.allSettled([...clients].map(c=>c.close()))}

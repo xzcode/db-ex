@@ -10,7 +10,7 @@ import { normalizeBsonPalette,newBsonPalette,typeColor } from '../../shared/bson
 import { databaseTypes,normalizeDatabasePalette,newDatabasePalette,databaseTypeColor,type DatabasePalette } from '../../shared/database-palette'
 import ConnectionColorPicker from './ConnectionColorPicker.vue'
 defineProps<{connectionBusy?:boolean}>()
-const emit=defineEmits<{close:[];createConnection:[]}>()
+const emit=defineEmits<{close:[];createConnection:[];newWindow:[]}>()
 const tabs=[['general','常规','⚙'],['tabs','选项卡','▣'],['completion','代码补全','⌨'],['editor','编辑器','✎'],['records','记录','▦'],['colors','数据类型配色','◉'],['recovery','自动恢复','↶'],['tools','外部工具','ENV'],['advanced','高级','⚒']] as const
 type Tab=typeof tabs[number][0]
 const tab=ref<Tab>('general')
@@ -141,7 +141,7 @@ onMounted(()=>{void action(async()=>{native.value=normalizeNativePreferences(awa
           <div class="pref-section-title">{{ t('本地数据') }}</div><p class="helper">{{ t('所有设置保存在本机，不需要账户或云服务。') }}</p>
         </template>
       </div>
-      <footer class="dialog-footer"><button class="btn secondary pref-reset" :disabled="busy||!ready" @click="reset">{{ t('还原默认值') }}</button><button class="btn secondary" :disabled="busy" @click="emit('close')">{{ t('取消') }}</button><button class="btn primary" data-action="save-preferences" :disabled="busy||!ready" @click="save">{{ t('确认') }}</button></footer>
+      <footer class="dialog-footer"><button class="btn secondary" :disabled="busy" @click="emit('newWindow')">{{t('新建工作区窗口')}}</button><button class="btn secondary pref-reset" :disabled="busy||!ready" @click="reset">{{ t('还原默认值') }}</button><button class="btn secondary" :disabled="busy" @click="emit('close')">{{ t('取消') }}</button><button class="btn primary" data-action="save-preferences" :disabled="busy||!ready" @click="save">{{ t('确认') }}</button></footer>
     </section>
   </div>
 </template>

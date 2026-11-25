@@ -5,6 +5,10 @@ import type { ClickHouseOperation,OperationResult,ExplorerNode,SqlRow } from '..
 import { metric,metrics } from '../../shared/object-inspection'
 import {boundedText,checkAborted,MAX_BYTES,MAX_VALUE_BYTES,page,plainObject,requireWrite,resourceName,sqlRow,type OperationContext} from './common'
 import {clickHouseIdentifier,clickHouseParameters,inspectClickHouseSql} from './clickhouse-policy'
+import {clickHouseManagementQuery} from './clickhouse-management'
+import {backupPlan,exactId,mergeTreeEngine,mutationPlan,stringLiteral,userDatabase} from './clickhouse-admin'
+import {streamClickHouse} from './clickhouse-transfer'
+import type {ClickHouseTransfer} from '../../shared/types'
 
 const READ_SETTINGS:ClickHouseSettings={
  readonly:'1',max_execution_time:20,max_result_rows:String(501),max_result_bytes:String(MAX_BYTES),result_overflow_mode:'throw',
@@ -60,7 +64,7 @@ export function decodeClickHouseLines(text:string,limit:number,queryId:string):O
 }
 export class ClickHouseOperations{
  private runningId?:string
- constructor(private readonly client:ClickHouseClient,private readonly clientForDatabase:(database:string)=>ClickHouseClient){}
+ constructor(private readonly client:ClickHouseClient,private readonly clientForDatabase:(database:string,timeout?:number)=>ClickHouseClient){}
  private async select(sql:string,parameters:Record<string,unknown>,context:OperationContext,limit=500,database?:string):Promise<OperationResult>{
   checkAborted(context.signal)
   const queryId=randomUUID(),start=Date.now()
@@ -96,7 +100,22 @@ export class ClickHouseOperations{
   })
  }
  private async structure(database:string,entity:string,context:OperationContext){
-  return this.select('SELECT name, type, default_kind, default_expression, is_in_primary_key, is_in_sorting_key FROM system.columns WHERE database={db:String} AND table={table:String} ORDER BY position LIMIT 500',{db:database,table:entity},context)
+  return this.select('SELECT name, type, default_kind, default_expression, is_in_primary_key, is_in_sorting_key, is_in_partition_key, is_in_sampling_key FROM system.columns WHERE database={db:String} AND table={table:String} ORDER BY position LIMIT 500',{db:database,table:entity},context)
+ }
+ private async engine(database:string,entity:string,context:OperationContext){
+  const r=await this.select('SELECT engine FROM system.tables WHERE database={db:String} AND name={table:String} LIMIT 1',{db:database,table:entity},context,1)
+  return r.rows[0]?.engine
+ }
+ async transfer(input:ClickHouseTransfer,path:string,context:OperationContext){
+  const db=userDatabase(input.database),entity=resourceName(input.entity,'表')
+  if(input.direction==='import'){requireWrite(context);if(!mergeTreeEngine(await this.engine(db,entity,context)))throw new Error('INVALID_OPERATION: ClickHouse import supports MergeTree tables')}
+  else if(input.direction!=='export')throw new Error('INVALID_INPUT: ClickHouse transfer')
+  const fields=await this.structure(db,entity,context)
+  if(fields.truncated||!fields.rows.length)throw new Error('INVALID_OPERATION: ClickHouse transfer metadata unavailable')
+  const columns=fields.rows.filter(r=>!['ALIAS','MATERIALIZED','EPHEMERAL'].includes(r.default_kind||'')).map(r=>clickHouseIdentifier(r.name))
+  const client=this.clientForDatabase(db,130000)
+  try{return await streamClickHouse(client,input,path,clickHouseIdentifier(db)+'.'+clickHouseIdentifier(entity),columns,context.signal)}
+  finally{await client.close().catch(()=>{})}
  }
  async execute(op:ClickHouseOperation,context:OperationContext):Promise<OperationResult>{
   if(op.action==='clickhouse.query'){
@@ -115,6 +134,75 @@ export class ClickHouseOperations{
   }
   const database=resourceName(op.database,'数据库'),entity=resourceName(op.entity,'表')
   const qualified=clickHouseIdentifier(database)+'.'+clickHouseIdentifier(entity)
+  if(op.action==='clickhouse.backupStatus'){
+   userDatabase(database)
+   const id=exactId(op.backupId)
+   return this.select('SELECT id, status, substring(error,1,4096) AS error, start_time, end_time, num_files, total_size FROM system.backups WHERE id={id:String} LIMIT 1',{id},context,1)
+  }
+  if(op.action==='clickhouse.mutationPreview'||op.action==='clickhouse.change'){
+   userDatabase(database)
+   if(op.action==='clickhouse.change')requireWrite(context)
+   const change=plainObject(op.change,'ClickHouse change') as unknown as typeof op.change
+   if(!mergeTreeEngine(await this.engine(database,entity,context)))throw new Error('INVALID_OPERATION: ClickHouse administration supports MergeTree tables')
+   const params={db:database,table:entity}
+   let sql:string,parameters:Record<string,unknown>={},backupId:string|undefined,lightweight=false
+   if(change.kind==='update'||change.kind==='delete'){
+    const fields=await this.structure(database,entity,context)
+    if(fields.truncated)throw new Error('LIMIT_EXCEEDED: ClickHouse structure')
+    const plan=mutationPlan(change,fields.rows,qualified)
+    lightweight=change.lightweight===true
+    if(lightweight){
+     const setting=change.kind==='update'?'allow_experimental_lightweight_update':'allow_experimental_lightweight_delete'
+     const support=await this.select('SELECT value FROM system.settings WHERE name={name:String} LIMIT 1',{name:setting},context,1)
+     // Do not enable experimental server settings or modify table settings automatically.
+     if(support.rows[0]?.value!=='1')throw new Error('INVALID_OPERATION: ClickHouse lightweight mutation unavailable')
+     if(change.kind==='update'){
+      const table=await this.select('SELECT create_table_query FROM system.tables WHERE database={db:String} AND name={table:String} LIMIT 1',params,context,1)
+      const ddl=table.rows[0]?.create_table_query||''
+      if(!/\benable_block_number_column\s*=\s*1\b/i.test(ddl)||!/\benable_block_offset_column\s*=\s*1\b/i.test(ddl))throw new Error('INVALID_OPERATION: ClickHouse lightweight UPDATE requires block number and offset columns')
+     }
+    }
+    if(op.action==='clickhouse.mutationPreview'){
+     if(change.kind==='update')await this.select('SELECT accurateCast({value:String}, {valueType:String}) AS validated',plan.params,context,1)
+     const result=await this.select('SELECT count() AS matched FROM '+qualified+' WHERE '+plan.where,plan.params,context,1)
+     return {...result,totalRows:result.rows[0]?.matched}
+    }
+    sql=plan.sql;parameters=plan.params
+   }else{
+    if(op.action==='clickhouse.mutationPreview')throw new Error('INVALID_INPUT: ClickHouse mutation')
+    if(change.kind==='killMutation'){
+     const id=exactId(change.mutationId)
+     const existing=await this.select('SELECT mutation_id FROM system.mutations WHERE database={db:String} AND table={table:String} AND mutation_id={id:String} AND is_done=0 LIMIT 1',{...params,id},context,1)
+     if(!existing.rows.length)throw new Error('INVALID_INPUT: ClickHouse active mutation not found')
+     sql='KILL MUTATION WHERE database={db:String} AND table={table:String} AND mutation_id={id:String} AND is_done=0'
+     parameters={...params,id}
+    }else if(change.kind==='dropPartition'||change.kind==='detachPartition'||change.kind==='attachPartition'){
+     const id=exactId(change.partitionId)
+     const detached=change.kind==='attachPartition'
+     const existing=await this.select('SELECT partition_id FROM system.'+(detached?'detached_parts':'parts')+' WHERE database={db:String} AND table={table:String} AND partition_id={id:String}'+(detached?'':' AND active=1')+' LIMIT 1',{...params,id},context,1)
+     if(!existing.rows.length)throw new Error('INVALID_INPUT: ClickHouse partition not found')
+     sql='ALTER TABLE '+qualified+' '+(change.kind==='dropPartition'?'DROP':detached?'ATTACH':'DETACH')+' PARTITION ID '+stringLiteral(id)
+    }else if(change.kind==='backup'||change.kind==='restore'){
+     backupId=randomUUID()
+     const plan=backupPlan(database,entity,change,backupId)
+     const disks=await this.select('SELECT name FROM system.disks WHERE name={disk:String} LIMIT 1',{disk:plan.disk},context,1)
+     if(!disks.rows.length)throw new Error('INVALID_INPUT: ClickHouse backup disk not found')
+     if(change.kind==='restore'&&await this.engine(database,change.newTable,context))throw new Error('INVALID_INPUT: ClickHouse restore target already exists')
+     sql=plan.sql
+    }else throw new Error('INVALID_INPUT: ClickHouse change')
+   }
+   const id=randomUUID()
+   // Submission is not completion; do not present row counts or success of
+   // background work. Never automatically retry an interrupted mutation.
+   await this.client.command({query:sql,query_params:parameters,query_id:id,abort_signal:context.signal,clickhouse_settings:{...WRITE_SETTINGS,mutations_sync:'0',...(lightweight&&change.kind==='delete'?{lightweight_deletes_sync:'0'}:{})}})
+   return {columns:[],rows:[],queryId:id,backupId,message:'ClickHouse 操作已提交，请刷新任务状态；取消不回滚已完成的修改。'}
+  }
+  if(op.action==='clickhouse.management'){
+   const query=clickHouseManagementQuery(op.view,op)
+   const result=await this.select(query.sql,query.view==='topology'?{}:{db:database,table:entity},context,query.limit)
+   if(query.view!=='queries'&&result.truncated&&query.offset+query.limit<=1000000)result.nextOffset=query.offset+query.limit
+   return result
+  }
   if(op.action==='clickhouse.structure')return this.structure(database,entity,context)
   if(op.action==='clickhouse.inspect'){
    const result=await this.select('SELECT engine, total_rows, total_bytes, sorting_key, partition_key, primary_key, create_table_query FROM system.tables WHERE database={db:String} AND name={table:String} LIMIT 1',{db:database,table:entity},context,1)

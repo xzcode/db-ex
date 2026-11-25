@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { t } from '../i18n'
-import { sqlContext,sqlKeywords,sqlFunctions,mongoSuggestions,redisSuggestions } from '../../shared/editor-completion'
+import { sqlContext,sqlKeywords,sqlFunctions,clickHouseFunctions,sqliteFunctions,mongoSuggestions,redisSuggestions } from '../../shared/editor-completion'
 import {mongoScriptMethods,mongoCursorMethods,mongoConstructors} from '../../shared/mongo-query-script'
 import { preferences } from '../preferences'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -23,6 +23,7 @@ const props = withDefaults(defineProps<{
   suggestions?: string[]
   tableSuggestions?: string[]
   completionKind?: 'mongodb'|'redis'
+  sqlDialect?: 'mysql'|'mariadb'|'sqlite'|'clickhouse'
 }>(), { language: 'sql', readonly: false, suggestions: () => [] })
 const emit = defineEmits<{ 'update:modelValue': [value: string]; execute: [] }>()
 const host = ref<HTMLElement>()
@@ -126,11 +127,11 @@ onMounted(() => {
         }
         if(language==='sql'){
           const context=sqlContext(prefix)
-          const quote=(name:string)=>'\x60'+name.replaceAll('\x60','\x60\x60')+'\x60'
+          const quote=(name:string)=>props.sqlDialect==='clickhouse'?'"'+name.replaceAll('\\','\\\\').replaceAll('"','\\"')+'"':props.sqlDialect==='sqlite'?'"'+name.replaceAll('"','""')+'"':'\x60'+name.replaceAll('\x60','\x60\x60')+'\x60'
           add(props.tableSuggestions||[],kinds.Class,context==='table'?'0':'2',quote)
           add(props.suggestions||[],kinds.Field,context==='field'?'0':'2',quote)
           add(sqlKeywords,kinds.Keyword,'3')
-          add(sqlFunctions,kinds.Function,'4',name=>name+'()')
+          add([...sqlFunctions,...(props.sqlDialect==='clickhouse'?clickHouseFunctions:props.sqlDialect==='sqlite'?sqliteFunctions:[])],kinds.Function,'4',name=>name+'()')
         }else if(language==='dbex-mongo-script'){
           const fullPrefix=model.getValueInRange(new monaco.Range(1,1,position.lineNumber,position.column))
           const collectionPrefix=/\bdb\.([\w$]*)$/.exec(fullPrefix)

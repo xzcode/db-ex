@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { databaseCapabilities } from '../shared/database-capabilities'
 import { t, localize } from './i18n'
+import brandLogo from '../../build/icon-brand.png'
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import ConnectionDialog from './ConnectionDialog.vue'
 import ConnectionSidebar from './components/ConnectionSidebar.vue'
@@ -15,15 +16,17 @@ import {queryFolder,isQueryFolder,folderQueryMode,savedQueryNode,querySummary,ty
 import { mongoCategory, mongoCategoryNodes } from '../shared/mongo-catalog'
 import { protectedDatabase } from '../shared/database-admin'
 import PreferencesDialog from './components/PreferencesDialog.vue'
+import {workspaceStorageKey,PRIMARY_WORKSPACE} from '../shared/workspace-windows'
 import { normalizeWorkspace, workspacePosition, categoryForNode, matchWorkspaceNode, validWorkbenchTab, type WorkspacePosition, type WorkbenchTab } from '../shared/workspace-recovery'
 import { preferences, resolvedTheme } from './preferences'
 import NativeToolDialog from './components/NativeToolDialog.vue'
+import NativeCliDialog from './components/NativeCliDialog.vue'
 import DatabaseActionsDialog from './components/DatabaseActionsDialog.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import { useConfirmation } from './composables/useConfirmation'
 import type { ConnectionAppearancePatch, ConnectionDraft, ExplorerNode, SavedConnection, SessionInfo } from '../shared/types'
 
-interface ObjectTab {node:ExplorerNode;tab?:WorkbenchTab;busy?:boolean;dirty?:boolean}
+interface ObjectTab {node:ExplorerNode;tab?:WorkbenchTab;busy?:boolean;dirty?:boolean;mounted?:boolean}
 interface ExplorerState { roots: ExplorerNode[]; children: Record<string, ExplorerNode[]>; expanded: string[]; selected?: ExplorerNode; tab?:WorkbenchTab; busy: boolean; loading: Set<string>; tabs:ObjectTab[]; activeObject?:string; catalog?:ExplorerNode; catalogVisible:boolean; baseBusy?:boolean; baseTab?:WorkbenchTab }
 const connections = ref<SavedConnection[]>([])
 const sessions = ref<SessionInfo[]>([])
@@ -40,6 +43,8 @@ function nodeIcon(node:ExplorerNode) {
 type DatabaseMode='create'|'drop'|'search'|'import'|'export'|'schema'
 const dbMenu=ref<{sessionId:string;node?:ExplorerNode;x:number;y:number}>()
 const dbMenuHost=ref<HTMLElement>()
+const cliDialog=ref<{sessionId:string;database:string}>()
+const cliSession=computed(()=>sessions.value.find(item=>item.id===cliDialog.value?.sessionId))
 const nativeDialog=ref<{sessionId:string;database:string}>()
 const nativeSession=computed(()=>sessions.value.find(item=>item.id===nativeDialog.value?.sessionId))
 const dbDialog=ref<{sessionId:string;database:string;mode:DatabaseMode}>()
@@ -52,7 +57,10 @@ const dialogOpen = ref(false)
 const connectionDraft = ref<ConnectionDraft>()
 const theme = computed(()=>resolvedTheme(preferences.value.theme))
 const preferencesOpen=ref(false)
-function settingsKey(event:KeyboardEvent){if((event.metaKey||event.ctrlKey)&&event.key===','){event.preventDefault();if(!dialogOpen.value)preferencesOpen.value=true}}
+const workspaceId=window.dbex?.workspaceWindowId||PRIMARY_WORKSPACE
+const workspaceKey=workspaceStorageKey(workspaceId)
+async function newWorkspaceWindow(){await task(async()=>{await window.dbex.newWorkspaceWindow()})}
+function settingsKey(event:KeyboardEvent){if(!(event.metaKey||event.ctrlKey))return;if(event.key===','){event.preventDefault();if(!dialogOpen.value)preferencesOpen.value=true}else if(event.key.toLowerCase()==='n'&&event.shiftKey){event.preventDefault();if(!dialogOpen.value)void newWorkspaceWindow()}}
 const sidebarWidth = ref(300)
 const { confirmation, confirm, answer } = useConfirmation()
 let stopResize: (() => void) | undefined
@@ -65,11 +73,11 @@ function workspaceSnapshot(){
     if(!s.connectionId||ids.includes(s.connectionId))continue
     ids.push(s.connectionId)
     const state=explorers[s.id]
-    positions[s.connectionId]=workspacePosition(state?.selected,state?.tab)
+    positions[s.connectionId]={...workspacePosition(state?.selected,state?.tab),tabs:state?.tabs.map(item=>workspacePosition(item.node,item.tab))}
   }
   return normalizeWorkspace({ids,active:activeSession.value?.connectionId,positions})
 }
-function persistWorkspace(){if(restoringWorkspace)return;try{localStorage.setItem('dbex.workspace.v1',JSON.stringify(workspaceSnapshot()))}catch{}}
+function persistWorkspace(){if(restoringWorkspace)return;try{localStorage.setItem(workspaceKey,JSON.stringify(workspaceSnapshot()))}catch{}}
 watch(workspaceSnapshot,persistWorkspace,{deep:true})
 function sessionBusy(state?:ExplorerState){return !!state&&(state.busy||state.loading.size>0||!!state.baseBusy||state.tabs.some(tab=>tab.busy))}
 function workbenchTabChanged(id:string,tab:WorkbenchTab,objectId?:string){
@@ -90,8 +98,9 @@ function openObject(state:ExplorerState,node:ExplorerNode,tab?:WorkbenchTab){
  let item=state.tabs.find(x=>x.node.id===node.id||!!node.queryId&&x.node.queryId===node.queryId)
  if(!item){
    if(state.tabs.length>=12){error.value='最多打开 12 个对象标签页，请先关闭不使用的标签页。';return}
-   state.tabs.push({node,tab});item=state.tabs[state.tabs.length-1]!
+   state.tabs.push({node,tab,mounted:!restoringWorkspace});item=state.tabs[state.tabs.length-1]!
  }
+ if(!restoringWorkspace)item.mounted=true
  state.activeObject=item.node.id;state.catalogVisible=false;state.selected=item.node;state.tab=item.tab||'data'
 }
 function activateObject(id:string,node:ExplorerNode){const state=explorers[id];if(!state||sessionBusy(state))return;openObject(state,node)}
@@ -139,10 +148,10 @@ async function restorePosition(session:SessionInfo,position:WorkspacePosition|un
   if(!state||!position)return
   state.tab=validWorkbenchTab(session.kind,position.tab)
   const desired=position.node
-  if(!desired){state.baseTab=state.tab;return}
+  if(!desired){state.baseTab=state.tab;if(state.tabs.length&&session.kind!=='redis')showCatalog(state);return}
   const root=state.roots.find(n=>n.database===desired.database)
   if(!root)return
-  if(desired.kind==='database'){showCatalog(state,root);state.expanded=[root.id];await loadCatalog(session.id,root);return}
+  if(desired.kind==='database'){showCatalog(state,root);state.expanded=[...new Set([...state.expanded,root.id])];await loadCatalog(session.id,root);return}
   if(desired.kind==='keyspace'){state.selected=root;state.baseTab=state.tab;return}
   if(desired.kind==='saved-query'&&desired.queryId&&session.connectionId&&session.kind!=='redis'){
     const item=await window.dbex.getSavedQuery(session.id,desired.database,desired.queryId)
@@ -151,13 +160,20 @@ async function restorePosition(session:SessionInfo,position:WorkspacePosition|un
   }
   if((desired.kind==='query-folder'||desired.kind==='mongo-category'&&(desired.category==='queries'||desired.category==='pipelines'))&&session.kind!=='redis'){
     const folder=queryFolder(desired.database,session.kind,desired.queryMode||(session.kind==='mongodb'?(desired.category==='pipelines'?'mongo-aggregation':'mongo-find'):'sql'))
-    showCatalog(state,folder);await loadCatalog(session.id,root);state.expanded=[root.id,folder.id];await loadCatalog(session.id,folder);return
+    showCatalog(state,folder);await loadCatalog(session.id,root);state.expanded=[...new Set([...state.expanded,root.id,folder.id])];await loadCatalog(session.id,folder);return
   }
   if(desired.kind==='database-query'&&databaseCapabilities(session.kind).editor==='query'){openQuery(session.id,desired.database);return}
+  if(desired.kind==='saved-query'&&desired.draftId&&session.connectionId&&session.kind!=='redis'){
+    const mode=desired.queryMode||(session.kind==='mongodb'?'mongo-find':'sql')
+    if((session.kind==='mongodb')===(mode==='sql'))return
+    state.catalog=queryFolder(desired.database,session.kind,mode)
+    openObject(state,{id:'query-draft:'+desired.draftId,draftId:desired.draftId,kind:'saved-query',label:'未命名查询',database:desired.database,queryMode:mode},position.tab)
+    return
+  }
   if(desired.kind==='saved-query'){showCatalog(state,root);return}
 
   await loadCatalog(session.id,root)
-  const children=state.children[root.id]||[];state.expanded=[root.id]
+  const children=state.children[root.id]||[];state.expanded=[...new Set([...state.expanded,root.id])]
   let found=matchWorkspaceNode(children,desired)
   if(session.kind==='mongodb'&&!found){
     const category=categoryForNode(desired)
@@ -279,13 +295,13 @@ function actualQueryFolder(state:ExplorerState,database:string,kind:import('../s
  const matches=(node:ExplorerNode|undefined):node is ExplorerNode=>!!node&&node.database===database&&isQueryFolder(node)&&folderQueryMode(node)===mode
  return Object.values(state.children).flat().find(matches)||(matches(state.catalog)?state.catalog:queryFolder(database,kind,mode))
 }
-let querySerial=0
 function openQuery(id:string,database?:string,explicitMode?:QueryMode){
  const state=explorers[id],session=sessions.value.find(item=>item.id===id)
  if(!state||!session||!database||sessionBusy(state)||session.kind==='redis')return
  const mode=explicitMode||(session.kind==='mongodb'?(state.catalog?.database===database&&isQueryFolder(state.catalog)?folderQueryMode(state.catalog!):'mongo-find'):'sql')
  state.catalog=actualQueryFolder(state,database,session.kind,mode)
- const node:ExplorerNode={id:JSON.stringify(['query-draft',database,mode,++querySerial]),kind:'saved-query',label:'未命名查询',database,queryMode:mode}
+ const draftId=crypto.randomUUID()
+ const node:ExplorerNode={id:'query-draft:'+draftId,draftId,kind:'saved-query',label:'未命名查询',database,queryMode:mode}
  openObject(state,node,mode==='sql'?'query':'data')
 }
 function querySaved(id:string,tabId:string,value:QuerySummary){
@@ -321,13 +337,14 @@ async function catalogQueryAction(id:string,action:'copy'|'delete'|'export'|'exp
  })
  if(ok)await loadCatalog(id,folder,true)
 }
-async function dbMenuAction(action:DatabaseMode|'close'|'query'|'refresh'|'native'|'sqlite-backup'){
+async function dbMenuAction(action:DatabaseMode|'close'|'query'|'refresh'|'native'|'sqlite-backup'|'cli'){
   const menu=dbMenu.value, session=dbMenuSession.value
   closeDbMenu()
   if(!menu||!session||current.value!==session.id)return
   const state=explorers[session.id],database=menu.node?.database||''
   if(!state)return
   if(action==='sqlite-backup'){if(databaseCapabilities(session.kind).backup==='file')void task(async()=>{if(await window.dbex.backupSqlite(session.id))notice.value='操作已完成'});return}
+  if(action==='cli'){if(database&&['mysql','mariadb','sqlite'].includes(session.kind))cliDialog.value={sessionId:session.id,database};return}
   if(action==='native'){if(database&&databaseCapabilities(session.kind).backup==='native-tools')nativeDialog.value={sessionId:session.id,database};return}
   if(action==='refresh'){void refreshRoots(session.id);return}
   if(action==='close'){if(state.tabs.some(tab=>tab.node.database===database&&tab.dirty)&&!await confirm({title:t('关闭'),message:t('关闭标签页将丢弃未保存的修改。'),danger:false,confirmLabel:t('关闭')}))return;clearDatabase(state,database);return}
@@ -414,11 +431,17 @@ onMounted(() => {
         const id=localStorage.getItem('dbex.last-connection');const item=connections.value.find(value=>value.id===id&&!value.locked)
         if(item&&!sessions.value.length)await connectSaved(item)
       }else if(preferences.value.startup==='workspace'){
-        const saved=normalizeWorkspace(JSON.parse(localStorage.getItem('dbex.workspace.v1')||'{}'))
-        for(const id of saved.ids){const item=connections.value.find(value=>value.id===id&&!value.locked);if(item){await connectSaved(item);const session=sessions.value.find(s=>s.connectionId===id);if(session)try{await restorePosition(session,saved.positions[id])}catch(reason){error.value=messageOf(reason)}}}
+        const saved=normalizeWorkspace(JSON.parse(localStorage.getItem(workspaceKey)||'{}'))
+        for(const id of saved.ids){const item=connections.value.find(value=>value.id===id&&!value.locked);if(item){await connectSaved(item);const session=sessions.value.find(s=>s.connectionId===id);if(session){
+          const position=saved.positions[id]
+          for(const tab of position?.tabs||[])try{await restorePosition(session,tab)}catch(reason){error.value=messageOf(reason)}
+          try{await restorePosition(session,position)}catch(reason){error.value=messageOf(reason)}
+          const state=explorers[session.id],activeTab=state?.tabs.find(tab=>tab.node.id===state.activeObject)
+          if(activeTab)activeTab.mounted=true
+        }}}
         const active=sessions.value.find(s=>s.connectionId===saved.active);if(active)current.value=active.id
       }
-    }catch{}finally{restoringWorkspace=false;workspaceReady.value=true;persistWorkspace()}
+    }catch{}finally{restoringWorkspace=false;workspaceReady.value=true;persistWorkspace();if(window.dbex.restoreWorkspaceWindows)await window.dbex.restoreWorkspaceWindows(preferences.value.startup==='workspace').catch(()=>{})}
   })()
 })
 onBeforeUnmount(() => { stopResize?.(); window.removeEventListener('pointerdown',outsideMenu); window.removeEventListener('keydown',menuKey); window.removeEventListener('keydown',settingsKey); window.removeEventListener('resize',closeDbMenu) })
@@ -426,7 +449,7 @@ onBeforeUnmount(() => { stopResize?.(); window.removeEventListener('pointerdown'
 
 <template>
   <main class="desktop" :style="{ '--sidebar-width': sidebarWidth + 'px' }">
-    <header class="topbar"><div class="brand"><span class="brand-symbol">▦</span><strong>DB EX</strong><span class="brand-subtitle">DATABASE WORKSPACE</span></div><div class="top-actions"><button class="icon-button preferences-button" :aria-label="t('偏好设置')" :title="t('偏好设置')" @click="preferencesOpen=true">⚙</button></div></header>
+    <header class="topbar"><div class="brand"><img class="brand-symbol" :src="brandLogo" alt="" draggable="false" aria-hidden="true"/><strong>DB EX</strong><span class="brand-subtitle">DATABASE WORKSPACE</span></div><div class="top-actions"><button class="icon-button preferences-button" :aria-label="t('偏好设置')" :title="t('偏好设置')" @click="preferencesOpen=true">⚙</button></div></header>
     <div class="workspace"><ConnectionSidebar :connections="connections" :sessions="sessions" :current="current" :busy="busy" @refresh="refreshConnections" @create="newConnection" @connect="connectSaved" @activate="current = $event" @disconnect="disconnect" @edit="editConnection" @remove="deleteConnection" @import="importConnections" @export="exportConnections" @appearance="updateAppearance" @resource-menu="(event,id)=>showDbMenu(event,undefined,id)" @refresh-resources="refreshSessionResources">
         <template #resources="{session,grouped}">
           <ConnectionResourceTree :session="session" :state="explorers[session.id]" :active="session.id===current" :busy="busy||sessionBusy(explorers[session.id])" :color="sessionColor(session)" :grouped="grouped" @select="node=>toggleRoot(node,false,session.id)" @menu="(event,node)=>showDbMenu(event,node,session.id)" />
@@ -447,9 +470,11 @@ onBeforeUnmount(() => { stopResize?.(); window.removeEventListener('pointerdown'
     <ObjectList v-if="explorers[session.id]?.catalogVisible" :kind="session.kind" :node="explorers[session.id]?.catalog" :nodes="catalogNodes(explorers[session.id])" :busy="busy||sessionBusy(explorers[session.id])" :can-save-queries="!!session.connectionId" @query-action="(action,node,name)=>catalogQueryAction(session.id,action,node,name)" @open="toggleRoot($event,true,session.id)" @query="openQuery(session.id,explorers[session.id]?.catalog?.database)" @refresh="refreshCatalog(session.id)" />
     <DatabaseWorkbench v-if="session.kind!=='clickhouse'" v-show="!explorers[session.id]?.catalogVisible&&!explorers[session.id]?.activeObject" :session="session" :node="session.kind==='redis'?explorers[session.id]?.selected:undefined" :initial-tab="explorers[session.id]?.baseTab" :active="session.id===current&&!explorers[session.id]?.catalogVisible&&!explorers[session.id]?.activeObject" @tab-change="workbenchTabChanged(session.id,$event)" @busy-change="workbenchBusyChanged(session.id,$event)" @update-session="updateSession" @disconnect="removeSession(session.id)" @refresh-tree="refreshRoots(session.id)" />
     <template v-for="item in explorers[session.id]?.tabs||[]" :key="item.node.id">
-      <SavedQueryEditor v-if="item.node.kind==='saved-query'" v-show="explorers[session.id]?.activeObject===item.node.id" :session="session" :node="item.node" :active="session.id===current&&explorers[session.id]?.activeObject===item.node.id" :table-suggestions="Object.values(explorers[session.id]?.children||{}).flat().filter(n=>n.kind==='table'||n.kind==='view').map(n=>n.label)" @saved="querySaved(session.id,item.node.id,$event)" @busy-change="workbenchBusyChanged(session.id,$event,item.node.id)" @dirty-change="workbenchDirtyChanged(session.id,$event,item.node.id)" @update-session="updateSession" @disconnect="removeSession(session.id)" />
+    <template v-if="item.mounted">
+      <SavedQueryEditor v-if="item.node.kind==='saved-query'" v-show="explorers[session.id]?.activeObject===item.node.id" :session="session" :node="item.node" :active="session.id===current&&explorers[session.id]?.activeObject===item.node.id" :table-suggestions="Object.values(explorers[session.id]?.children||{}).flat().filter(n=>(n.kind==='table'||n.kind==='view')&&n.database===item.node.database).map(n=>n.label)" @saved="querySaved(session.id,item.node.id,$event)" @busy-change="workbenchBusyChanged(session.id,$event,item.node.id)" @dirty-change="workbenchDirtyChanged(session.id,$event,item.node.id)" @update-session="updateSession" @disconnect="removeSession(session.id)" />
     <ClickHouseWorkbench v-else-if="session.kind==='clickhouse'" v-show="explorers[session.id]?.activeObject===item.node.id" :session="session" :node="item.node" :active="session.id===current&&explorers[session.id]?.activeObject===item.node.id" :initial-tab="item.tab" @tab-change="workbenchTabChanged(session.id,$event,item.node.id)" @busy-change="workbenchBusyChanged(session.id,$event,item.node.id)" @dirty-change="workbenchDirtyChanged(session.id,$event,item.node.id)" @update-session="updateSession" @disconnect="removeSession(session.id)" />
-    <DatabaseWorkbench v-else v-show="explorers[session.id]?.activeObject===item.node.id"  :session="session" :node="item.node" :initial-tab="item.tab" :active="session.id===current&&explorers[session.id]?.activeObject===item.node.id" :table-suggestions="Object.values(explorers[session.id]?.children || {}).flat().filter(n=>n.kind==='table'||n.kind==='view').map(n=>n.label)" @tab-change="workbenchTabChanged(session.id,$event,item.node.id)" @busy-change="workbenchBusyChanged(session.id,$event,item.node.id)" @dirty-change="workbenchDirtyChanged(session.id,$event,item.node.id)" @update-session="updateSession" @disconnect="removeSession(session.id)" @refresh-tree="refreshRoots(session.id)" />
+    <DatabaseWorkbench v-else v-show="explorers[session.id]?.activeObject===item.node.id"  :session="session" :node="item.node" :initial-tab="item.tab" :active="session.id===current&&explorers[session.id]?.activeObject===item.node.id" :table-suggestions="Object.values(explorers[session.id]?.children || {}).flat().filter(n=>(n.kind==='table'||n.kind==='view')&&n.database===item.node.database).map(n=>n.label)" @tab-change="workbenchTabChanged(session.id,$event,item.node.id)" @busy-change="workbenchBusyChanged(session.id,$event,item.node.id)" @dirty-change="workbenchDirtyChanged(session.id,$event,item.node.id)" @update-session="updateSession" @disconnect="removeSession(session.id)" @refresh-tree="refreshRoots(session.id)" />
+    </template>
     </template>
   </section>
 </template></div></div>
@@ -461,12 +486,13 @@ onBeforeUnmount(() => { stopResize?.(); window.removeEventListener('pointerdown'
       <button v-if="dbMenu.node" class="context-action" @click="dbMenuAction('close')">{{ t('关闭数据库') }}</button>
       <button v-if="dbMenuSession && databaseCapabilities(dbMenuSession.kind).databaseAdministration" class="context-action" :disabled="dbMenuSession?.transaction" @click="dbMenuAction('create')">{{ t('新建数据库') }}…</button>
       <button v-if="dbMenu.node && dbMenuSession && databaseCapabilities(dbMenuSession.kind).databaseAdministration" class="context-action danger" :disabled="protectedDatabase(dbMenuSession?.kind || 'mongodb',dbMenu.node.database || '') || dbMenuSession?.transaction" @click="dbMenuAction('drop')">{{ t('删除数据库') }}…</button>
-      <template v-if="dbMenu.node"><div class="context-menu-divider"></div><button class="context-action" @click="dbMenuAction('query')">{{ t('新建查询') }}</button><button class="context-action" @click="dbMenuAction('search')">{{ t('查找数据库对象') }}…</button><div class="context-menu-divider"></div><button v-if="dbMenuSession && databaseCapabilities(dbMenuSession.kind).backup==='file'" class="context-action" :disabled="dbMenuSession.transaction" @click="dbMenuAction('sqlite-backup')">{{ t('备份数据库') }}…</button><button v-if="dbMenuSession && databaseCapabilities(dbMenuSession.kind).backup==='native-tools'" class="context-action" @click="dbMenuAction('native')">{{ t('外部工具') }}…</button><button v-if="dbMenuSession?.kind!=='clickhouse'" class="context-action" @click="dbMenuAction('schema')">{{ t('导出结构脚本') }}…</button><button v-if="dbMenuSession?.kind!=='clickhouse'" class="context-action" @click="dbMenuAction('import')">{{ t('导入数据') }}…</button><button v-if="dbMenuSession?.kind!=='clickhouse'" class="context-action" @click="dbMenuAction('export')">{{ t('导出数据') }}…</button></template>
+      <template v-if="dbMenu.node"><div class="context-menu-divider"></div><button class="context-action" @click="dbMenuAction('query')">{{ t('新建查询') }}</button><button class="context-action" @click="dbMenuAction('search')">{{ t('查找数据库对象') }}…</button><div class="context-menu-divider"></div><button v-if="dbMenuSession && databaseCapabilities(dbMenuSession.kind).backup==='file'" class="context-action" :disabled="dbMenuSession.transaction" @click="dbMenuAction('sqlite-backup')">{{ t('备份数据库') }}…</button><button v-if="dbMenuSession&&['mysql','mariadb','sqlite'].includes(dbMenuSession.kind)" class="context-action" @click="dbMenuAction('cli')">{{t('原生数据库 CLI')}}…</button><button v-if="dbMenuSession && databaseCapabilities(dbMenuSession.kind).backup==='native-tools'" class="context-action" @click="dbMenuAction('native')">{{ t('外部工具') }}…</button><button v-if="dbMenuSession?.kind!=='clickhouse'" class="context-action" @click="dbMenuAction('schema')">{{ t('导出结构脚本') }}…</button><button v-if="dbMenuSession?.kind!=='clickhouse'" class="context-action" @click="dbMenuAction('import')">{{ t('导入数据') }}…</button><button v-if="dbMenuSession?.kind!=='clickhouse'" class="context-action" @click="dbMenuAction('export')">{{ t('导出数据') }}…</button></template>
       <div class="context-menu-divider"></div><button class="context-action" @click="dbMenuAction('refresh')">{{ t('刷新') }}</button>
     </div></Teleport>
+    <NativeCliDialog v-if="cliDialog&&cliSession" :session="cliSession" :database="cliDialog.database" @close="cliDialog=undefined" @session="updateSession"/>
     <NativeToolDialog v-if="nativeDialog&&nativeSession" :session="nativeSession" :database="nativeDialog.database" @close="nativeDialog=undefined" @session="updateSession" @disconnect="removeSession(nativeSession.id);nativeDialog=undefined" />
     <DatabaseActionsDialog v-if="dbDialog && dbDialogSession" :session="dbDialogSession" :database="dbDialog.database" :mode="dbDialog.mode" :existing="explorers[dbDialog.sessionId]?.roots.map(item=>item.database || item.label) || []" @close="dbDialog=undefined" @changed="databaseChanged" @select="databaseObjectSelected" @session="updateSession" />
-    <PreferencesDialog v-if="preferencesOpen" v-show="!dialogOpen" :connection-busy="busy" @create-connection="newConnection" @close="preferencesOpen=false" />
+    <PreferencesDialog v-if="preferencesOpen" v-show="!dialogOpen" :connection-busy="busy" @create-connection="newConnection" @new-window="newWorkspaceWindow" @close="preferencesOpen=false" />
     <ConnectionDialog v-if="dialogOpen" :draft="connectionDraft" @close="dialogOpen = false" @saved="refreshConnections" @connected="startSession" />
     <ConfirmDialog v-if="confirmation" v-bind="confirmation" @confirm="answer(true)" @cancel="answer(false)" />
   </main>
