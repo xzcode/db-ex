@@ -10,6 +10,7 @@ import { validateId } from './connections/validation'
 import { SnippetStore } from './storage/snippets'
 import { parseSshConfig } from './connections/ssh-config'
 import { inspectSql } from './operations/sql-policy'
+import { validateMongoDocumentEdit } from './operations/mongodb'
 import { redisCommandWrites, validateRedisCommand } from './operations/redis'
 
 function getSystemLanguage(): string { return app.getPreferredSystemLanguages()[0] || app.getLocale() || 'en' }
@@ -132,6 +133,7 @@ function registerIpc(): void {
     }
     return sessions.execute(id, operation)
   }))
+  ipcMain.handle('mongo:validate-document', handler((_win, document: string, original?: string) => validateMongoDocumentEdit(document, original)))
   ipcMain.handle('sessions:cancel', handler((_win, id: string) => sessions.cancel(id)))
   ipcMain.handle('snippets:list', handler(() => snippets.list()))
   ipcMain.handle('snippets:save', handler((_win, value: Omit<QuerySnippet, 'id' | 'updatedAt'> & { id?: string }) => snippets.save(value)))

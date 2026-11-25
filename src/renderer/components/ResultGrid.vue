@@ -4,7 +4,7 @@ import { bsonLabel, gridBsonType, type BsonTypeBranch, type BsonType } from '../
 import { formatBsonValue, parseBsonDocument } from '../../shared/bson-display'
 import { activeTypeColor } from '../../shared/bson-palette'
 import { bsonPalette } from '../bson-preferences'
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 const props = withDefaults(defineProps<{
   columns: string[]
@@ -15,8 +15,10 @@ const props = withDefaults(defineProps<{
   offset?: number
   bsonTypes?: BsonTypeBranch[]
   documents?: string[]
+  documentMenu?: boolean
+  canEditDocument?: boolean
 }>(), { selected: -1, selectable: false, checked: () => [], offset: 0 })
-const emit = defineEmits<{ select: [index: number]; open: [index: number]; check: [index: number]; checkAll: [] }>()
+const emit = defineEmits<{ select: [index: number]; open: [index: number]; check: [index: number]; checkAll: []; documentEdit: [index: number]; documentView: [index: number] }>()
 const mongo = computed(() => props.bsonTypes !== undefined)
 const rowHeight = computed(() => mongo.value ? 26 : 34)
 const headerHeight = computed(() => mongo.value ? 28 : 34)
@@ -28,6 +30,32 @@ const virtual = computed(() => props.rows.length > 100)
 let observer: ResizeObserver | undefined
 let frame = 0
 let stopResize: (() => void) | undefined
+const rowMenu = ref<{ index: number; x: number; y: number }>()
+const menuHost = ref<HTMLElement>()
+function closeRowMenu() { rowMenu.value = undefined }
+async function openRowMenu(event: MouseEvent | KeyboardEvent, index: number) {
+  if (!props.documentMenu || !props.documents?.[index]) return
+  event.preventDefault(); event.stopPropagation()
+  emit('select', index)
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+  const mouse = 'clientX' in event
+  rowMenu.value = { index, x: Math.max(4, Math.min(mouse ? event.clientX : rect.left + 20, window.innerWidth - 220)), y: Math.max(4, Math.min(mouse ? event.clientY : rect.bottom, window.innerHeight - 100)) }
+  await nextTick()
+  if (!rowMenu.value || !menuHost.value) return
+  rowMenu.value.y = Math.max(4, Math.min(rowMenu.value.y, window.innerHeight - menuHost.value.getBoundingClientRect().height - 4))
+  menuHost.value.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus({ preventScroll: true })
+}
+function menuAction(action: 'view' | 'edit') {
+  const index = rowMenu.value?.index
+  closeRowMenu()
+  if (index === undefined || !props.documents?.[index]) return
+  if (action === 'edit') { if (props.canEditDocument) emit('documentEdit', index) }
+  else emit('documentView', index)
+}
+function outside(event: PointerEvent) { if (rowMenu.value && !menuHost.value?.contains(event.target as Node)) closeRowMenu() }
+function escapeMenu(event: KeyboardEvent) { if (event.key === 'Escape') closeRowMenu() }
+watch(() => props.rows, closeRowMenu)
+watch(() => props.documentMenu, closeRowMenu)
 const parsed = computed(() => props.documents?.map(parseBsonDocument) || [])
 const widths = ref<Record<string, number>>(Object.create(null))
 const cellRows = computed(() => {
@@ -96,10 +124,12 @@ const bottomSpace = computed(() => (props.rows.length - windowRange.value.end) *
 const columnCount = computed(() => props.columns.length + (props.selectable ? 2 : 1))
 
 function onScroll() {
+  closeRowMenu()
   if (frame) return
   frame = requestAnimationFrame(() => { frame = 0; scrollTop.value = scrollHost.value?.scrollTop || 0 })
 }
 onMounted(() => {
+  window.addEventListener('pointerdown', outside); window.addEventListener('keydown', escapeMenu); window.addEventListener('resize', closeRowMenu)
   if (!scrollHost.value) return
   observer = new ResizeObserver(() => { viewportHeight.value = scrollHost.value?.clientHeight || 0 })
   observer.observe(scrollHost.value)
@@ -109,7 +139,7 @@ watch(() => props.rows, () => {
   scrollTop.value = 0
   if (scrollHost.value) scrollHost.value.scrollTop = 0
 })
-onBeforeUnmount(() => { observer?.disconnect(); stopResize?.(); if (frame) cancelAnimationFrame(frame) })
+onBeforeUnmount(() => { window.removeEventListener('pointerdown', outside); window.removeEventListener('keydown', escapeMenu); window.removeEventListener('resize', closeRowMenu); observer?.disconnect(); stopResize?.(); if (frame) cancelAnimationFrame(frame) })
 
 function cellType(row: Record<string, unknown>, index: number, key: string): BsonType | undefined {
   return cellRows.value[index]?.[key]?.type ?? (props.bsonTypes ? gridBsonType(row, props.bsonTypes[index], key) : undefined)
@@ -135,7 +165,7 @@ function display(value: unknown): string {
       </tr></thead>
       <tbody>
         <tr v-if="topSpace" class="virtual-spacer" aria-hidden="true"><td :colspan="columnCount" :style="{ height: topSpace + 'px' }"></td></tr>
-        <tr v-for="item in visibleRows" :key="item.index" :data-row-index="item.index" :aria-rowindex="item.index + 2" :class="{ selected: selected === item.index }" @click="emit('select', item.index)" @dblclick="emit('open', item.index)">
+        <tr v-for="item in visibleRows" :key="item.index" :data-row-index="item.index" :aria-rowindex="item.index + 2" :class="{ selected: selected === item.index }" @click="emit('select', item.index)" @dblclick="emit('open', item.index)" :tabindex="documentMenu ? 0 : undefined" @contextmenu="openRowMenu($event, item.index)" @keydown.shift.f10="openRowMenu($event, item.index)">
           <td v-if="selectable" class="number-cell"><input type="checkbox" :aria-label="t('选择第 {0} 行', [item.index + 1])" :checked="checked.includes(item.index)" @click.stop @change="emit('check', item.index)" /></td>
           <td class="number-cell">{{ offset + item.index + 1 }}</td>
           <td v-for="column in columns" :key="column"
@@ -151,6 +181,13 @@ function display(value: unknown): string {
         <tr v-if="!rows.length"><td :colspan="columnCount" class="empty-grid">{{ t('暂无记录') }}</td></tr>
       </tbody>
     </table>
+    <Teleport to="body">
+      <div v-if="rowMenu" ref="menuHost" class="connection-context-menu mongo-row-menu" :style="{ left: rowMenu.x + 'px', top: rowMenu.y + 'px' }" @contextmenu.prevent @pointerdown.stop>
+        <button class="context-action" type="button" @click="menuAction('view')">{{ t('查看文档') }}</button>
+        <button class="context-action" type="button" :disabled="!canEditDocument" @click="menuAction('edit')">{{ t('编辑文档') }}</button>
+        <p v-if="!canEditDocument" class="context-edit-help">{{ t('编辑需要完整文档和写入权限。') }}</p>
+      </div>
+    </Teleport>
   </div>
 </template>
 

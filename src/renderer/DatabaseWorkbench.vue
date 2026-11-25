@@ -6,6 +6,7 @@ import CodeEditor from './components/CodeEditor.vue'
 import ResultGrid from './components/ResultGrid.vue'
 import BsonColorSettings from './components/BsonColorSettings.vue'
 import BsonDocumentTree from './components/BsonDocumentTree.vue'
+import { formatMongoDocument, parseMongoDocumentEditor } from '../shared/bson-editor'
 import type { BsonTypeBranch } from '../shared/bson-types'
 import { csvFromRows, sqlRowsFromFile, validateSqlRow } from './data-format'
 
@@ -38,8 +39,11 @@ const historyOpen = ref(false)
 const historyOnlyFavorites = ref(false)
 const snippetName = ref('')
 const historyError = ref('')
-const edit = ref<{ mode: 'insert' | 'update' | 'import'; text: string; original?: SqlRow; originalDocument?: string; count?: number } | null>(null)
+const edit = ref<{ mode: 'insert' | 'update' | 'import'; text: string; original?: SqlRow; originalDocument?: string; count?: number; syntax?: 'typed' | 'ejson' } | null>(null)
 const editError = ref('')
+const editNotice = ref('')
+const validatingEdit = ref(false)
+watch(() => edit.value?.text, () => { editNotice.value = ''; editError.value = '' })
 const indexDialog = ref(false)
 const bsonSettingsOpen = ref(false)
 const documentView = ref<{ document: string; metadata?: BsonTypeBranch }>()
@@ -178,17 +182,44 @@ function openResultRow(index: number) {
   if (isMongo.value) viewMongoDocument(index)
   else if (tab.value === 'data' && !isRedis.value) openEdit()
 }
-function openInsert() { editError.value = ''; edit.value = { mode: 'insert', text: isMysql.value ? '{} ' : '{\n  "name": ""\n}' } }
+function openInsert() { editError.value = ''; editNotice.value = ''; edit.value = { mode: 'insert', text: isMysql.value ? '{} ' : '{\n  "name": ""\n}', syntax: isMongo.value ? 'typed' : undefined } }
 function openEdit() {
-  if (!canEditRow.value) return
-  editError.value = ''
+  if (!canEditRow.value || busy.value || !props.session.writable || tab.value !== 'data') return
+  editError.value = ''; editNotice.value = ''
   if (isMysql.value) {
     const original = result.value!.rawRows![selectedRow.value]
     edit.value = { mode: 'update', text: JSON.stringify(original, null, 2), original }
   } else {
     const originalDocument = result.value!.documents![selectedRow.value]
-    edit.value = { mode: 'update', text: originalDocument, originalDocument }
+    const formatted = formatMongoDocument(originalDocument, result.value?.bsonTypes?.[selectedRow.value])
+    edit.value = { mode: 'update', ...formatted, originalDocument }
   }
+}
+function editMongoRow(index: number) {
+  selectedRow.value = index
+  openEdit()
+}
+function mongoEditText(draft: NonNullable<typeof edit.value>): string {
+  return draft.syntax === 'typed' ? parseMongoDocumentEditor(draft.text) : JSON.stringify(JSON.parse(draft.text))
+}
+function useRawEjson() {
+  if (!edit.value || validatingEdit.value || busy.value) return
+  try {
+    edit.value.text = JSON.stringify(JSON.parse(mongoEditText(edit.value)), null, 2)
+    edit.value.syntax = 'ejson'
+    editError.value = ''; editNotice.value = ''
+  } catch (reason) { editError.value = messageOf(reason) }
+}
+async function validateEdit() {
+  const draft = edit.value
+  if (!draft || !isMongo.value || draft.mode === 'import' || validatingEdit.value || busy.value) return
+  const before = draft.text
+  validatingEdit.value = true; editError.value = ''; editNotice.value = ''
+  try {
+    await window.dbex.validateMongoDocument(mongoEditText(draft), draft.originalDocument)
+    if (edit.value === draft && draft.text === before) editNotice.value = '文档验证通过'
+  } catch (reason) { if (edit.value === draft && draft.text === before) editError.value = messageOf(reason) }
+  finally { validatingEdit.value = false }
 }
 function rowKey(original: SqlRow): SqlRow {
   return Object.fromEntries(primaryKeys.value.map(key => {
@@ -198,7 +229,7 @@ function rowKey(original: SqlRow): SqlRow {
 }
 async function saveEdit() {
   const draft = edit.value
-  if (!draft || busy.value) return
+  if (!draft || busy.value || validatingEdit.value || !props.session.writable) return
   try {
     let operation: DatabaseOperation
     if (isMysql.value) {
@@ -218,10 +249,10 @@ async function saveEdit() {
         if (!Array.isArray(documents)) throw new Error('导入内容需要 EJSON 文档数组')
         operation = { action: 'mongo.insert', ...entity.value, documents: documents.map(item => JSON.stringify(item)), confirmed: true }
       } else {
-        JSON.parse(draft.text)
+        const document = mongoEditText(draft)
         operation = draft.mode === 'insert'
-          ? { action: 'mongo.insert', ...entity.value, documents: [draft.text], confirmed: true }
-          : { action: 'mongo.replace', ...entity.value, original: draft.originalDocument!, document: draft.text, confirmed: true }
+          ? { action: 'mongo.insert', ...entity.value, documents: [document], confirmed: true }
+          : { action: 'mongo.replace', ...entity.value, original: draft.originalDocument!, document, confirmed: true }
       }
     }
     if (!await confirmWrite(draft.mode === 'update' ? '保存修改' : '插入记录', `${entityTitle()}\n${draft.mode === 'import' ? `本批 ${draft.count ?? '?'} 条记录。` : '将保存编辑器中的完整记录。'}\nMySQL 修改会核对主键与原始值，MongoDB 修改会核对原始文档。`)) return
@@ -379,7 +410,7 @@ async function refreshSelection(version: number) {
   }
 }
 watch(() => props.node?.id, () => {
-  generation++; mongoQuery.value = ''; result.value = null; structure.value = null; primaryKeys.value = []; selectedRow.value = -1; checked.value = []; offset.value = 0; editableRows.value = false
+  generation++; edit.value = null; documentView.value = undefined; mongoQuery.value = ''; result.value = null; structure.value = null; primaryKeys.value = []; selectedRow.value = -1; checked.value = []; offset.value = 0; editableRows.value = false
   if (busy.value) { pendingSelection = true; return }
   void refreshSelection(generation)
 }, { immediate: true })
@@ -424,7 +455,7 @@ onBeforeUnmount(() => { disposed = true; generation++ })
     <template v-else>
       <div v-if="tab === 'data' && isMongo && showMongoFilters" class="mongo-filters"><label>Filter<textarea v-model="filter" rows="2" spellcheck="false" /></label><label>Projection<textarea v-model="projection" rows="2" spellcheck="false" /></label><label>Sort<textarea v-model="sort" rows="2" spellcheck="false" /></label><button class="btn primary" :disabled="busy || !hasEntity" @click="loadData()">{{ t('查询') }}</button></div>
       <div class="editor-toolbar"><template v-if="tab === 'data' && !isRedis"><button v-if="isMongo" class="btn secondary small" :aria-expanded="showMongoFilters" :class="{ 'active-filter': filtersActive }" @click="showMongoFilters = !showMongoFilters">{{ t('查询条件') }} <span v-if="filtersActive">•</span></button><button class="btn secondary" :disabled="busy || !hasEntity" @click="loadData(offset)">{{ t('刷新') }}</button><button class="btn secondary" :disabled="busy || !hasEntity || !session.writable" @click="openInsert">{{ t('新增') }}</button><button class="btn secondary" :disabled="busy || !canEditRow || !session.writable" @click="openEdit">{{ t('编辑') }}</button><button class="btn danger-text" :disabled="busy || !canEditRow || !session.writable" @click="deleteRow">{{ t('删除') }}</button><button class="btn secondary" :disabled="busy || !hasEntity || !session.writable" @click="importData">{{ t('导入') }} {{ isMysql ? 'CSV / JSON' : 'EJSON' }}</button></template><button v-if="isMongo" class="btn secondary small" :disabled="selectedRow < 0 || !result?.documents?.[selectedRow]" @click="viewMongoDocument()">{{ t('查看文档') }}</button><span class="toolbar-spacer"></span><button class="btn secondary small" :disabled="!result?.rows.length" @click="exportData('json')">{{ t('导出当前页 JSON') }}</button><button class="btn secondary small" :disabled="!result?.rows.length" @click="exportData('csv')">CSV</button></div>
-      <ResultGrid v-if="result" :columns="result.columns" :rows="result.rows" :selected="selectedRow" :offset="offset" :bson-types="isMongo ? result.bsonTypes : undefined" :documents="isMongo ? result.documents : undefined" @select="selectedRow = $event" @open="openResultRow" />
+      <ResultGrid v-if="result" :columns="result.columns" :rows="result.rows" :selected="selectedRow" :offset="offset" :bson-types="isMongo ? result.bsonTypes : undefined"  :documents="isMongo ? result.documents : undefined" :document-menu="isMongo && !!result.documents?.length && !busy" :can-edit-document="isMongo && tab === 'data' && editableRows && session.writable && !busy" @document-edit="editMongoRow" @document-view="viewMongoDocument" @select="selectedRow = $event" @open="openResultRow" />
       <div v-else class="empty-state"><span class="empty-icon">▤</span><strong>{{ hasEntity ? t('运行查询查看结果') : t('选择数据库中的表或集合') }}</strong><span>{{ isMysql ? t('可直接切换到 SQL 编辑器执行查询。') : t('使用左侧资源树选择目标。') }}</span></div>
       <footer class="result-footer"><span>{{ result?.rows.length || 0 }} {{ t('条记录') }}<span v-if="result?.durationMs !== undefined"> · {{ result.durationMs }} ms</span><span v-if="result?.truncated"> {{ t('· 已达到单页限制') }}</span></span><span v-if="isMongo && tab === 'data' && mongoQuery" class="mongo-query-summary" dir="ltr" :title="mongoQuery">{{ mongoQuery }}</span><div class="result-page-controls"><label v-if="isMongo && tab === 'data'" class="inline-field">{{ t('每页') }}<select v-model.number="limit" :disabled="busy || !hasEntity" @change="loadData()"><option :value="100">100</option><option :value="200">200</option><option :value="500">500</option></select></label><button v-if="offset > 0 && tab !== 'aggregation'" class="btn secondary small" :disabled="busy" @click="tab === 'query' ? runQuery(Math.max(0, offset - limit)) : loadData(Math.max(0, offset - limit))">{{ t('← 上一页') }}</button><button v-if="result?.nextOffset !== undefined && tab !== 'aggregation'" class="btn secondary small" :disabled="busy" @click="tab === 'query' ? runQuery(result.nextOffset) : loadData(result.nextOffset)">{{ t('下一页 →') }}</button></div><span>{{ session.writable ? t('可写会话') : t('只读会话') }}</span></footer>
     </template>
@@ -439,7 +470,17 @@ onBeforeUnmount(() => { disposed = true; generation++ })
         <footer class="dialog-footer"><span class="toolbar-spacer"></span><button class="btn secondary" type="button" @click="documentView = undefined">{{ t('关闭') }}</button></footer>
       </section>
     </div>
-    <div v-if="edit" class="modal-backdrop"><section class="dialog document-dialog" role="dialog" aria-modal="true" aria-labelledby="edit-title"><header class="dialog-header"><div><span class="eyebrow">{{ entityTitle() }}</span><h2 id="edit-title">{{ edit.mode === 'update' ? t('编辑记录') : edit.mode === 'import' ? t('导入预览') : t('新增记录') }}</h2></div><button class="icon-button" :aria-label="t('关闭')" :disabled="busy" @click="edit = null">×</button></header><div v-if="editError" class="inline-message error" role="alert">{{ localize(editError) }}</div><p class="compact-help">{{ isMysql ? t('JSON 字段值支持字符串、数字、布尔、null；BIGINT / DECIMAL 请使用字符串。省略自增字段可使用默认值。') : t('使用 Extended JSON 保留 ObjectId、Date、Decimal128 等 BSON 类型；修改时必须保留 _id。') }}</p><div class="document-editor"><CodeEditor v-model="edit.text" language="json" :readonly="!session.writable" /></div><footer class="dialog-footer"><button class="btn secondary" :disabled="busy" @click="edit = null">{{ t('取消') }}</button><button class="btn primary" :disabled="busy || !session.writable" @click="saveEdit">{{ t('审阅并保存') }}</button></footer></section></div>
+    <div v-if="edit" class="modal-backdrop" @keydown.esc.stop="!busy && !validatingEdit && (edit = null)">
+      <section :class="['dialog document-dialog', { 'mongo-edit-dialog': isMongo && edit.mode !== 'import' }]" role="dialog" aria-modal="true" aria-labelledby="edit-title">
+        <header class="dialog-header"><div><span class="eyebrow">{{ entityTitle() }}</span><h2 id="edit-title">{{ edit.mode === 'update' ? t(isMongo ? '编辑文档' : '编辑记录') : edit.mode === 'import' ? t('导入预览') : t('新增记录') }}</h2></div><button class="icon-button" :aria-label="t('关闭')" :disabled="busy || validatingEdit" @click="edit = null">×</button></header>
+        <div v-if="editError" class="inline-message error" role="alert">{{ localize(editError) }}</div>
+        <div v-if="editNotice" class="inline-message notice" role="status">{{ t(editNotice) }}</div>
+        <div v-if="isMongo && edit.mode !== 'import'" class="mongo-edit-mode"><span class="muted-text">{{ t(edit.syntax === 'typed' ? 'BSON 文档语法' : '原始 EJSON') }}</span><button v-if="edit.syntax === 'typed'" class="btn secondary small" type="button" :disabled="busy || validatingEdit" @click="useRawEjson">{{ t('原始 EJSON') }}</button><span class="toolbar-spacer"></span><span class="muted-text">{{ t('修改时必须保留 _id') }}</span></div>
+        <p v-else class="compact-help">{{ isMysql ? t('JSON 字段值支持字符串、数字、布尔、null；BIGINT / DECIMAL 请使用字符串。省略自增字段可使用默认值。') : t('使用 Extended JSON 保留 ObjectId、Date、Decimal128 等 BSON 类型；修改时必须保留 _id。') }}</p>
+        <div class="document-editor"><CodeEditor v-model="edit.text" :language="edit.syntax === 'typed' ? 'dbex-bson-document' : 'json'" :readonly="!session.writable || busy || validatingEdit" /></div>
+        <footer class="dialog-footer"><button v-if="isMongo && edit.mode !== 'import'" class="btn secondary" type="button" :disabled="busy || validatingEdit" @click="validateEdit">{{ t(validatingEdit ? '处理中…' : '验证') }}</button><span v-if="isMongo && edit.mode !== 'import'" class="toolbar-spacer"></span><button class="btn secondary" :disabled="busy || validatingEdit" @click="edit = null">{{ t('取消') }}</button><button class="btn primary" :disabled="busy || validatingEdit || !session.writable" @click="saveEdit">{{ t(isMongo && edit.mode === 'update' ? '更新' : '审阅并保存') }}</button></footer>
+      </section>
+    </div>
     <div v-if="indexDialog" class="modal-backdrop"><section class="dialog" role="dialog" aria-modal="true" aria-labelledby="index-title"><header class="dialog-header"><h2 id="index-title">{{ t('创建 MongoDB 索引') }}</h2><button class="icon-button" @click="indexDialog = false">×</button></header><div v-if="error" class="inline-message error">{{ localize(error) }}</div><div class="dialog-body"><label class="field field-wide">{{ t('索引字段 JSON') }}<textarea v-model="indexKeys" rows="4" /></label><label class="field field-wide">{{ t('选项 JSON（name / unique / sparse / expireAfterSeconds）') }}<textarea v-model="indexOptions" rows="4" /></label></div><footer class="dialog-footer"><button class="btn secondary" @click="indexDialog = false">{{ t('取消') }}</button><button class="btn primary" :disabled="busy" @click="createIndex">{{ t('审阅并创建') }}</button></footer></section></div>
     <div v-if="historyOpen" class="modal-backdrop"><section class="dialog history-dialog" role="dialog" aria-modal="true" aria-labelledby="history-title"><header class="dialog-header"><h2 id="history-title">{{ t('查询历史与收藏') }}</h2><button class="icon-button" @click="historyOpen = false">×</button></header><div v-if="historyError" class="inline-message error">{{ localize(historyError) }}</div><div class="editor-toolbar"><input v-model="snippetName" :placeholder="t('当前编辑器内容的收藏名称')" /><button class="btn primary" @click="favorite()">{{ t('收藏当前内容') }}</button><label class="checkbox-row"><input v-model="historyOnlyFavorites" type="checkbox" /> {{ t('仅收藏') }}</label></div><div class="history-list"><article v-for="item in visibleSnippets" :key="item.id"><div><strong>{{ item.name }}</strong><small>{{ item.database || t('未指定数据库') }} · {{ new Date(item.updatedAt).toLocaleString(locale) }}</small><pre>{{ item.text.slice(0, 600) }}</pre></div><div class="history-actions"><button class="btn secondary small" @click="useSnippet(item)">{{ t('打开') }}</button><button class="btn secondary small" @click="favorite(item)">{{ item.favorite ? t('★ 已收藏') : t('☆ 收藏') }}</button><button class="btn danger-text small" @click="removeSnippet(item)">{{ t('删除') }}</button></div></article><div v-if="!visibleSnippets.length" class="empty-state">{{ t('暂无保存的查询') }}</div></div></section></div>
   </div>

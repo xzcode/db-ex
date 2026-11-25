@@ -28,6 +28,24 @@ self.MonacoEnvironment = {
   getWorker(_id: string, label: string) { return label === 'json' ? new JsonWorker() : new EditorWorker() },
 }
 
+// Friendly BSON syntax is a data language, not an executable JavaScript editor.
+monaco.languages.register({ id: 'dbex-bson-document' })
+monaco.languages.setMonarchTokensProvider('dbex-bson-document', {
+  tokenizer: { root: [
+    [/"(?:[^"\\]|\\.)*"/, 'string'],
+    [/\b(?:ObjectId|Int32|Long|Double|Decimal128|ISODate|Date|Timestamp|BinData|Regex|MinKey|MaxKey)\b/, 'keyword'],
+    [/\b(?:true|false|null)\b/, 'keyword'],
+    [/-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/, 'number'],
+    [/[{}\[\]()]/, '@brackets'],
+    [/[,:]/, 'delimiter'],
+    [/[A-Za-z_$][\w$]*/, 'invalid'],
+  ] }
+})
+monaco.languages.setLanguageConfiguration('dbex-bson-document', {
+  brackets: [['{', '}'], ['[', ']'], ['(', ')']],
+  autoClosingPairs: [{ open: '{', close: '}' }, { open: '[', close: ']' }, { open: '(', close: ')' }, { open: '"', close: '"' }],
+  surroundingPairs: [{ open: '{', close: '}' }, { open: '[', close: ']' }, { open: '"', close: '"' }],
+})
 function applyTheme() {
   monaco.editor.setTheme(document.documentElement.dataset.theme === 'light' ? 'vs' : 'vs-dark')
 }

@@ -58,6 +58,7 @@ async function installBridge(page: Page) {
         return { columns: [], rows: [], affectedRows: 1, message: '操作已完成' }
       },
       async cancel(id: string) { calls.push({ action: 'cancel', id }) },
+      async validateMongoDocument(document: string, original?: string) { calls.push({ action: 'validateMongoDocument', document, original }) },
       async setWriteAccess(id: string, writable: boolean) { sessions[id] = { ...sessions[id], writable }; calls.push({ action: 'writeAccess', id, writable }); return sessions[id] },
       async listSnippets() { return [] }, async saveSnippet(value: any) { return { ...value, id: 'snippet', updatedAt: new Date().toISOString() } }, async deleteSnippet() {},
       async importFile() { return { name: 'data.csv', format: 'csv', text: 'name,email\nEve,eve@example.test' } }, async exportFile(name: string, content: string, format: string) { calls.push({ action: 'export', name, content, format }); return true },
@@ -137,18 +138,32 @@ test('MySQL query, guarded row edits, transactions, and CSV import use the typed
   await expect.poll(() => page.evaluate(() => (window as any).__dbexCalls.some((call: any) => call.action === 'mysql.import' && call.rows[0].name === 'Eve'))).toBe(true)
 })
 
-test('MongoDB edits preserve canonical EJSON and disable editing projected documents', async ({ page }) => {
+test('MongoDB right-click document editor uses typed syntax, validates locally and preserves canonical EJSON', async ({ page }) => {
   await connect(page, 'Mongo Local'); await openUsers(page)
+  const row = page.locator('.workbench:visible .data-table tbody tr').first()
+  await row.click({ button: 'right' })
+  await expect(page.locator('.mongo-row-menu').getByRole('button', { name: '编辑文档' })).toBeDisabled()
+  await page.keyboard.press('Escape')
   await page.getByRole('button', { name: '只读 · 启用写入', exact: true }).click()
-  await page.locator('.workbench:visible .data-table tbody tr').first().click()
-  await page.getByRole('button', { name: '编辑', exact: true }).click()
-  await expect(page.locator('.document-editor')).toContainText('$oid')
-  await page.getByRole('button', { name: '审阅并保存', exact: true }).click()
-  await expect.poll(() => page.evaluate(() => (window as any).__dbexCalls.some((call: any) => call.action === 'mongo.replace' && call.original.includes('$oid') && call.document.includes('$date') && call.confirmed))).toBe(true)
+  await row.click({ button: 'right' })
+  await page.locator('.mongo-row-menu').getByRole('button', { name: '编辑文档' }).click()
+  const editor = page.getByRole('dialog', { name: '编辑文档' })
+  await expect(editor.locator('.document-editor')).toContainText('ObjectId')
+  await expect(editor.locator('.document-editor')).toContainText('Int32')
+  await expect(editor.locator('.document-editor')).toContainText('Long')
+  await replaceEditor(page, '.document-editor .monaco-editor', '{"_id":ObjectId("64b000000000000000000001"),"name":"Ada Updated","createdAt":ISODate("2023-11-14T22:13:20.000Z"),"score":Int32("7"),"long":Long("9223372036854775807")}')
+  await editor.getByRole('button', { name: '验证', exact: true }).click()
+  await expect(editor.getByRole('status')).toHaveText('文档验证通过')
+  await expect.poll(() => page.evaluate(() => (window as any).__dbexCalls.some((call: any) => call.action === 'validateMongoDocument' && JSON.parse(call.document).long.$numberLong === '9223372036854775807'))).toBe(true)
+  await expect.poll(() => page.evaluate(() => (window as any).__dbexCalls.filter((call: any) => call.action === 'mongo.replace').length)).toBe(0)
+  await editor.getByRole('button', { name: '更新', exact: true }).click()
+  await expect.poll(() => page.evaluate(() => (window as any).__dbexCalls.some((call: any) => call.action === 'mongo.replace' && call.original.includes('$oid') && call.document.includes('$date') && JSON.parse(call.document).name === 'Ada Updated' && call.confirmed))).toBe(true)
   await page.getByRole('button', { name: '查询条件', exact: true }).click()
   await page.getByLabel('Projection', { exact: true }).fill('{"name":1}')
   await page.getByRole('button', { name: '查询', exact: true }).click()
-  await page.locator('.workbench:visible .data-table tbody tr').first().click()
+  await row.click({ button: 'right' })
+  await expect(page.locator('.mongo-row-menu').getByRole('button', { name: '编辑文档' })).toBeDisabled()
+  await page.keyboard.press('Escape')
   await expect(page.getByRole('button', { name: '编辑', exact: true })).toBeDisabled()
 })
 

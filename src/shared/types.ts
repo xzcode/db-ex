@@ -177,6 +177,7 @@ export interface DbExAPI {
   redisKeys(sessionId: string, cursor?: string, pattern?: string): Promise<DataPreview>
   redisValue(sessionId: string, key: string): Promise<DataPreview>
   execute(sessionId: string, operation: DatabaseOperation): Promise<OperationResult>
+  validateMongoDocument(document: string, original?: string): Promise<void>
   cancel(sessionId: string): Promise<void>
   setWriteAccess(sessionId: string, enabled: boolean): Promise<SessionInfo>
   listSnippets(): Promise<QuerySnippet[]>

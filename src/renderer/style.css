@@ -446,3 +446,12 @@ html[dir=rtl] .tree-chevron:not(.expanded) { transform: rotate(180deg); }
 .mongo-grid .null-cell { color: var(--muted); font-style: normal; }
 .mongo-grid .bson-type-label { margin-inline-end: 5px; line-height: 12px; }
 .bson-document-table .bson-tree-value { font-family: inherit; }
+
+.mongo-row-menu { width: 210px; z-index: 80; }
+.context-edit-help { margin: 4px 8px; color: var(--muted); font-size: 10px; line-height: 1.4; }
+.mongo-edit-dialog { width: 850px; height: min(740px, 88dvh); }
+.mongo-edit-dialog .dialog-header { padding: 12px 18px; }
+.mongo-edit-dialog .dialog-header h2 { font-size: 16px; }
+.mongo-edit-mode { display: flex; align-items: center; gap: 8px; padding: 6px 14px; border-bottom: 1px solid var(--border-soft); }
+.mongo-edit-dialog .dialog-footer { padding: 10px 14px; }
+.mongo-edit-dialog .document-editor { min-height: 200px; direction: ltr; }
