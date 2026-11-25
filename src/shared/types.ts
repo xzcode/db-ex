@@ -1,4 +1,5 @@
 import type { BsonTypeBranch } from './bson-types'
+import type { ObjectInspection } from './object-inspection'
 
 export type DatabaseKind = 'mysql' | 'mongodb' | 'redis'
 export type SqlValue = string | number | boolean | null
@@ -100,6 +101,10 @@ export interface DataPreview {
   value?: string
 }
 export interface OperationResult extends DataPreview {
+  inspection?: ObjectInspection
+  columnTypes?: string[]
+  nullCells?: number[][]
+  redisRowTypes?: string[]
   redisType?: string
   ttl?: number
   length?: number
@@ -119,7 +124,7 @@ interface Confirmed { confirmed?: boolean }
 interface Entity { database: string; entity: string }
 export type MysqlOperation =
   | ({ action: 'mysql.query'; database?: string; sql: string; parameters?: SqlValue[]; limit?: number; offset?: number } & Confirmed)
-  | ({ action: 'mysql.structure' } & Entity)
+  | ({ action: 'mysql.structure' | 'mysql.inspect' } & Entity)
   | ({ action: 'mysql.insert'; values: SqlRow } & Entity & Confirmed)
   | ({ action: 'mysql.update'; key: SqlRow; original: SqlRow; changes: SqlRow } & Entity & Confirmed)
   | ({ action: 'mysql.delete'; key: SqlRow; original: SqlRow } & Entity & Confirmed)
@@ -131,13 +136,14 @@ export type MongoOperation =
   | ({ action: 'mongo.insert'; documents: string[] } & Entity & Confirmed)
   | ({ action: 'mongo.replace'; original: string; document: string } & Entity & Confirmed)
   | ({ action: 'mongo.delete'; original: string } & Entity & Confirmed)
-  | ({ action: 'mongo.indexes' } & Entity)
+  | ({ action: 'mongo.indexes' | 'mongo.inspect' } & Entity)
   | ({ action: 'mongo.createIndex'; keys: string; options?: string } & Entity & Confirmed)
   | ({ action: 'mongo.dropIndex'; name: string } & Entity & Confirmed)
 export type RedisValueType = 'string' | 'hash' | 'list' | 'set' | 'zset' | 'stream'
 export type RedisOperation =
   | { action: 'redis.scan'; cursor?: string; pattern?: string; node?: string }
   | { action: 'redis.get'; key: string; cursor?: string; offset?: number }
+  | { action: 'redis.inspect'; key: string }
   | ({ action: 'redis.set'; key: string; value: string; ttl?: number; expected?: string } & Confirmed)
   | ({ action: 'redis.mutate'; key: string; type: RedisValueType; command: string; args: string[] } & Confirmed)
   | ({ action: 'redis.ttl'; key: string; ttl: number } & Confirmed)

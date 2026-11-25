@@ -30,7 +30,7 @@ interface LiveSession {
   transport: ConnectionTransport
   controller?: AbortController
 }
-const ACTIONS = new Set(['mysql.query', 'mysql.structure', 'mysql.insert', 'mysql.update', 'mysql.delete', 'mysql.import', 'mysql.begin', 'mysql.commit', 'mysql.rollback', 'mongo.find', 'mongo.aggregate', 'mongo.insert', 'mongo.replace', 'mongo.delete', 'mongo.indexes', 'mongo.createIndex', 'mongo.dropIndex', 'redis.scan', 'redis.get', 'redis.set', 'redis.mutate', 'redis.ttl', 'redis.delete', 'redis.command', 'redis.nodes'])
+const ACTIONS = new Set(['mysql.query', 'mysql.structure', 'mysql.inspect', 'mysql.insert', 'mysql.update', 'mysql.delete', 'mysql.import', 'mysql.begin', 'mysql.commit', 'mysql.rollback', 'mongo.find', 'mongo.aggregate', 'mongo.insert', 'mongo.replace', 'mongo.delete', 'mongo.indexes', 'mongo.inspect', 'mongo.createIndex', 'mongo.dropIndex', 'redis.scan', 'redis.get', 'redis.inspect', 'redis.set', 'redis.mutate', 'redis.ttl', 'redis.delete', 'redis.command', 'redis.nodes'])
 async function certificate(path?: string): Promise<Buffer | undefined> {
   if (!path) return undefined
   const info = await stat(path)

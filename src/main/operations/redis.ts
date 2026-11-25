@@ -2,6 +2,7 @@ import type Redis from 'ioredis'
 import type { Cluster } from 'ioredis'
 import { TextDecoder } from 'node:util'
 import type { OperationResult, RedisOperation } from '../../shared/types'
+import { metric, metrics, redisTypeName, type ObjectInspection } from '../../shared/object-inspection'
 
 type Client = Redis | Cluster
 interface Context { writable: boolean; confirmed: boolean; signal?: AbortSignal }
@@ -43,7 +44,7 @@ function result(rows: Record<string, string>[] = [], extra: Partial<OperationRes
     if (limited.length >= 500 || bytes + size > MAX_BYTES) { truncated = true; break }
     bytes += size; limited.push(row)
   }
-  return { columns: [...new Set(limited.flatMap(r => Object.keys(r)))], rows: limited, ...extra, truncated }
+  return { columns: [...new Set(limited.flatMap(r => Object.keys(r)))], rows: limited, ...extra, redisRowTypes: extra.redisRowTypes?.slice(0, limited.length), truncated }
 }
 function display(value: unknown): string {
   const s = typeof value === 'string' ? value : JSON.stringify(value)
@@ -160,9 +161,29 @@ export class RedisOperations {
           }))
           rows.push(...chunk)
         }
-        return result(rows, { nextCursor: next === '0' ? undefined : next, truncated: unique.length > 500, message: `${unique.length > 500 ? 'SCAN 单次返回超过500项，已截断；请缩小匹配条件后重查' : `节点 ${client.options.host}:${client.options.port}；SCAN 可能重复或暂时返回空页`}${skippedKeys ? `；跳过 ${skippedKeys} 个非UTF-8、含NUL或超长Key，防止错误解码后操作另一Key` : ''}` })
+        return result(rows, { redisRowTypes: rows.map(row => redisTypeName(row.type)), nextCursor: next === '0' ? undefined : next, truncated: unique.length > 500, message: `${unique.length > 500 ? 'SCAN 单次返回超过500项，已截断；请缩小匹配条件后重查' : `节点 ${client.options.host}:${client.options.port}；SCAN 可能重复或暂时返回空页`}${skippedKeys ? `；跳过 ${skippedKeys} 个非UTF-8、含NUL或超长Key，防止错误解码后操作另一Key` : ''}` })
       }
-      case 'redis.get': return this.get(key(op.key), op.cursor, op.offset)
+      case 'redis.inspect': {
+        const name = key(op.key)
+        const [type, ttl] = await Promise.all([this.client.type(name), this.client.ttl(name)])
+        const inspection: ObjectInspection = { kind: 'key', metrics: metrics(metric('类型', type), metric('TTL（秒）', ttl)), definitionNote: 'Redis 没有 DDL；以下是只读 Key 检查命令，不是数据备份。' }
+        const commands: Record<string, string> = { string: 'STRLEN', hash: 'HLEN', list: 'LLEN', set: 'SCARD', zset: 'ZCARD', stream: 'XLEN' }
+        const command = commands[type]
+        if (command) {
+          try { inspection.metrics.push(...metrics(metric(type === 'string' ? '数据大小' : '元素数量', await this.client.call(command, name), type === 'string' ? 'bytes' : undefined))) } catch { inspection.infoNote = '部分元数据不可用或无读取权限。' }
+        }
+        if (type !== 'none') {
+          try { inspection.metrics.push(...metrics(metric('内存占用', await this.client.call('MEMORY', 'USAGE', name, 'SAMPLES', '5'), 'bytes'))) } catch { inspection.infoNote = '部分元数据不可用或无读取权限。' }
+          try { inspection.metrics.push(...metrics(metric('内部编码', await this.client.call('OBJECT', 'ENCODING', name)))) } catch { inspection.infoNote = '部分元数据不可用或无读取权限。' }
+        }
+        // JSON argv form is exact even for whitespace, quotes and unusual key names.
+        inspection.definition = [['TYPE', name], ['TTL', name], ...(command ? [[command, name]] : []), ['MEMORY', 'USAGE', name, 'SAMPLES', '5'], ['OBJECT', 'ENCODING', name]].map(args => JSON.stringify(args)).join('\n')
+        return { columns: [], rows: [], inspection }
+      }
+      case 'redis.get': {
+        const data = await this.get(key(op.key), op.cursor, op.offset)
+        return { ...data, redisRowTypes: data.rows.map(() => redisTypeName(data.redisType)) }
+      }
       case 'redis.set': {
         writable(ctx)
         const name = key(op.key); const value = string(op.value, 'Value')
