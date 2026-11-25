@@ -1,3 +1,4 @@
+import { indexHelpCatalogs } from './catalog-index-help'
 // English resource catalog. Chinese source strings are stable message keys.
 export const en: Readonly<Record<string, string>> = {
   "本地优先 · 内置加密": "Local-first · Built-in encryption",
@@ -1056,4 +1057,5 @@ export const en: Readonly<Record<string, string>> = {
   "请先保存或关闭已修改的查询。": "Save or close the modified query first.",
   "请在已打开的查询编辑器内修改名称并保存。": "Rename and save the query in its open editor.",
   "导出": "Export",
+  ...indexHelpCatalogs.en,
 }

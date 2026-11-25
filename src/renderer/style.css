@@ -629,3 +629,10 @@ html[dir=rtl] .tree-chevron:not(.expanded) { transform: rotate(180deg); }
 .object-dirty {color:var(--warning)}
 
 .db-icon.clickhouse,.db-small-icon.clickhouse{color:#eac04d;background:rgba(234,192,77,.12)}
+
+
+/* Keep the index editor and its embedded reference on the same dialog. */
+.mongo-index-dialog { width: 780px; }
+.index-dialog-actions { display:flex; align-items:center; gap:12px; }
+.mongo-index-dialog .index-help-body { display:flex; flex-direction:column; min-height:0; }
+.mongo-index-dialog .index-edit-body textarea { min-height:100px; }

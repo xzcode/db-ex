@@ -1,3 +1,4 @@
+import { indexHelpCatalogs } from './catalog-index-help'
 import { en } from './catalog-en'
 import { connectionCatalogs } from './catalog-connection'
 import zh_TW from './catalog-zh-TW.json'
@@ -109,18 +110,18 @@ export function resolveLocale(preference: LanguagePreference, systemLanguage: st
 }
 export const catalogs: Readonly<Record<Locale, Readonly<Record<string, string>>>> = {
   'zh-CN': {}, en,
-  'zh-TW': { ...zh_TW, ...connectionCatalogs['zh-TW'] },
-  'ja': { ...ja, ...connectionCatalogs['ja'] },
-  'ko': { ...ko, ...connectionCatalogs['ko'] },
-  'de': { ...de, ...connectionCatalogs['de'] },
-  'fr': { ...fr, ...connectionCatalogs['fr'] },
-  'es': { ...es, ...connectionCatalogs['es'] },
-  'pt-BR': { ...pt_BR, ...connectionCatalogs['pt-BR'] },
-  'ru': { ...ru, ...connectionCatalogs['ru'] },
-  'it': { ...it, ...connectionCatalogs['it'] },
-  'ar': { ...ar, ...connectionCatalogs['ar'] },
-  'hi': { ...hi, ...connectionCatalogs['hi'] },
-  'id': { ...id, ...connectionCatalogs['id'] }
+  'zh-TW': { ...zh_TW, ...connectionCatalogs['zh-TW'], ...indexHelpCatalogs['zh-TW'] },
+  'ja': { ...ja, ...connectionCatalogs['ja'], ...indexHelpCatalogs['ja'] },
+  'ko': { ...ko, ...connectionCatalogs['ko'], ...indexHelpCatalogs['ko'] },
+  'de': { ...de, ...connectionCatalogs['de'], ...indexHelpCatalogs['de'] },
+  'fr': { ...fr, ...connectionCatalogs['fr'], ...indexHelpCatalogs['fr'] },
+  'es': { ...es, ...connectionCatalogs['es'], ...indexHelpCatalogs['es'] },
+  'pt-BR': { ...pt_BR, ...connectionCatalogs['pt-BR'], ...indexHelpCatalogs['pt-BR'] },
+  'ru': { ...ru, ...connectionCatalogs['ru'], ...indexHelpCatalogs['ru'] },
+  'it': { ...it, ...connectionCatalogs['it'], ...indexHelpCatalogs['it'] },
+  'ar': { ...ar, ...connectionCatalogs['ar'], ...indexHelpCatalogs['ar'] },
+  'hi': { ...hi, ...connectionCatalogs['hi'], ...indexHelpCatalogs['hi'] },
+  'id': { ...id, ...connectionCatalogs['id'], ...indexHelpCatalogs['id'] }
 }
 export function translate(locale: Locale, key: string, values: readonly unknown[] = []): string {
   const catalog = catalogs[locale]

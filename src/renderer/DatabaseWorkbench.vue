@@ -12,6 +12,7 @@ import CodeEditor from './components/CodeEditor.vue'
 import ResultGrid from './components/ResultGrid.vue'
 import ObjectInspector from './components/ObjectInspector.vue'
 import MongoSavedObjects from './components/MongoSavedObjects.vue'
+import MongoIndexHelp from './components/MongoIndexHelp.vue'
 import VisualQueryBuilder from './components/VisualQueryBuilder.vue'
 import { filterSuggestions } from '../shared/filter-suggestions'
 import BrowseRecordView from './components/BrowseRecordView.vue'
@@ -75,6 +76,9 @@ const validatingEdit = ref(false)
 watch(() => edit.value?.text, () => { editNotice.value = ''; editError.value = '' })
 watch(()=>!!edit.value,value=>emit('dirtyChange',value),{flush:'sync'})
 const indexDialog = ref(false)
+const indexHelpOpen=ref(false)
+watch(indexDialog,open=>{if(!open)indexHelpOpen.value=false})
+function applyIndexExample(example:{keys:string;options:string}){indexKeys.value=example.keys;indexOptions.value=example.options;indexHelpOpen.value=false}
 const inspectorTab = ref<'info' | 'ddl' | 'colors' | null>(null)
 const inspection = ref<ObjectInspection>()
 const inspectionError = ref('')
@@ -802,7 +806,18 @@ onBeforeUnmount(() => { disposed = true; generation++; if (inspectionTimer) clea
         <footer class="dialog-footer"><button v-if="isMongo && edit.mode !== 'import'" class="btn secondary" type="button" :disabled="busy || validatingEdit" @click="validateEdit">{{ t(validatingEdit ? '处理中…' : '验证') }}</button><span v-if="isMongo && edit.mode !== 'import'" class="toolbar-spacer"></span><button class="btn secondary" :disabled="busy || validatingEdit" @click="closeEdit">{{ t('取消') }}</button><button class="btn primary" :disabled="busy || validatingEdit || !canWrite || !supportsRecordMutation(edit.mode)" @click="saveEdit">{{ t(isMongo && edit.mode === 'update' ? '更新' : isMongo && edit.mode === 'insert' ? '新增' : '审阅并保存') }}</button></footer>
       </section>
     </div>
-    <div v-if="indexDialog" class="modal-backdrop"><section class="dialog" role="dialog" aria-modal="true" aria-labelledby="index-title"><header class="dialog-header"><h2 id="index-title">{{ t('创建 MongoDB 索引') }}</h2><button class="icon-button" @click="indexDialog = false">×</button></header><div v-if="error" class="inline-message error">{{ localize(error) }}</div><div class="dialog-body"><label class="field field-wide">{{ t('索引字段 JSON') }}<textarea v-model="indexKeys" rows="4" /></label><label class="field field-wide">{{ t('选项 JSON（name / unique / sparse / expireAfterSeconds）') }}<textarea v-model="indexOptions" rows="4" /></label></div><footer class="dialog-footer"><button class="btn secondary" @click="indexDialog = false">{{ t('取消') }}</button><button class="btn primary" :disabled="busy" @click="createIndex">{{ t('审阅并创建') }}</button></footer></section></div>
+    <div v-if="indexDialog" class="modal-backdrop">
+      <section class="dialog mongo-index-dialog" role="dialog" aria-modal="true" aria-labelledby="index-title">
+        <header class="dialog-header"><h2 id="index-title">{{ t('创建 MongoDB 索引') }}</h2><div class="index-dialog-actions"><button type="button" class="btn secondary small" :disabled="busy" :aria-expanded="indexHelpOpen" @click="indexHelpOpen=!indexHelpOpen"><span aria-hidden="true">ⓘ</span> {{ t('语法帮助') }}</button><button class="icon-button" :disabled="busy" :aria-label="t('关闭')" @click="indexDialog=false">×</button></div></header>
+        <div v-if="error" class="inline-message error">{{ localize(error) }}</div>
+        <div v-show="!indexHelpOpen" class="dialog-body index-edit-body">
+          <label class="field field-wide">{{ t('索引字段 JSON') }}<textarea v-model="indexKeys" data-index-keys rows="4" :disabled="busy" spellcheck="false" dir="ltr" /></label>
+          <label class="field field-wide">{{ t('索引选项') }} JSON<textarea v-model="indexOptions" data-index-options rows="4" :disabled="busy" spellcheck="false" dir="ltr" /></label>
+        </div>
+        <div v-if="indexHelpOpen" class="dialog-body index-help-body"><MongoIndexHelp @apply="applyIndexExample" /></div>
+        <footer class="dialog-footer"><button v-if="indexHelpOpen" class="btn primary" @click="indexHelpOpen=false">{{ t('返回') }}</button><template v-else><button class="btn secondary" :disabled="busy" @click="indexDialog=false">{{ t('取消') }}</button><button class="btn primary" :disabled="busy" @click="createIndex">{{ t('审阅并创建') }}</button></template></footer>
+      </section>
+    </div>
     <div v-if="historyOpen" class="modal-backdrop"><section class="dialog history-dialog" role="dialog" aria-modal="true" aria-labelledby="history-title"><header class="dialog-header"><h2 id="history-title">{{ t('查询历史与收藏') }}</h2><button class="icon-button" @click="historyOpen = false">×</button></header><div v-if="historyError" class="inline-message error">{{ localize(historyError) }}</div><div class="editor-toolbar"><input v-model="snippetName" :placeholder="t('当前编辑器内容的收藏名称')" /><button class="btn primary" @click="favorite()">{{ t('收藏当前内容') }}</button><label class="checkbox-row"><input v-model="historyOnlyFavorites" type="checkbox" /> {{ t('仅收藏') }}</label></div><div class="history-list"><article v-for="item in visibleSnippets" :key="item.id"><div><strong>{{ item.name }}</strong><small>{{ item.database || t('未指定数据库') }} · {{ new Date(item.updatedAt).toLocaleString(locale) }}</small><pre>{{ item.text.slice(0, 600) }}</pre></div><div class="history-actions"><button class="btn secondary small" @click="useSnippet(item)">{{ t('打开') }}</button><button class="btn secondary small" @click="favorite(item)">{{ item.favorite ? t('★ 已收藏') : t('☆ 收藏') }}</button><button class="btn danger-text small" @click="removeSnippet(item)">{{ t('删除') }}</button></div></article><div v-if="!visibleSnippets.length" class="empty-state">{{ t('暂无保存的查询') }}</div></div></section></div>
   </div><ObjectInspector v-if="inspectorTab && !libraryKind" :kind="session.kind" :name="inspectorName || ''" :database="node?.database" :connection="session.name" :tab="inspectorTab" :loading="inspectionLoading" :busy="busy" :inspection="inspection" :error="inspectionError" @change="openInspector" @close="inspectorTab = null" @refresh="refreshInspection" /></div>
 </template>

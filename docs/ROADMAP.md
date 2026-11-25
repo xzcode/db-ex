@@ -220,3 +220,5 @@ MySQL/MongoDB 集成测试用 `DB_EX_INTEGRATION=1` 显式开启，连接 `MYSQL
 - 以上六项为待办，当前 M9 ClickHouse 首批工作不包含这些 UI 修改。
 
 - [x] 移除已弃用的 MongoDB MapReduce 分类及其提示页面，保留聚合管道；旧工作区中的 MapReduce 标签恢复至数据库对象列表。
+
+- [x] MongoDB 创建索引窗口内置语法帮助：支持字段方向、选项参数、常用示例，返回时保留编辑内容；填入示例仅替换本地 JSON，不自动执行。14 种语言，相关单元及 UI 测试通过。
