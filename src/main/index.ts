@@ -69,7 +69,8 @@ async function openText(win: BrowserWindow, title: string, limit = 4 * 1024 * 10
 }
 async function saveText(win: BrowserWindow, name: string, content: string, format: 'csv' | 'json' | 'text', title = '导出当前数据', limit = 8 * 1024 * 1024): Promise<boolean> {
   if (typeof name !== 'string' || name.length > 200 || typeof content !== 'string' || Buffer.byteLength(content) > limit || !['csv', 'json', 'text'].includes(format)) throw new Error(`导出参数无效或超过${limit / 1024 / 1024} MiB`)
-  const extension = format === 'text' ? 'txt' : format
+  const requestedExtension = extname(name).slice(1).toLowerCase()
+  const extension = format === 'text' ? (['txt', 'sql', 'js'].includes(requestedExtension) ? requestedExtension : 'txt') : format
   const answer = await dialog.showSaveDialog(win, { title: tr(title), defaultPath: basename(name), filters: [{ name: extension.toUpperCase(), extensions: [extension] }] })
   if (answer.canceled || !answer.filePath) return false
   await writeFile(answer.filePath, content, { encoding: 'utf8', mode: 0o600 })

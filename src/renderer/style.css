@@ -489,3 +489,5 @@ html[dir=rtl] .tree-chevron:not(.expanded) { transform: rotate(180deg); }
 .type-color-footer { display: flex; flex-wrap: wrap; gap: 7px; justify-content: space-between; }
 .typed-grid td.has-bson-color { box-shadow: none; background: color-mix(in srgb, var(--bson-color) 32%, var(--panel)); color: var(--text); }
 .typed-grid tr.selected td.has-bson-color { background: color-mix(in srgb, var(--bson-color) 38%, var(--selected)); box-shadow: inset 0 1px var(--accent), inset 0 -1px var(--accent); }
+
+.inspector-definition-toolbar { display: flex; gap: 6px; flex-wrap: wrap; }

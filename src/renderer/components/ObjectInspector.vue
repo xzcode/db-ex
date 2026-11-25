@@ -34,7 +34,7 @@ async function exportDefinition() {
   try { if (await window.dbex.exportFile(safe + suffix, ddl.value, 'text')) copyNotice.value = '语句已导出' }
   catch (error) { copyNotice.value = error instanceof Error ? error.message : String(error) }
 }
-watch(() => props.name, () => { copyNotice.value = '' })
+watch([() => props.name, () => props.tab], () => { copyNotice.value = '' })
 </script>
 <template>
   <aside :class="['object-inspector', { 'inspector-expanded': expanded }]" :aria-label="t('对象详情')">

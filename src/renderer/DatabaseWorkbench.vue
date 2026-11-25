@@ -77,7 +77,7 @@ const hasEntity = computed(() => !!entity.value.database && !!entity.value.entit
 const isMysql = computed(() => props.session.kind === 'mysql')
 const isMongo = computed(() => props.session.kind === 'mongodb')
 const isRedis = computed(() => props.session.kind === 'redis')
-const inspectorName = computed(() => isRedis.value ? (tab.value === 'data' ? result.value?.rows[selectedRow.value]?.key || redisKey.value : '') : entity.value.entity)
+const inspectorName = computed(() => isRedis.value ? (tab.value === 'data' ? result.value?.rows[selectedRow.value]?.key || (redisDetail.value ? redisKey.value : '') : '') : entity.value.entity)
 const inspectionKey = computed(() => JSON.stringify([props.session.id, props.session.kind, entity.value.database, inspectorName.value]))
 const visibleSnippets = computed(() => snippets.value.filter(item => item.kind === props.session.kind && (!historyOnlyFavorites.value || item.favorite)))
 const canEditRow = computed(() => editableRows.value && selectedRow.value >= 0 && (isMongo.value ? !!result.value?.documents?.[selectedRow.value] : !!result.value?.rawRows?.[selectedRow.value] && primaryKeys.value.length > 0))
@@ -406,6 +406,7 @@ async function scanRedis(cursor = '0') {
 async function openRedis(key?: string, cursor?: string, nextOffset?: number) {
   const target = key || redisKey.value
   if (!target) return
+  selectedRow.value = result.value?.rows.findIndex(row => row.key === target) ?? -1
   redisKey.value = target
   const next = await execute({ action: 'redis.get', key: target, cursor, offset: nextOffset }, false)
   if (next && redisKey.value === target) {

@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { t } from '../i18n'
 import type { DatabaseKind } from '../../shared/types'
-import { bsonLabel, bsonTypes, isBsonType, type BsonType } from '../../shared/bson-types'
+import { bsonLabel, bsonTypes, isBsonType } from '../../shared/bson-types'
 import { defaultBsonColors, newBsonPalette, normalizeBsonPalette, typeColor } from '../../shared/bson-palette'
 import { bsonPalette, saveBsonPalette } from '../bson-preferences'
 import { databaseTypes, databaseTypeColor, defaultDatabaseColor, newDatabasePalette, normalizeDatabasePalette, type DatabasePalette } from '../../shared/database-palette'
