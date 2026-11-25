@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { t, localize, locale } from './i18n'
+import { preferences } from './preferences'
+import { pageSizeFor } from '../shared/preferences'
+import { useQueryRecovery } from './composables/useQueryRecovery'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { DatabaseOperation, ExplorerNode, OperationResult, QuerySnippet, RedisValueType, SessionInfo, SqlRow, SqlValue } from '../shared/types'
 import CodeEditor from './components/CodeEditor.vue'
@@ -26,7 +29,7 @@ const result = ref<OperationResult | null>(null)
 const selectedRow = ref(-1)
 const checked = ref<number[]>([])
 const offset = ref(0)
-const limit = ref(props.session.kind === 'mongodb' ? 200 : 100)
+const limit = ref<number>(pageSizeFor(preferences.value,props.session.kind))
 const sql = ref('SELECT 1 AS result;')
 let generatedSql = sql.value
 const parameters = ref('[]')
@@ -39,7 +42,7 @@ const filterMode = ref<'builder' | 'text'>('builder')
 const visualFilter = ref<BrowseFilter>(newBrowseFilter())
 const appliedMysql = ref<BrowseFilter>(newBrowseFilter())
 const appliedMongo = ref({ filter: '{}', projection: '{}', sort: '{}' })
-const browsePageSize = ref(props.session.kind === 'mongodb' ? 200 : 100)
+const browsePageSize = ref<number>(pageSizeFor(preferences.value,props.session.kind))
 const pageInput = ref(1)
 const totalRows = ref<string>()
 const countLimited = ref(false)
@@ -175,6 +178,7 @@ async function cancel() {
   catch (reason) { setError(reason) }
 }
 async function remember(text: string) {
+  if(!preferences.value.records.recordHistory)return
   try {
     await window.dbex.saveSnippet({ name: text.trim().split('\n')[0].slice(0, 80), text, database: entity.value.database, kind: props.session.kind, ...(isMongo.value ? { mongoKind: 'aggregation' as const, entity: entity.value.entity, connectionId: props.session.connectionId } : {}), favorite: false })
   } catch { notice.value += ' · 查询已执行，但历史记录保存失败' }
@@ -584,8 +588,16 @@ async function refreshSelection(version: number) {
     await scanRedis()
   }
 }
+const recovery=useQueryRecovery(()=>{
+  if(!props.session.connectionId||!props.node||libraryKind.value)return undefined
+  const kind=tab.value==='query'&&isMysql.value?'mysql-query':tab.value==='aggregation'&&isMongo.value?'mongo-pipeline':undefined
+  return kind?{connectionId:props.session.connectionId,database:entity.value.database,entity:entity.value.entity,kind}:undefined
+},()=>isMysql.value?JSON.stringify({sql:sql.value,parameters:parameters.value}):pipeline.value,text=>{
+  if(isMysql.value){try{const parsed=JSON.parse(text);if(typeof parsed.sql==='string'&&typeof parsed.parameters==='string'){sql.value=parsed.sql;parameters.value=parsed.parameters}}catch{}}else pipeline.value=text
+})
+watch(()=>preferences.value.records,()=>{limit.value=pageSizeFor(preferences.value,props.session.kind)},{deep:true})
 watch(() => props.node?.id, () => {
-  generation++; tab.value = 'data'; inspectorTab.value = null; redisScanCursors.value = ['0']; redisScanIndex.value = 0; visualFilter.value = newBrowseFilter(); appliedMysql.value = newBrowseFilter(); appliedMongo.value = { filter: '{}', projection: '{}', sort: '{}' }; filter.value = '{}'; projection.value = '{}'; sort.value = '{}'; filterMode.value = 'builder'; filterError.value = ''; totalRows.value = undefined; countLimited.value = false; pageInput.value = 1; sqlQuerySummary.value = ''; sqlQueryParameters.value = []; edit.value = null; documentView.value = undefined; mongoQuery.value = ''; result.value = null; structure.value = null; primaryKeys.value = []; selectedRow.value = -1; checked.value = []; offset.value = 0; editableRows.value = false
+  generation++; browsePageSize.value=pageSizeFor(preferences.value,props.session.kind); tab.value = 'data'; inspectorTab.value = null; redisScanCursors.value = ['0']; redisScanIndex.value = 0; visualFilter.value = newBrowseFilter(); appliedMysql.value = newBrowseFilter(); appliedMongo.value = { filter: '{}', projection: '{}', sort: '{}' }; filter.value = '{}'; projection.value = '{}'; sort.value = '{}'; filterMode.value = 'builder'; filterError.value = ''; totalRows.value = undefined; countLimited.value = false; pageInput.value = 1; sqlQuerySummary.value = ''; sqlQueryParameters.value = []; edit.value = null; documentView.value = undefined; mongoQuery.value = ''; result.value = null; structure.value = null; primaryKeys.value = []; selectedRow.value = -1; checked.value = []; offset.value = 0; editableRows.value = false
   if (busy.value) { pendingSelection = true; return }
   void refreshSelection(generation)
 }, { immediate: true })
@@ -602,12 +614,12 @@ onBeforeUnmount(() => { disposed = true; generation++; if (inspectionTimer) clea
 
     <template v-if="isMysql && tab === 'query'">
       <div class="editor-toolbar"><button class="btn primary" :disabled="busy" @click="runQuery()">{{ t('运行选中 / 全部') }} <kbd>⌘ / Ctrl ↵</kbd></button><label class="inline-field">{{ t('每页') }}<select v-model.number="limit"><option :value="100">100</option><option :value="500">500</option></select></label><span class="toolbar-spacer"></span><button class="btn secondary" :disabled="busy || !canWrite || session.transaction" @click="transaction('mysql.begin')">{{ t('开始事务') }}</button><button class="btn secondary" :disabled="busy || !session.transaction" @click="transaction('mysql.commit')">{{ t('提交') }}</button><button class="btn secondary" :disabled="busy || !session.transaction" @click="transaction('mysql.rollback')">{{ t('回滚') }}</button></div>
-      <div class="query-editor"><CodeEditor ref="sqlEditor" v-model="sql" language="sql" :suggestions="structure?.rows.map(row => row.Field || row.name || '') || []" @execute="runQuery()" /></div>
+      <div v-if="recovery.available.value && tab==='query'" class="recovery-banner"><span>{{ t('发现未恢复的查询草稿') }}</span><button class="btn secondary small" @click="recovery.restore">{{ t('恢复草稿') }}</button><button class="btn secondary small" @click="recovery.dismiss">{{ t('放弃草稿') }}</button></div><div class="query-editor"><CodeEditor ref="sqlEditor" v-model="sql" language="sql" :suggestions="structure?.rows.map(row => row.Field || row.name || '') || []" @execute="runQuery()" /></div>
       <label class="parameter-line">{{ t('参数') }} <input v-model="parameters" :aria-label="t('SQL 参数 JSON 数组')" placeholder='["value", 123]' spellcheck="false" /><span>{{ t('用 ? 绑定参数；每次仅执行一条 SQL') }}</span></label>
     </template>
     <template v-if="isMongo && tab === 'aggregation'">
       <div class="editor-toolbar"><button class="btn primary" :disabled="busy || !hasEntity" @click="runAggregation">{{ t('运行 Aggregation') }}</button><span class="muted-text">{{ t('EJSON 管道 · 禁止 $out / $merge · 最多') }} {{ limit }} {{ t('条') }}</span></div>
-      <div class="query-editor"><CodeEditor v-model="pipeline" language="json" @execute="runAggregation" /></div>
+      <div v-if="recovery.available.value && tab==='aggregation'" class="recovery-banner"><span>{{ t('发现未恢复的查询草稿') }}</span><button class="btn secondary small" @click="recovery.restore">{{ t('恢复草稿') }}</button><button class="btn secondary small" @click="recovery.dismiss">{{ t('放弃草稿') }}</button></div><div class="query-editor"><CodeEditor v-model="pipeline" language="json" @execute="runAggregation" /></div>
     </template>
     <template v-if="isRedis && tab === 'console'">
       <div class="editor-toolbar"><button class="btn primary" :disabled="busy" @click="runRedisCommand">{{ t('执行命令') }}</button><span class="muted-text">{{ t('JSON 参数数组 · 只读状态仅允许受控读取命令') }}</span></div>

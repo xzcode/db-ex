@@ -439,7 +439,6 @@ html[dir=rtl] .tree-chevron:not(.expanded) { transform: rotate(180deg); }
 .mongo-query-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 10px monospace; }
 .result-page-controls { flex: none; align-items: center; }
 .result-page-controls select { font-size: 11px; padding: 3px 5px; }
-.mongo-grid tbody tr:nth-child(even):not(.selected) td:not(.has-bson-color) { background: color-mix(in srgb, var(--panel-raised) 45%, var(--panel)); }
 .mongo-grid td.has-bson-color { box-shadow: none; background: color-mix(in srgb, var(--bson-color) 32%, var(--panel)); color: var(--text); }
 .mongo-grid tr:hover td.has-bson-color { background: color-mix(in srgb, var(--bson-color) 38%, var(--panel)); }
 .mongo-grid tr.selected td.has-bson-color { background: color-mix(in srgb, var(--bson-color) 38%, var(--selected)); box-shadow: inset 0 1px var(--accent), inset 0 -1px var(--accent); }
@@ -570,3 +569,30 @@ html[dir=rtl] .tree-chevron:not(.expanded) { transform: rotate(180deg); }
 .database-object-results { min-height:100px; max-height:320px; overflow:auto; border:1px solid var(--border); }
 .database-object-results .resource-node { min-height:30px; }
 .database-object-results small { color:var(--muted); }
+
+.recovery-banner {display:flex;align-items:center;gap:8px;padding:6px 12px;background:var(--panel-raised);font-size:12px;border-bottom:1px solid var(--border);}
+.preferences-dialog {width:880px;height:min(720px,90dvh);}
+.preferences-tabs {display:flex;align-items:stretch;gap:5px;padding:8px 12px;border-bottom:1px solid var(--border);overflow-x:auto;flex:none;}
+.preferences-tabs button {display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px;min-width:88px;min-height:66px;padding:8px 12px;background:transparent;border:1px solid transparent;color:var(--muted);font-size:12px;white-space:nowrap;border-radius:4px;}
+.preferences-tabs button.active {color:var(--accent);border-color:var(--border);background:var(--selected);}
+.preferences-tabs button svg {width:24px;height:24px;}
+.preferences-body {flex:1;min-height:0;overflow:auto;padding:20px 26px;display:flex;flex-direction:column;gap:14px;}
+.pref-section {display:flex;flex-direction:column;gap:10px;}
+.pref-section-title {font-size:12px;font-weight:600;color:var(--muted);padding:0 0 7px;border-bottom:1px solid var(--border-soft);}
+.pref-row {display:grid;grid-template-columns:minmax(130px,36%) minmax(0,1fr);gap:15px;align-items:center;}
+.pref-row > span {text-align:end;font-size:13px;}
+.pref-row input:not([type=checkbox]):not([type=color]),.pref-row select {width:100%;min-width:0;}
+.pref-row .checkbox-row {font-size:13px;}
+.pref-inline {display:flex;align-items:center;gap:9px;flex-wrap:wrap;}
+.pref-inline input[type=number] {width:85px;}
+.pref-checks {display:flex;flex-direction:column;gap:10px;}
+.pref-color-grid {display:grid;grid-template-columns:repeat(6,minmax(55px,1fr));gap:8px;}
+.pref-color-grid label {display:flex;flex-direction:column;gap:6px;align-items:center;font-size:11px;}
+.pref-color-grid input {width:44px;height:29px;padding:3px;}
+.pref-preview {border:1px solid var(--border);padding:14px;font-family:monospace;font-size:12px;white-space:pre-wrap;overflow:auto;min-height:110px;direction:ltr;}
+.tool-path {display:grid;grid-template-columns:minmax(112px,25%) minmax(0,1fr) 32px auto;align-items:center;gap:6px;}
+.tool-path input {width:100%;min-width:0;}
+.tool-status {font-size:11px;color:var(--muted);}
+.pref-log-path {overflow-wrap:anywhere;user-select:text;font-size:12px;color:var(--muted);}
+.pref-reset {margin-inline-end:auto;}
+.preferences-body .type-color-panel {padding:0;}

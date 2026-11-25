@@ -7,6 +7,8 @@ import { colorStyle } from '../shared/connection-appearance'
 import DatabaseWorkbench from './DatabaseWorkbench.vue'
 import { mongoCategory, mongoCategoryNodes } from '../shared/mongo-catalog'
 import { protectedDatabase } from '../shared/database-admin'
+import PreferencesDialog from './components/PreferencesDialog.vue'
+import { preferences, resolvedTheme, setTheme } from './preferences'
 import DatabaseActionsDialog from './components/DatabaseActionsDialog.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import { useConfirmation } from './composables/useConfirmation'
@@ -51,7 +53,9 @@ const error = ref('')
 const notice = ref('')
 const dialogOpen = ref(false)
 const connectionDraft = ref<ConnectionDraft>()
-const theme = ref<'dark' | 'light'>('dark')
+const theme = computed(()=>resolvedTheme(preferences.value.theme))
+const preferencesOpen=ref(false)
+function settingsKey(event:KeyboardEvent){if((event.metaKey||event.ctrlKey)&&event.key===','){event.preventDefault();preferencesOpen.value=true}}
 const sidebarWidth = ref(270)
 const explorerWidth = ref(220)
 const { confirmation, confirm, answer } = useConfirmation()
@@ -84,6 +88,7 @@ async function startSession(session: SessionInfo) {
   if (sessions.value.some(item => item.id === session.id)) { current.value = session.id; return }
   explorers[session.id] = { roots: [], children: {}, expanded: [], busy: false, loading: new Set() }
   sessions.value.push(session); current.value = session.id
+  if(session.connectionId){try{localStorage.setItem('dbex.last-connection',session.connectionId)}catch{}}
   await refreshRoots(session.id)
 }
 function updateSession(session: SessionInfo) { sessions.value = sessions.value.map(item => item.id === session.id ? session : item) }
@@ -181,7 +186,7 @@ function databaseObjectSelected(node:ExplorerNode){
   const state=explorers[dialog.sessionId]
   if(state)state.selected=node
 }
-watch(current,closeDbMenu)
+watch(current,()=>{closeDbMenu();const id=activeSession.value?.connectionId;if(id){try{localStorage.setItem('dbex.last-connection',id)}catch{}}})
 async function toggleRoot(node: ExplorerNode) {
   const id = current.value
   const state = id ? explorers[id] : undefined
@@ -207,7 +212,7 @@ async function exportConnections(id?: string) {
 function persistView() {
   try { localStorage.setItem('dbex.view', JSON.stringify({ theme: theme.value, sidebar: sidebarWidth.value, explorer: explorerWidth.value })) } catch { /* UI preferences are optional. */ }
 }
-function changeTheme() { theme.value = theme.value === 'dark' ? 'light' : 'dark'; document.documentElement.dataset.theme = theme.value; persistView() }
+function changeTheme() { setTheme(theme.value === 'dark' ? 'light' : 'dark'); persistView() }
 function resize(event: PointerEvent, pane: 'sidebar' | 'explorer') {
   event.preventDefault(); stopResize?.()
   const start = event.clientX
@@ -230,23 +235,22 @@ function kindIcon(kind: string) { return kind === 'mysql' ? '▤' : kind === 'mo
 onMounted(() => {
   try {
     const saved = JSON.parse(localStorage.getItem('dbex.view') || '{}')
-    if (saved.theme === 'light' || saved.theme === 'dark') theme.value = saved.theme
     if (Number.isFinite(saved.sidebar)) sidebarWidth.value = Math.max(170, Math.min(400, saved.sidebar))
     if (Number.isFinite(saved.explorer)) explorerWidth.value = Math.max(170, Math.min(400, saved.explorer))
   } catch { /* Ignore invalid preference data. */ }
   document.documentElement.dataset.theme = theme.value
-  window.addEventListener('pointerdown',outsideMenu); window.addEventListener('keydown',menuKey); window.addEventListener('resize',closeDbMenu)
-  void refreshConnections()
+  window.addEventListener('pointerdown',outsideMenu); window.addEventListener('keydown',menuKey); window.addEventListener('keydown',settingsKey); window.addEventListener('resize',closeDbMenu)
+  void (async()=>{await refreshConnections();if(preferences.value.startup==='lastConnection'){try{const id=localStorage.getItem('dbex.last-connection');const item=connections.value.find(value=>value.id===id&&!value.locked);if(item&&!sessions.value.length)await connectSaved(item)}catch{}}})()
 })
-onBeforeUnmount(() => { stopResize?.(); window.removeEventListener('pointerdown',outsideMenu); window.removeEventListener('keydown',menuKey); window.removeEventListener('resize',closeDbMenu) })
+onBeforeUnmount(() => { stopResize?.(); window.removeEventListener('pointerdown',outsideMenu); window.removeEventListener('keydown',menuKey); window.removeEventListener('keydown',settingsKey); window.removeEventListener('resize',closeDbMenu) })
 </script>
 
 <template>
   <main class="desktop" :style="{ '--sidebar-width': sidebarWidth + 'px', '--explorer-width': explorerWidth + 'px' }">
-    <header class="topbar"><div class="brand"><span class="brand-symbol">▦</span><strong>DB EX</strong><span class="brand-subtitle">DATABASE WORKSPACE</span></div><div class="top-actions"><select class="language-select" :aria-label="t('语言')" :title="t('语言设置')" :value="languagePreference" @change="setLanguage(($event.target as HTMLSelectElement).value)"><option value="system">{{ t('跟随系统') }}</option><option v-for="language in languages" :key="language.locale" :value="language.locale" :lang="language.locale" :dir="language.direction">{{ language.label }}</option></select><span class="top-hint">{{ t('本地优先 · 内置加密') }}</span><button class="icon-button" :title="theme === 'dark' ? t('浅色主题') : t('深色主题')" @click="changeTheme">{{ theme === 'dark' ? '☼' : '◐' }}</button><button class="btn primary" :disabled="busy" @click="newConnection">{{ t('＋ 新建连接') }}</button></div></header>
+    <header class="topbar"><div class="brand"><span class="brand-symbol">▦</span><strong>DB EX</strong><span class="brand-subtitle">DATABASE WORKSPACE</span></div><div class="top-actions"><select class="language-select" :aria-label="t('语言')" :title="t('语言设置')" :value="languagePreference" @change="setLanguage(($event.target as HTMLSelectElement).value)"><option value="system">{{ t('跟随系统') }}</option><option v-for="language in languages" :key="language.locale" :value="language.locale" :lang="language.locale" :dir="language.direction">{{ language.label }}</option></select><span class="top-hint">{{ t('本地优先 · 内置加密') }}</span><button class="icon-button preferences-button" :aria-label="t('偏好设置')" :title="t('偏好设置')" @click="preferencesOpen=true">⚙</button><button class="icon-button" :title="theme === 'dark' ? t('浅色主题') : t('深色主题')" @click="changeTheme">{{ theme === 'dark' ? '☼' : '◐' }}</button><button class="btn primary" :disabled="busy" @click="newConnection">{{ t('＋ 新建连接') }}</button></div></header>
     <div class="workspace"><ConnectionSidebar :connections="connections" :sessions="sessions" :current="current" :busy="busy" @refresh="refreshConnections" @create="newConnection" @connect="connectSaved" @activate="current = $event" @disconnect="disconnect" @edit="editConnection" @remove="deleteConnection" @import="importConnections" @export="exportConnections" @appearance="updateAppearance" />
       <div class="resize-handle" role="separator" :aria-label="t('调整连接列表宽度')" aria-orientation="vertical" :aria-valuenow="sidebarWidth" :aria-valuemin="170" :aria-valuemax="400" tabindex="0" @pointerdown="resize($event, 'sidebar')" @keydown="resizeKey($event, 'sidebar')"></div>
-      <section class="main-panel"><div class="tabbar"><div v-if="!sessions.length" class="tab active">{{ t('欢迎') }}</div><div v-for="session in sessions" :key="session.id" :class="['session-tab', { active: current === session.id, 'has-color': !!sessionColor(session) }]" :style="colorStyle(sessionColor(session))" :data-color="sessionColor(session) || ''"><button class="tab" @click="current = session.id"><span :class="['db-small-icon', session.kind]">{{ kindIcon(session.kind) }}</span>{{ session.name }}</button><button class="tab-close" :title="t('断开 {0}', [session.name])" :disabled="busy" @click="disconnect(session.id)">×</button></div><div class="tab-filler"></div><span v-if="busy" class="tab-trailing">{{ t('正在连接 / 处理…') }}</span></div><div v-if="error" class="inline-message error" role="alert">{{ localize(error) }}<button class="ghost-icon" :aria-label="t('关闭错误')" @click="error = ''">×</button></div><div v-if="notice" class="inline-message notice">{{ localize(notice) }}</div>
+      <section class="main-panel"><div v-show="preferences.alwaysShowTabs || sessions.length > 1" class="tabbar"><div v-if="!sessions.length" class="tab active">{{ t('欢迎') }}</div><div v-for="session in sessions" :key="session.id" :class="['session-tab', { active: current === session.id, 'has-color': !!sessionColor(session) }]" :style="colorStyle(sessionColor(session))" :data-color="sessionColor(session) || ''"><button class="tab" @click="current = session.id"><span :class="['db-small-icon', session.kind]">{{ kindIcon(session.kind) }}</span>{{ session.name }}</button><button class="tab-close" :title="t('断开 {0}', [session.name])" :disabled="busy" @click="disconnect(session.id)">×</button></div><div class="tab-filler"></div><span v-if="busy" class="tab-trailing">{{ t('正在连接 / 处理…') }}</span></div><div v-if="error" class="inline-message error" role="alert">{{ localize(error) }}<button class="ghost-icon" :aria-label="t('关闭错误')" @click="error = ''">×</button></div><div v-if="notice" class="inline-message notice">{{ localize(notice) }}</div>
         <div v-if="!current" class="welcome-body"><div class="welcome-mark">▦</div><span class="eyebrow">YOUR DATA, YOUR WORKSPACE</span><h1>{{ t('一个工作空间，') }}<br /><span>{{ t('连接你的数据库。') }}</span></h1><p>{{ t('MySQL 查询与事务、MongoDB 文档、Redis 数据管理。') }}<br />{{ t('SSH 多跳、代理与 TLS，按你的网络方式连接。') }}</p><button class="btn primary large" @click="newConnection">{{ t('＋ 创建数据库连接') }}</button><div class="welcome-features"><span>MySQL</span><span>MongoDB</span><span>Redis</span></div></div>
         <div v-else class="data-area"><aside :class="['explorer-pane', { 'has-color': !!sessionColor(activeSession) }]" :style="colorStyle(sessionColor(activeSession))"><div class="panel-heading"><span>{{ t('资源浏览器') }}</span><button v-if="activeSession?.kind !== 'redis'" class="ghost-icon" :title="t('数据库菜单')" :aria-label="t('数据库菜单')" :disabled="currentExplorer?.busy" @click="showDbMenu($event)">···</button><button class="ghost-icon" :title="t('刷新资源树')" :disabled="currentExplorer?.busy" @click="current && refreshRoots(current)">↻</button></div><div v-if="currentExplorer?.busy" class="compact-help">{{ t('正在加载资源…') }}</div><div class="resource-list" @scroll="closeDbMenu" @contextmenu.self="showDbMenu($event)"><template v-for="item in visibleTree" :key="item.node.id + (item.empty ? ':empty' : '')"><span v-if="item.empty" class="empty-tree" :style="{ paddingInlineStart: (10 + item.depth * 17) + 'px' }">{{ t('无可见对象') }}</span><button v-else :class="['resource-node', { 'child-node': item.depth > 0, 'mongo-folder': item.node.kind === 'mongo-category', active: currentExplorer?.selected?.id === item.node.id }]" :style="{ paddingInlineStart: (10 + item.depth * 17) + 'px' }" :data-object-kind="item.node.kind" :data-object-category="item.node.category" :aria-expanded="expandable(item.node) ? currentExplorer?.expanded.includes(item.node.id) : undefined" @click="toggleRoot(item.node)" @contextmenu="showDbMenu($event,item.node)" @keydown.shift.f10="showDbMenu($event,item.node)"><span class="arrow">{{ expandable(item.node) ? currentExplorer?.expanded.includes(item.node.id) ? '⌄' : '›' : '' }}</span><span :class="['object-tree-icon', item.node.kind]">{{ nodeIcon(item.node) }}</span><span class="ellipsis">{{ item.node.kind === 'mongo-category' ? t(item.node.label) : item.node.label }}</span><span v-if="currentExplorer?.loading.has(item.node.id)">…</span></button></template></div></aside><div class="resize-handle" role="separator" :aria-label="t('调整资源树宽度')" aria-orientation="vertical" :aria-valuenow="explorerWidth" :aria-valuemin="170" :aria-valuemax="400" tabindex="0" @pointerdown="resize($event, 'explorer')" @keydown="resizeKey($event, 'explorer')"></div><div class="content-pane"><DatabaseWorkbench v-for="session in sessions" v-show="session.id === current" :key="session.id" :session="session" :node="explorers[session.id]?.selected" @update-session="updateSession" @disconnect="removeSession(session.id)" @refresh-tree="refreshRoots(session.id)" /></div></div>
       </section>
@@ -261,6 +265,7 @@ onBeforeUnmount(() => { stopResize?.(); window.removeEventListener('pointerdown'
       <div class="context-menu-divider"></div><button class="context-action" @click="dbMenuAction('refresh')">{{ t('刷新') }}</button>
     </div></Teleport>
     <DatabaseActionsDialog v-if="dbDialog && dbDialogSession" :session="dbDialogSession" :database="dbDialog.database" :mode="dbDialog.mode" :existing="explorers[dbDialog.sessionId]?.roots.map(item=>item.database || item.label) || []" @close="dbDialog=undefined" @changed="databaseChanged" @select="databaseObjectSelected" @session="updateSession" />
+    <PreferencesDialog v-if="preferencesOpen" @close="preferencesOpen=false" />
     <ConnectionDialog v-if="dialogOpen" :draft="connectionDraft" @close="dialogOpen = false" @saved="refreshConnections" @connected="startSession" />
     <ConfirmDialog v-if="confirmation" v-bind="confirmation" @confirm="answer(true)" @cancel="answer(false)" />
   </main>

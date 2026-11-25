@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { t } from '../i18n'
+import { preferences } from '../preferences'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as monaco from 'monaco-editor/editor/editor.api'
 import 'monaco-editor/editor/browser/coreCommands'
 import 'monaco-editor/editor/contrib/dropOrPasteInto/browser/copyPasteContribution'
 import 'monaco-editor/editor/contrib/find/browser/findController'
 import 'monaco-editor/editor/contrib/suggest/browser/suggestController'
+import 'monaco-editor/editor/contrib/folding/browser/folding'
+import 'monaco-editor/editor/contrib/bracketMatching/browser/bracketMatching'
 import 'monaco-editor/languages/definitions/sql/register'
 import 'monaco-editor/language/json/monaco.contribution'
 import EditorWorker from 'monaco-editor/editor/editor.worker?worker'
@@ -62,7 +65,25 @@ if (!monaco.languages.getLanguages().some(language => language.id === 'dbex-mong
   })
 }
 function applyTheme() {
-  monaco.editor.setTheme(document.documentElement.dataset.theme === 'light' ? 'vs' : 'vs-dark')
+  const light=document.documentElement.dataset.theme==='light'
+  const p=preferences.value.editor
+  if(!p.customColors){monaco.editor.setTheme(light?'vs':'vs-dark');return}
+  const colors=p.colors
+  monaco.editor.defineTheme('dbex-custom',{base:light?'vs':'vs-dark',inherit:true,rules:[
+    {token:'',foreground:colors.foreground.slice(1)},{token:'keyword',foreground:colors.keyword.slice(1)},{token:'comment',foreground:colors.comment.slice(1)},{token:'string',foreground:colors.string.slice(1)},{token:'number',foreground:colors.number.slice(1)}
+  ],colors:{'editor.foreground':colors.foreground,'editor.background':colors.background}})
+  monaco.editor.setTheme('dbex-custom')
+}
+function activeLanguage(){
+ const p=preferences.value.editor
+ return p.syntax&&props.modelValue.length<=p.maxHighlightMB*1024*1024?props.language:'plaintext'
+}
+function applyOptions(){
+ const p=preferences.value.editor,completionOn=preferences.value.completion&&activeLanguage()!=='plaintext'
+ editor?.updateOptions({lineNumbers:p.lineNumbers?'on':'off',folding:p.folding,matchBrackets:p.brackets?'always':'never',bracketPairColorization:{enabled:p.brackets},insertSpaces:p.insertSpaces,tabSize:p.tabSize,wordWrap:p.wordWrap?'on':'off',fontSize:p.fontSize,fontFamily:p.fontFamily==='default'?'"SFMono-Regular", Consolas, "Liberation Mono", monospace':'"'+p.fontFamily+'", monospace',quickSuggestions:completionOn&&preferences.value.autoCompletion,suggestOnTriggerCharacters:completionOn&&preferences.value.autoCompletion,suggestSelection:preferences.value.firstSuggestion?'first':'recentlyUsed',acceptSuggestionOnEnter:completionOn?'on':'off',wordBasedSuggestions:completionOn?'currentDocument':'off'})
+ editor?.getModel()?.updateOptions({tabSize:p.tabSize,insertSpaces:p.insertSpaces})
+ const model=editor?.getModel()
+ if(model&&model.getLanguageId()!==activeLanguage())monaco.editor.setModelLanguage(model,activeLanguage())
 }
 onMounted(() => {
   if (!host.value) return
@@ -73,12 +94,12 @@ onMounted(() => {
     tabSize: 2, wordWrap: 'on', scrollBeyondLastLine: false,
     padding: { top: 12, bottom: 12 }, fixedOverflowWidgets: true,
   })
-  applyTheme()
+  applyTheme(); applyOptions()
   change = editor.onDidChangeModelContent(() => emit('update:modelValue', editor!.getValue()))
   editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => emit('execute'))
   completion = monaco.languages.registerCompletionItemProvider('sql', {
     provideCompletionItems(model, position) {
-      if (model !== editor?.getModel()) return { suggestions: [] }
+      if (model !== editor?.getModel() || !preferences.value.completion || activeLanguage()==='plaintext') return { suggestions: [] }
       const word = model.getWordUntilPosition(position)
       const range = new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn)
       return { suggestions: props.suggestions.map(label => ({ label, insertText: '`' + label.replace(/`/g, '``') + '`', range, kind: monaco.languages.CompletionItemKind.Field })) }
@@ -87,8 +108,9 @@ onMounted(() => {
   observer = new MutationObserver(applyTheme)
   observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
 })
-watch(() => props.modelValue, value => { if (editor && editor.getValue() !== value) editor.setValue(value) })
-watch(() => props.language, value => { if (editor?.getModel()) monaco.editor.setModelLanguage(editor.getModel()!, value) })
+watch(() => props.modelValue, value => { if (editor && editor.getValue() !== value) editor.setValue(value); if(editor?.getModel()?.getLanguageId()!==activeLanguage())applyOptions() })
+watch(() => props.language,applyOptions)
+watch(preferences,()=>{applyTheme();applyOptions()},{deep:true})
 watch(() => props.readonly, value => editor?.updateOptions({ readOnly: value }))
 onBeforeUnmount(() => {
   observer?.disconnect(); completion?.dispose(); change?.dispose()

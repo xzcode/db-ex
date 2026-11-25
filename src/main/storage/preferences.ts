@@ -10,7 +10,7 @@ export async function initNativePreferences(){current=normalizeNativePreferences
 export function getNativePreferences(){return structuredClone(current)}
 export async function saveNativePreferences(value:unknown){
  const next=normalizeNativePreferences(value)
- for(const path of Object.values(next.tools))if(!isAbsolute(path))throw new Error('INVALID_TOOL_PATH: 请输入可执行文件的绝对路径')
+ for(const path of Object.values(next.tools))if(typeof path!=='string'||!isAbsolute(path))throw new Error('INVALID_TOOL_PATH: 请输入可执行文件的绝对路径')
  await writes.run(async()=>{await writeJson('preferences.json',next);current=next})
  return getNativePreferences()
 }

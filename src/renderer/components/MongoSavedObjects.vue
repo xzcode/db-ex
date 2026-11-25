@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { t, localize } from '../i18n'
+import { preferences } from '../preferences'
+import { useQueryRecovery } from '../composables/useQueryRecovery'
 import type { SessionInfo, QuerySnippet, MongoOperation, OperationResult, ExplorerNode } from '../../shared/types'
 import CodeEditor from './CodeEditor.vue'
 import ResultGrid from './ResultGrid.vue'
@@ -9,7 +11,7 @@ const emit=defineEmits<{disconnect:[]}>()
 const entries=ref<QuerySnippet[]>([]), targets=ref<ExplorerNode[]>([])
 const selected=ref(''), name=ref(''), entity=ref('')
 const filter=ref('{}'),projection=ref('{}'),sort=ref('{}'),pipeline=ref('[\n  { "$limit": 100 }\n]')
-const limit=ref(100),offset=ref(0),result=ref<OperationResult>()
+const limit=ref<number>(preferences.value.records.mongoPageSize),offset=ref(0),result=ref<OperationResult>()
 const loading=ref(false),error=ref(''),notice=ref('')
 let disposed=false
 const applied=ref<Extract<MongoOperation,{action:'mongo.find'}>>()
@@ -97,6 +99,9 @@ async function runQuery(nextOffset=0,paging=false){
     result.value=next;applied.value=op.action==='mongo.find'?op:undefined;offset.value=op.action==='mongo.find'?op.offset||0:0
   }catch(reason){if(!disposed)fail(reason)}
 }
+const recovery=useQueryRecovery(()=>props.session.connectionId?{connectionId:props.session.connectionId,database:props.database,entity:'',kind:props.kind==='query'?'mongo-query':'mongo-pipeline'}:undefined,()=>JSON.stringify({name:name.value,entity:entity.value,filter:filter.value,projection:projection.value,sort:sort.value,pipeline:pipeline.value}),text=>{
+ try{const value=JSON.parse(text);for(const [key,state] of Object.entries({name,entity,filter,projection,sort,pipeline}))if(typeof value[key]==='string')state.value=value[key];selected.value='';result.value=undefined;applied.value=undefined}catch{}
+})
 let initialized=false
 watch(()=>props.busy,value=>{if(!value&&!initialized){initialized=true;void refresh()}},{immediate:true})
 onBeforeUnmount(()=>{disposed=true})
@@ -107,7 +112,7 @@ onBeforeUnmount(()=>{disposed=true})
     <div class="editor-toolbar"><button class="btn secondary small" type="button" :disabled="busyAll" @click="reset">{{ t('新增') }}</button><button class="btn secondary small" type="button" :disabled="busyAll" @click="refresh">{{ t('刷新') }}</button><button class="btn secondary small" type="button" :disabled="busyAll||!entity" @click="save">{{ t('保存') }}</button><button class="btn danger-text small" type="button" :disabled="busyAll||!selected" @click="remove">{{ t('删除') }}</button><span class="toolbar-spacer"></span><button class="btn primary" type="button" :disabled="busyAll||!entity" @click="runQuery()">{{ t(kind==='query'?'查询':'运行 Aggregation') }}</button><button v-if="busy" class="btn secondary small" @click="emit('disconnect')">{{ t('取消并断开') }}</button></div>
     <div v-if="error" class="inline-message error" role="alert">{{ localize(error) }}</div>
     <div v-if="notice" class="inline-message notice" role="status">{{ t(notice) }}</div>
-    <div class="library-fields">
+    <div v-if="recovery.available.value" class="recovery-banner"><span>{{ t('发现未恢复的查询草稿') }}</span><button class="btn secondary small" @click="recovery.restore">{{ t('恢复草稿') }}</button><button class="btn secondary small" @click="recovery.dismiss">{{ t('放弃草稿') }}</button></div><div class="library-fields">
       <label class="field">{{ t('已保存对象') }}<select v-model="selected" :aria-label="t('已保存对象')" :disabled="busyAll" @change="openSaved"><option value="">{{ t('未选择对象') }}</option><option v-for="item in saved" :key="item.id" :value="item.id">{{ item.name }}</option></select></label>
       <label class="field">{{ t('名称') }}<input v-model="name" :aria-label="t('名称')" :disabled="busyAll" maxlength="100" /></label>
       <label class="field">{{ t('目标集合或视图') }}<select v-model="entity" :aria-label="t('目标集合或视图')" :disabled="busyAll"><option value="">{{ t('未选择对象') }}</option><option v-for="item in targets" :key="item.id" :value="item.entity">{{ item.label }}</option></select></label>
