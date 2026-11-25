@@ -2,7 +2,7 @@ import { isQueryId,type QueryMode } from './saved-query'
 import { databaseCapabilities } from './database-capabilities'
 import { mongoCategory, type MongoCategory } from './mongo-catalog'
 import type { DatabaseKind, ExplorerNode } from './types'
-export const workbenchTabs=['data','query','aggregation','structure','console'] as const
+export const workbenchTabs=['data','query','aggregation','structure','console','management'] as const
 export type WorkbenchTab=typeof workbenchTabs[number]
 type SelectedNode={kind:ExplorerNode['kind'];database:string;entity?:string;category?:MongoCategory;queryId?:string;queryMode?:QueryMode}
 export interface WorkspacePosition {tab:WorkbenchTab;node?:SelectedNode}
@@ -14,6 +14,7 @@ function object(v:unknown):Record<string,unknown>{return v&&typeof v==='object'&
 export function validWorkbenchTab(kind:DatabaseKind,tab:unknown,readOnly=false):WorkbenchTab{
   const capabilities=databaseCapabilities(kind)
   if(tab===capabilities.editor)return capabilities.editor
+  if(tab==='management'&&kind==='clickhouse'&&!readOnly)return 'management'
   if(tab==='structure'&&capabilities.browser!=='keyspace'&&!readOnly)return 'structure'
   return 'data'
 }

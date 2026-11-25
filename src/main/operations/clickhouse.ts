@@ -5,6 +5,7 @@ import type { ClickHouseOperation,OperationResult,ExplorerNode,SqlRow } from '..
 import { metric,metrics } from '../../shared/object-inspection'
 import {boundedText,checkAborted,MAX_BYTES,MAX_VALUE_BYTES,page,plainObject,requireWrite,resourceName,sqlRow,type OperationContext} from './common'
 import {clickHouseIdentifier,clickHouseParameters,inspectClickHouseSql} from './clickhouse-policy'
+import {clickHouseManagementQuery} from './clickhouse-management'
 
 const READ_SETTINGS:ClickHouseSettings={
  readonly:'1',max_execution_time:20,max_result_rows:String(501),max_result_bytes:String(MAX_BYTES),result_overflow_mode:'throw',
@@ -115,6 +116,12 @@ export class ClickHouseOperations{
   }
   const database=resourceName(op.database,'数据库'),entity=resourceName(op.entity,'表')
   const qualified=clickHouseIdentifier(database)+'.'+clickHouseIdentifier(entity)
+  if(op.action==='clickhouse.management'){
+   const query=clickHouseManagementQuery(op.view,op)
+   const result=await this.select(query.sql,{db:database,table:entity},context,query.limit)
+   if(query.view!=='queries'&&result.truncated&&query.offset+query.limit<=1000000)result.nextOffset=query.offset+query.limit
+   return result
+  }
   if(op.action==='clickhouse.structure')return this.structure(database,entity,context)
   if(op.action==='clickhouse.inspect'){
    const result=await this.select('SELECT engine, total_rows, total_bytes, sorting_key, partition_key, primary_key, create_table_query FROM system.tables WHERE database={db:String} AND name={table:String} LIMIT 1',{db:database,table:entity},context,1)

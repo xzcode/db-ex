@@ -10,7 +10,7 @@ import type {DatabaseAdapter} from './types'
 
 export const clickhouseAdapter:DatabaseAdapter={
  kind:'clickhouse',
- actions:['clickhouse.query','clickhouse.browse','clickhouse.structure','clickhouse.inspect','clickhouse.insert'],
+ actions:['clickhouse.query','clickhouse.browse','clickhouse.structure','clickhouse.inspect','clickhouse.management','clickhouse.insert'],
  writes(input){return input.action==='clickhouse.insert'||input.action==='clickhouse.query'&&inspectClickHouseSql(input.sql).mode==='write'},
  async connect({config,transport,tls}){
   const forward=await transport.forward(config.host,config.port)

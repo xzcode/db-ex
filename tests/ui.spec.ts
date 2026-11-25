@@ -67,6 +67,12 @@ async function installBridge(page: Page) {
         if(op.action==='clickhouse.browse'||op.action==='clickhouse.query')return {...grid([{id:'18446744073709551615',amount:'12345678901234567890.12345678'}]),columnTypes:['UInt64','Decimal(38,8)'],rawRows:[{id:'18446744073709551615',amount:'12345678901234567890.12345678'}],queryId:'fixture-id'}
         if(op.action==='clickhouse.structure')return grid([{name:'id',type:'UInt64'}])
         if(op.action==='clickhouse.inspect')return {columns:[],rows:[],inspection:{kind:'table',metrics:[{label:'存储引擎',value:'MergeTree'}],definition:'CREATE TABLE events (id UInt64) ENGINE=MergeTree ORDER BY id'}}
+        if(op.action==='clickhouse.management'){
+          if(op.view==='partitions')return {...grid([{partition_id:op.offset?'p2':'p1',rows:'10',compression_ratio:'2.5'}]),nextOffset:op.offset?undefined:200}
+          if(op.view==='mutations')return grid([{mutation_id:'mutation_1.txt',is_done:'0',parts_to_do:'2'}])
+          if(op.view==='replicas')return grid([{replica_name:'replica-1',queue_size:'3'}])
+          if(op.view==='queries')return grid([{outcome:'QueryFinish',queries:'12',avg_ms:'10'}])
+        }
         if(op.action==='clickhouse.insert')return {columns:[],rows:[],affectedRows:1,message:'操作已完成'}
 
         if(op.action==='mongo.createDatabase'||op.action==='mysql.createDatabase'){additionalDbs[id]=[...(additionalDbs[id]||[]),op.database];return {columns:[],rows:[],message:'数据库已创建'}}
@@ -1221,4 +1227,26 @@ test('SQL inline edits retain exact record identity and block pagination until r
  await expect(workbench.getByRole('alert')).toContainText('请先保存或取消表格修改。')
  await workbench.getByRole('button',{name:'保存表格修改',exact:true}).click()
  await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.updateBatch').at(-1)?.edits[0])).toMatchObject({key:{id:'1'},original:{name:'Ada'},changes:{name:'Changed'}})
+})
+
+test('ClickHouse management reports remain scoped and read-only',async({page})=>{
+ await connect(page,'ClickHouse Local')
+ await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ await page.locator('.resource-node[data-object-kind="table"]').filter({hasText:'events'}).click()
+ const workbench=page.locator('.clickhouse-workbench:visible')
+ await workbench.getByRole('button',{name:'管理',exact:true}).click()
+ await expect(workbench.locator('.data-table')).toContainText('p1')
+ await workbench.getByRole('button',{name:'下一页',exact:true}).click()
+ await expect(workbench.locator('.data-table')).toContainText('p2')
+ await workbench.getByRole('button',{name:'变更任务',exact:true}).click()
+ await expect(workbench.locator('.data-table')).toContainText('mutation_1.txt')
+ await workbench.getByRole('button',{name:'副本状态',exact:true}).click()
+ await expect(workbench.locator('.data-table')).toContainText('replica-1')
+ await workbench.getByRole('button',{name:'查询统计',exact:true}).click()
+ await expect(workbench.locator('.data-table')).toContainText('QueryFinish')
+ await expect(workbench.getByText('本节点最近24小时已记录查询；日志可能延迟或未启用')).toBeVisible()
+ await workbench.getByRole('button',{name:'刷新',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((c:any)=>c.action==='clickhouse.management').at(-1))).toMatchObject({database:'app',entity:'events',view:'queries'})
+ const calls=await page.evaluate(()=> (window as any).__dbexCalls.filter((c:any)=>c.action==='clickhouse.management'))
+ expect(calls.every((c:any)=>c.database==='app'&&c.entity==='events'&&!c.confirmed)).toBe(true)
 })

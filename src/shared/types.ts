@@ -177,10 +177,12 @@ export type RedisOperation =
   | ({ action: 'redis.delete'; keys: string[] } & Confirmed)
   | ({ action: 'redis.command'; args: string[] } & Confirmed)
   | { action: 'redis.nodes' }
+export type ClickHouseManagementView = 'partitions' | 'mutations' | 'replicas' | 'queries'
 export type ClickHouseOperation =
   | ({action:'clickhouse.query';database?:string;sql:string;parameters?:Record<string,SqlValue>;limit?:number} & Confirmed)
   | ({action:'clickhouse.browse';limit?:number;offset?:number;sort?:import('./browse-filter').SortRule[];filter?:{field:string;value:string}} & Entity)
   | ({action:'clickhouse.structure'|'clickhouse.inspect'} & Entity)
+  | ({action:'clickhouse.management';view:ClickHouseManagementView;limit?:number;offset?:number} & Entity)
   | ({action:'clickhouse.insert';rows:SqlRow[]} & Entity & Confirmed)
 export type DatabaseOperation = MysqlOperation | MongoOperation | RedisOperation | ClickHouseOperation
 export interface QuerySnippet {

@@ -242,3 +242,9 @@ MySQL/MongoDB 集成测试用 `DB_EX_INTEGRATION=1` 显式开启，连接 `MYSQL
 ### v0.7.0 发行候选
 
 - 修正 lockfile 中 11 个内网 npm 镜像 URL，全部改为公开 HTTPS registry，保留原版本和 integrity；添加项目 registry 设置及可移植性回归断言。修复原生 smoke 对 Electron 不存在的 Dock getter 调用，继续检查打包图标实际资源及启动行为。补齐前一轮已验证的批量写入真实引擎回归到现有 CI 集成测试。版本号 0.7.0，发布仅允许 exact master commit 的完整 CI 成功且所有安装包和 SHA256 上传校验通过后自动公开。当前仍为候选版本，未发布。
+
+### M10.1 — ClickHouse management reports (2026-11-25)
+
+- Based on merged v0.7.0. Table-level management views for partitions/compression, mutation tasks, replica status, and 24-hour aggregate query statistics, with scoped typed parameters, read-only settings, result limits, pagination, restored tab and 14-language UI.
+- Targeted local unit/locale/workspace regression: 22 passed. Real ClickHouse fixture tests extended; acceptance requires actual CI results, including server metadata compatibility and native package checks.
+- See [M10 management scope](M10_CLICKHOUSE_MANAGEMENT.md). Guarded mutation/partition writes, streaming data and backup workflows, additional topology compatibility and remaining common M10 enhancements are not yet complete.
