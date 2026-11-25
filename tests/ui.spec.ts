@@ -7,6 +7,7 @@ async function installBridge(page: Page) {
 
     const calls: Record<string, unknown>[] = []
     const sessions: Record<string, any> = {}
+    const savedObjects: any[] = []
     const rows = [{ id: '1', name: 'Ada', email: 'ada@example.test' }]
     const document = '{"_id":{"$oid":"64b000000000000000000001"},"name":"Ada","createdAt":{"$date":{"$numberLong":"1700000000000"}},"score":{"$numberInt":"7"},"nullable":null,"nested":{"values":[{"$numberLong":"99"},"99"]}}'
     const secondDocument = '{"_id":{"$oid":"64b000000000000000000002"},"name":"Grace","score":"7","nullable":"NULL"}'
@@ -39,7 +40,16 @@ async function installBridge(page: Page) {
       async pickConnectionFile(kind: string) { calls.push({ action: 'pickConnectionFile', kind }); return '/test/client.pem' },
       async disconnect(id: string) { calls.push({ action: 'disconnect', id }) },
       async roots(id: string) { return [{ id: id + '-db', label: id === 'redis' ? 'DB 0' : id === 'sql2' ? 'other' : 'app', kind: id === 'redis' ? 'keyspace' : 'database', database: id === 'sql2' ? 'other' : 'app' }] },
-      async children(_id: string, database: string) { return [{ id: database + '-users', label: 'users', database, entity: 'users', kind: 'table' }] },
+      async children(id: string, database: string, category?: string) {
+        if(id!=='mongo')return [{ id: database + '-users', label: 'users', database, entity: 'users', kind: 'table' }]
+        if(!category)return [['collections','集合'],['views','视图'],['functions','函数'],['indexes','索引'],['mapReduce','MapReduce'],['pipelines','聚合管道'],['gridfs','GridFS 存储桶'],['queries','查询']].map(([key,label])=>({id:database+'-'+key,label,database,kind:'mongo-category',category:key}))
+        if(category==='collections')return [{id:database+'-users',label:'users',database,entity:'users',kind:'collection'}]
+        if(category==='views')return [{id:database+'-users-view',label:'users_view',database,entity:'users_view',kind:'view',readOnly:true}]
+        if(category==='indexes')return [{id:database+'-users-indexes',label:'users',database,entity:'users',kind:'mongo-indexes'}]
+        if(category==='gridfs')return [{id:database+'-fs',label:'fs',database,entity:'fs.files',kind:'gridfs-bucket',readOnly:true}]
+        if(category==='functions')return [{id:database+'-system.js',label:'system.js',database,entity:'system.js',kind:'mongo-function',readOnly:true}]
+        return []
+      },
       async execute(id: string, op: any) {
         calls.push({ sessionId: id, ...op })
         if (op.action === 'mysql.structure') return { ...grid([{ name: 'id', type: 'int', key: 'PRI' }, { name: 'name', type: 'varchar', key: '' }]), primaryKeys: ['id'] }
@@ -66,7 +76,7 @@ async function installBridge(page: Page) {
       async copyText(value: string) { calls.push({ action: 'copyText', value }) },
       async validateMongoDocument(document: string, original?: string) { calls.push({ action: 'validateMongoDocument', document, original }) },
       async setWriteAccess(id: string, writable: boolean) { sessions[id] = { ...sessions[id], writable }; calls.push({ action: 'writeAccess', id, writable }); return sessions[id] },
-      async listSnippets() { return [] }, async saveSnippet(value: any) { return { ...value, id: 'snippet', updatedAt: new Date().toISOString() } }, async deleteSnippet() {},
+      async listSnippets() { return [...savedObjects] }, async saveSnippet(value: any) { const item={...value,id:value.id||String(savedObjects.length+1),updatedAt:new Date().toISOString()}; const index=savedObjects.findIndex(x=>x.id===item.id); if(index>=0)savedObjects[index]=item;else savedObjects.push(item);return item }, async deleteSnippet(id:string) { const index=savedObjects.findIndex(x=>x.id===id);if(index>=0)savedObjects.splice(index,1) },
       async importFile() { return { name: 'data.csv', format: 'csv', text: 'name,email\nEve,eve@example.test' } }, async exportFile(name: string, content: string, format: string) { calls.push({ action: 'export', name, content, format }); return true },
       async importConnections() { calls.push({ action: 'importConnections' }); return 2 }, async exportConnections(id?: string) { calls.push({ action: 'exportConnections', id }); return true },
       async importSshConfig() { return { hosts: [{ name: 'bastion', ssh: { enabled: true, host: 'jump.example.test', port: 22, username: 'dev', authMode: 'agent' } }], warnings: ['未执行 ProxyCommand'] } },
@@ -78,6 +88,9 @@ async function connect(page: Page, name: string) {
 }
 async function openUsers(page: Page, database = 'app') {
   await page.locator('.resource-node').filter({ hasText: database }).first().click()
+  const folders=page.locator('.resource-node[data-object-category="collections"]')
+  await expect(page.locator('.resource-node[data-object-kind="table"], .resource-node[data-object-category="collections"]').first()).toBeVisible()
+  if(await folders.count()) await folders.click()
   await page.locator('.child-node').filter({ hasText: 'users' }).click()
   await expect(page.locator('.workbench:visible .data-table tbody tr').first()).toContainText(database === 'other' ? 'Grace' : 'Ada')
 }
@@ -644,4 +657,42 @@ test('MongoDB filter detects ObjectId while typing and preserves a manual text o
   await expect(type).toHaveValue('text')
   await builder.getByRole('button',{name:'应用筛选与排序',exact:true}).click()
   await expect.poll(()=>page.evaluate(()=>(window as any).__dbexCalls.filter((c:any)=>c.action==='mongo.find').at(-1)?.filter)).toBe(JSON.stringify({reference_id:{$eq:id}}))
+})
+
+test('MongoDB classified explorer and saved query library',async({page})=>{
+  await connect(page,'Mongo Local')
+  await page.locator('.resource-node[data-object-kind="database"]').click()
+  await expect(page.locator('.resource-node[data-object-kind="mongo-category"]')).toHaveCount(8)
+  await page.locator('[data-object-category="views"]').click()
+  await page.locator('[data-object-kind="view"]').click()
+  await expect(page.locator('.workbench:visible')).toContainText('只读对象')
+  await expect(page.locator('.workbench:visible').getByRole('button',{name:'新增',exact:true})).toBeDisabled()
+  await page.locator('[data-object-category="indexes"]').click()
+  await page.locator('[data-object-kind="mongo-indexes"]').click()
+  await expect(page.locator('.workbench:visible').getByRole('button',{name:'刷新结构',exact:true})).toBeVisible()
+  await page.locator('[data-object-category="gridfs"]').click()
+  await page.locator('[data-object-kind="gridfs-bucket"]').click()
+  await expect(page.locator('.workbench:visible')).toContainText('GridFS 文件元数据浏览')
+  await page.locator('[data-object-category="queries"]').click()
+  const library=page.locator('.mongo-library:visible')
+  await library.getByLabel('目标集合或视图',{exact:true}).selectOption('users')
+  await library.getByLabel('名称',{exact:true}).fill('My saved query')
+  await library.getByLabel('Filter',{exact:true}).fill('{"score":{"$numberInt":"7"}}')
+  await library.getByRole('button',{name:'保存',exact:true}).click()
+  await expect(library.getByRole('status')).toHaveText('保存成功')
+  await library.getByRole('button',{name:'查询',exact:true}).click()
+  await expect(library.locator('.data-table')).toContainText('Ada')
+  await page.locator('[data-object-category="pipelines"]').click()
+  await library.getByLabel('目标集合或视图',{exact:true}).selectOption('users')
+  await library.getByLabel('名称',{exact:true}).fill('My pipeline')
+  await library.getByRole('button',{name:'保存',exact:true}).click()
+  await expect(library.getByRole('status')).toHaveText('保存成功')
+  await library.getByRole('button',{name:'运行 Aggregation',exact:true}).click()
+  await expect(library.locator('.data-table')).toContainText('Ada')
+  await page.locator('[data-object-category="queries"]').click()
+  await expect(library.getByLabel('已保存对象').locator('option')).toHaveText(['未选择对象','My saved query'])
+  await library.getByLabel('已保存对象').selectOption({label:'My saved query'})
+  await expect(library.getByLabel('Filter',{exact:true})).toHaveValue('{"score":{"$numberInt":"7"}}')
+  await page.locator('[data-object-category="mapReduce"]').click()
+  await expect(page.locator('.workbench:visible')).toContainText('MapReduce 已弃用')
 })
