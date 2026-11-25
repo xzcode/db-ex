@@ -1,4 +1,5 @@
 import type { MysqlOperation } from '../../../shared/types'
+import { inspectSqliteSql } from '../../operations/sqlite-policy'
 import { SqliteClient } from '../../operations/sqlite-client'
 import type { DatabaseAdapter } from './types'
 import { mysqlActions } from './mysql'
@@ -9,6 +10,7 @@ export const sqliteAdapter:DatabaseAdapter={
   // but local files cannot create or drop server-level databases.
   actions:mysqlActions.filter(action=>action!=='mysql.createDatabase'&&action!=='mysql.dropDatabase'),
   rollback:{action:'mysql.rollback'},
+  writes(input){return input.action==='mysql.query'?inspectSqliteSql(input.sql).mode==='write':['mysql.insert','mysql.update','mysql.delete','mysql.import','mysql.begin','mysql.commit'].includes(input.action)},
   async connect({config,sqliteProcessFactory,sqliteModulePath}){
     const operations=new SqliteClient(config.filePath!,sqliteProcessFactory,sqliteModulePath)
     try{await operations.connect()}catch(error){await operations.close().catch(()=>{});throw error}

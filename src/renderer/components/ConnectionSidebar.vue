@@ -106,7 +106,7 @@ function dropGroup(event: DragEvent, group: string) {
 }
 function outside(event: PointerEvent) { if (menu.value && !menuHost.value?.contains(event.target as Node)) closeMenu() }
 function key(event: KeyboardEvent) { if (event.key === 'Escape') { closeMenu(); groupTarget.value = undefined } }
-function dbIcon(kind: string) { return kind === 'sqlite'?'▧':kind === 'mysql' ? '▤' : kind === 'mongodb' ? '◈' : '⬡' }
+function dbIcon(kind: string) { return kind==='mariadb'?'▥':kind === 'sqlite'?'▧':kind === 'mysql' ? '▤' : kind === 'mongodb' ? '◈' : '⬡' }
 onMounted(() => {
   try { const saved = JSON.parse(localStorage.getItem('dbex.collapsed-groups') || '[]'); if (Array.isArray(saved)) collapsed.value = saved.filter(x => typeof x === 'string').slice(0, 200) } catch { /* Optional preference. */ }
   window.addEventListener('pointerdown', outside)

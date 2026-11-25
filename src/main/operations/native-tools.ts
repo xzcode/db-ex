@@ -3,12 +3,15 @@ import { open, mkdtemp, rm, copyFile, stat, writeFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
+import { isMysqlFamily } from '../../shared/relational-capabilities'
 import type { ConnectionConfig } from '../../shared/types'
 import type { ToolName, NativeToolTask } from '../../shared/preferences'
 
 export const nativeTasks={
  'mysql-backup':{kind:'mysql',tool:'mysqldump',write:false,extension:'sql'},
  'mysql-restore':{kind:'mysql',tool:'mysql',write:true,extension:'sql'},
+ 'mariadb-backup':{kind:'mariadb',tool:'mariadb-dump',write:false,extension:'sql'},
+ 'mariadb-restore':{kind:'mariadb',tool:'mariadb',write:true,extension:'sql'},
  'mongo-backup':{kind:'mongodb',tool:'mongodump',write:false,extension:'archive'},
  'mongo-restore':{kind:'mongodb',tool:'mongorestore',write:true,extension:'archive'},
  'mongo-export':{kind:'mongodb',tool:'mongoexport',write:false,extension:'json'},
@@ -23,10 +26,10 @@ export function nativeToolCommand(task:NativeToolTask,config:ConnectionConfig,da
  const spec=nativeTasks[task]
  if(!spec||spec.kind!==config.kind||config.ssh.enabled||config.tls.enabled||config.proxy?.enabled||config.uri||config.nodes?.length||config.mongoReplicaSet||config.mongoTopology==='discover')throw new Error('NATIVE_TOOL_CONNECTION: 外部工具当前仅支持普通直连。')
  safeName(database)
- if(config.kind==='mysql'){
+ if(isMysqlFamily(config.kind)){
    const contents=['[client]','host='+mysqlOption(config.host),'port='+config.port,'protocol=TCP','user='+mysqlOption(config.username||''),'password='+mysqlOption(config.password||'')].join('\n')+'\n'
-   const args=['--defaults-file='+credentials,'--no-login-paths','--ssl-mode=DISABLED']
-   if(task==='mysql-backup')args.push('--single-transaction','--skip-lock-tables','--no-tablespaces','--hex-blob','--',database)
+   const args=['--defaults-file='+credentials,...(config.kind==='mariadb'?['--skip-ssl']:['--no-login-paths','--ssl-mode=DISABLED'])]
+   if(task==='mysql-backup'||task==='mariadb-backup')args.push('--single-transaction','--skip-lock-tables',...(config.kind==='mysql'?['--no-tablespaces']:[]),'--hex-blob','--',database)
    else args.push('--binary-mode','--local-infile=0','--database='+database)
    return {args,contents}
  }
@@ -70,13 +73,13 @@ export async function runNativeTool(path:string,task:NativeToolTask,config:Conne
  let outDir:string|undefined
  let inputHandle:Awaited<ReturnType<typeof open>>|undefined,outputHandle:Awaited<ReturnType<typeof open>>|undefined
  try{
-   const credentials=join(secretDir,config.kind==='mysql'?'client.cnf':'mongo.yml')
+   const credentials=join(secretDir,isMysqlFamily(config.kind)?'client.cnf':'mongo.yml')
    const command=nativeToolCommand(task,config,database,entity,credentials,file)
    await writeFile(credentials,command.contents,{mode:0o600,flag:'wx'})
    let resultPath:string|undefined
    if(spec.write){
      if(!(await stat(file)).isFile())throw new Error('INVALID_INPUT: 数据文件')
-     if(task==='mysql-restore')inputHandle=await open(file,'r')
+     if(task==='mysql-restore'||task==='mariadb-restore')inputHandle=await open(file,'r')
    }else{
      // Native tools stream into a private temporary file. Do not truncate an
      // existing backup, and never publish output when the command failed.

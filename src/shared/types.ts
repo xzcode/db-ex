@@ -2,7 +2,7 @@ import type { BsonTypeBranch } from './bson-types'
 import type { BrowseFilter } from './browse-filter'
 import type { ObjectInspection } from './object-inspection'
 
-export type DatabaseKind = 'mysql' | 'mongodb' | 'redis' | 'sqlite'
+export type DatabaseKind = 'mysql' | 'mongodb' | 'redis' | 'sqlite' | 'mariadb'
 export type SqlValue = string | number | boolean | null
 export type SqlRow = Record<string, SqlValue>
 
@@ -85,6 +85,7 @@ export interface SessionInfo {
   name: string
   kind: DatabaseKind
   displayHost: string
+  serverVersion?: string
   writable: boolean
   transaction: boolean
 }
@@ -96,6 +97,7 @@ export interface ExplorerNode {
   kind: 'database' | 'table' | 'collection' | 'keyspace' | 'view' | 'mongo-category' | 'mongo-function' | 'mongo-indexes' | 'gridfs-bucket' | 'database-query'
   category?: MongoCategory
   readOnly?: boolean
+  objectType?: 'sequence' | 'system-versioned'
   database?: string
   entity?: string
 }
@@ -128,6 +130,7 @@ export interface OperationResult extends DataPreview {
   transaction?: boolean
   disconnected?: boolean
   primaryKeys?: string[]
+  objectCapabilities?: import('./relational-capabilities').RelationalObjectCapabilities
 }
 interface Confirmed { confirmed?: boolean }
 interface Entity { database: string; entity: string }

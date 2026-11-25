@@ -62,6 +62,10 @@ jobs:
         run: bash scripts/test-native-tools-docker.sh
         env:
           DB_EX_TEST_MONGO_IMAGE: mongo:7
+      - name: Verify MariaDB 10.11 and 11.4 against isolated databases
+        run: |
+          DB_EX_TEST_MARIADB_IMAGE=mariadb:10.11 bash scripts/test-mariadb-docker.sh
+          DB_EX_TEST_MARIADB_IMAGE=mariadb:11.4 bash scripts/test-mariadb-docker.sh
       - run: npm run build
       - name: SQLite isolated process cancellation and rollback
         run: node scripts/test-sqlite-process.mjs

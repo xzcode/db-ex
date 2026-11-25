@@ -17,7 +17,7 @@ export class SnippetStore {
   }
   save(input: Omit<QuerySnippet, 'id' | 'updatedAt'> & { id?: string }): Promise<QuerySnippet> {
     return this.writes.run(async () => {
-      if (!input || typeof input.name !== 'string' || input.name.length > 100 || typeof input.text !== 'string' || input.text.length > 100000 || !['mysql', 'mongodb', 'redis', 'sqlite'].includes(input.kind) || typeof input.favorite !== 'boolean') throw new Error('查询记录参数错误')
+      if (!input || typeof input.name !== 'string' || input.name.length > 100 || typeof input.text !== 'string' || input.text.length > 100000 || !['mysql', 'mongodb', 'redis', 'sqlite','mariadb'].includes(input.kind) || typeof input.favorite !== 'boolean') throw new Error('查询记录参数错误')
       if (input.database !== undefined && (typeof input.database !== 'string' || input.database.length > 200)) throw new Error('数据库名称无效')
       if (input.mongoKind !== undefined && (input.kind !== 'mongodb' || !['query','aggregation'].includes(input.mongoKind))) throw new Error('查询记录参数错误')
       if (input.entity !== undefined && (typeof input.entity !== 'string' || input.entity.length > 200)) throw new Error('查询记录参数错误')

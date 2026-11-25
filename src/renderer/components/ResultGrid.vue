@@ -20,6 +20,7 @@ const props = withDefaults(defineProps<{
   offset?: number
   bsonTypes?: BsonTypeBranch[]
   columnTypes?: string[]
+  relationalKind?: 'mysql'|'mariadb'
   sqliteTypes?: string[][]
   nullCells?: number[][]
   redisRowTypes?: string[]
@@ -180,7 +181,7 @@ function gridType(row: Record<string, unknown>, index: number, key: string, colu
 function gridColor(row: Record<string, unknown>, index: number, key: string, column: number): string | undefined {
   const bson = cellType(row, index, key)
   if (bson) return activeTypeColor(bsonPalette.value, bson)
-  const kind = props.sqliteTypes?'sqlite':props.columnTypes ? 'mysql' : props.redisRowTypes ? 'redis' : undefined
+  const kind = props.sqliteTypes?'sqlite':props.columnTypes ? (props.relationalKind||'mysql') : props.redisRowTypes ? 'redis' : undefined
   const type = genericType(index, column)
   return kind && type && databasePalettes.value[kind].enabled ? databaseTypeColor(kind, databasePalettes.value[kind], type) : undefined
 }
@@ -188,7 +189,7 @@ function gridLabel(row: Record<string, unknown>, index: number, key: string, col
   const bson = cellType(row, index, key)
   return bson ? t(bsonLabel(bson)) : genericType(index, column) || ''
 }
-const showTypeLabels = computed(() => mongo.value ? bsonPalette.value.showLabels : props.sqliteTypes?databasePalettes.value.sqlite.showLabels:props.columnTypes ? databasePalettes.value.mysql.showLabels : props.redisRowTypes ? databasePalettes.value.redis.showLabels : false)
+const showTypeLabels = computed(() => mongo.value ? bsonPalette.value.showLabels : props.sqliteTypes?databasePalettes.value.sqlite.showLabels:props.columnTypes ? databasePalettes.value[props.relationalKind||'mysql'].showLabels : props.redisRowTypes ? databasePalettes.value.redis.showLabels : false)
 function display(value: unknown): string {
   if (value === null) return 'NULL'
   if (value === undefined) return '—'

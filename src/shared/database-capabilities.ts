@@ -14,6 +14,7 @@ export interface DatabaseCapabilities {
   rowEditing: 'primary-key' | 'original-document' | 'key-specific'
 }
 const capabilities = {
+  mariadb: {connection:'network',browser:'relational',editor:'query',transactions:true,databaseAdministration:true,graphicalIndexes:false,backup:'native-tools',rowEditing:'primary-key'},
   mysql: {connection:'network',browser:'relational',editor:'query',transactions:true,databaseAdministration:true,graphicalIndexes:false,backup:'native-tools',rowEditing:'primary-key'},
   sqlite: {connection:'file',browser:'relational',editor:'query',transactions:true,databaseAdministration:false,graphicalIndexes:false,backup:'file',rowEditing:'primary-key'},
   mongodb: {connection:'network',browser:'document',editor:'aggregation',transactions:false,databaseAdministration:true,graphicalIndexes:true,backup:'native-tools',rowEditing:'original-document'},

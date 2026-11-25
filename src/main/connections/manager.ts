@@ -62,7 +62,7 @@ export class SessionManager {
       driver=await adapter.connect({config,transport,tls,sqliteProcessFactory:this.sqliteProcessFactory,sqliteModulePath:this.sqliteModulePath})
       if (generation !== this.generation) throw new Error('SESSION_CLOSED: 窗口已关闭，本次连接已取消')
       const info: SessionInfo = { id: randomUUID(), connectionId, name: config.name, kind: config.kind,
-        displayHost: connectionDisplayEndpoint(config).host, writable: false, transaction: false }
+        displayHost: connectionDisplayEndpoint(config).host, serverVersion:driver.serverVersion, writable: false, transaction: false }
       this.sessions.set(info.id, { info, driver, transport, config })
       return { ...info }
     } catch (error) {

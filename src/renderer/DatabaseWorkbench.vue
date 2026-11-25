@@ -113,7 +113,15 @@ const inspectorName = computed(() => isRedis.value ? (tab.value === 'data' ? res
 const inspectionKey = computed(() => JSON.stringify([props.session.id, props.session.kind, entity.value.database, inspectorName.value]))
 const visibleSnippets = computed(() => snippets.value.filter(item => item.kind === props.session.kind && (!historyOnlyFavorites.value || item.favorite) && (!isMongo.value || item.mongoKind !== 'query')))
 const browseFields = computed(() => (databaseCapabilities(props.session.kind).browser==='relational') ? (structure.value?.rows || []).map(row => String(row.name || row.Field || '')).filter(Boolean) : result.value?.columns || [])
-const canEditRow = computed(() => !props.node?.readOnly && editableRows.value && selectedRow.value >= 0 && (isMongo.value ? !!result.value?.documents?.[selectedRow.value] : !!result.value?.rawRows?.[selectedRow.value] && primaryKeys.value.length > 0))
+function supportsRecordMutation(operation:'insert'|'update'|'delete'|'import'){
+  if(props.session.kind!=='mariadb')return true
+  const support=structure.value?.objectCapabilities
+  // Missing server metadata must not silently enable a mutation.
+  return !!support?.[operation]&&(!props.session.transaction||support.transactional)
+}
+const canInsertRecord=computed(()=>canWrite.value&&supportsRecordMutation('insert'))
+const canImportRecords=computed(()=>canWrite.value&&supportsRecordMutation('import'))
+const canEditRow = computed(() => !props.node?.readOnly && supportsRecordMutation('update') && editableRows.value && selectedRow.value >= 0 && (isMongo.value ? !!result.value?.documents?.[selectedRow.value] : !!result.value?.rawRows?.[selectedRow.value] && primaryKeys.value.length > 0))
 const mutationCommands: Record<RedisValueType, string[]> = {
   string: ['APPEND', 'SETRANGE', 'INCRBY'], hash: ['HSET', 'HDEL', 'HINCRBY'],
   list: ['LPUSH', 'RPUSH', 'LSET', 'LREM', 'LTRIM', 'LPOP', 'RPOP'],
@@ -311,7 +319,7 @@ function openResultRow(index: number) {
   if (isMongo.value) viewMongoDocument(index)
   else if (tab.value === 'data' && !isRedis.value) openEdit()
 }
-function openInsert() { if (!canWrite.value) return; editError.value = ''; editNotice.value = ''; edit.value = { mode: 'insert', text: isMysql.value ? '{} ' : '{\n  "name": ""\n}', syntax: isMongo.value ? 'typed' : undefined } }
+function openInsert() { if (!canInsertRecord.value) return; editError.value = ''; editNotice.value = ''; edit.value = { mode: 'insert', text: isMysql.value ? '{} ' : '{\n  "name": ""\n}', syntax: isMongo.value ? 'typed' : undefined } }
 function openEdit() {
   if (!canEditRow.value || busy.value || !props.session.writable || tab.value !== 'data') return
   editError.value = ''; editNotice.value = ''
@@ -394,7 +402,7 @@ function rowKey(original: SqlRow): SqlRow {
 }
 async function saveEdit() {
   const draft = edit.value
-  if (!draft || busy.value || validatingEdit.value || !canWrite.value) return
+  if (!draft || busy.value || validatingEdit.value || !canWrite.value || !supportsRecordMutation(draft.mode)) return
   try {
     let operation: DatabaseOperation
     if (isMysql.value) {
@@ -443,6 +451,7 @@ async function deleteRow() {
   } catch (reason) { setError(reason) }
 }
 async function importData() {
+  if(!canImportRecords.value)return
   try {
     const file = await window.dbex.importFile()
     if (!file) return
@@ -617,7 +626,7 @@ watch(()=>props.node?.id,()=>{
 watch(tab,value=>emit('tabChange',value),{immediate:true})
 const savedScope=()=>props.session.connectionId?{connectionId:props.session.connectionId,database:entity.value.database,entity:entity.value.entity}:undefined
 const recovery=useQueryRecovery(()=>{
-  const scope=savedScope();return scope&&isMysql.value?{...scope,kind:props.session.kind==='sqlite'?'sqlite-query':'mysql-query'}:undefined
+  const scope=savedScope();return scope&&isMysql.value?{...scope,kind:props.session.kind==='sqlite'?'sqlite-query':props.session.kind==='mariadb'?'mariadb-query':'mysql-query'}:undefined
 },()=>JSON.stringify({sql:sql.value,parameters:parameters.value}),text=>{
   try{const parsed=JSON.parse(text);if(typeof parsed.sql==='string'&&typeof parsed.parameters==='string'){sql.value=parsed.sql;parameters.value=parsed.parameters}}catch{}
 })
@@ -654,7 +663,7 @@ onBeforeUnmount(() => { disposed = true; generation++; if (inspectionTimer) clea
 
 <template>
   <div class="workbench-shell"><MongoSavedObjects v-if="isMongo && libraryKind && node?.database" :key="node.id" :session="session" :database="node.database" :kind="libraryKind" :busy="busy" @disconnect="cancel" :run="async op => { const next=await execute(op,false); if(!next)throw new Error(error || '操作失败'); return next }" /><div v-else-if="legacyMapReduce" class="workbench"><header class="workbench-header"><h2>MapReduce</h2></header><div class="empty-state"><strong>{{ t('MapReduce 已弃用') }}</strong><span>{{ t('请使用聚合管道替代；DB EX 不执行服务器端 JavaScript。') }}</span></div></div><div v-else :class="['workbench', { 'mongo-workbench': isMongo }]">
-    <header class="workbench-header"><div><span class="eyebrow">{{ session.kind.toUpperCase() }}</span><h2>{{ node?.kind === 'mongo-category' || node?.kind === 'database-query' ? t(node.label) : node?.label || session.name }}</h2></div><div class="header-tools"><span v-if="session.transaction" class="transaction-badge">{{ t('事务进行中') }}</span><span v-if="node?.readOnly" class="muted-text">{{ t('只读对象') }}</span><button v-else :class="['btn', session.writable ? 'warning' : 'secondary']" :disabled="busy" @click="toggleWrite">{{ session.writable ? t('写入已启用 · 锁定') : t('只读 · 启用写入') }}</button></div></header>
+    <header class="workbench-header"><div><span class="eyebrow" :title="session.serverVersion">{{ session.kind==='mariadb'?'MariaDB':session.kind.toUpperCase() }}</span><h2>{{ node?.kind === 'mongo-category' || node?.kind === 'database-query' ? t(node.label) : node?.label || session.name }}</h2></div><div class="header-tools"><span v-if="session.transaction" class="transaction-badge">{{ t('事务进行中') }}</span><span v-if="node?.readOnly" class="muted-text">{{ t('只读对象') }}</span><button v-else :class="['btn', session.writable ? 'warning' : 'secondary']" :disabled="busy" @click="toggleWrite">{{ session.writable ? t('写入已启用 · 锁定') : t('只读 · 启用写入') }}</button></div></header>
     <nav class="workbench-tabs"><button :disabled="busy" :class="{ active: tab === 'data' }" @click="changeTab('data')">{{ isRedis ? t('Key 浏览器') : t('数据') }}</button><button v-if="isMysql" :disabled="busy" :class="{ active: tab === 'query' }" @click="changeTab('query')">{{ t('SQL 编辑器') }}</button><button v-if="isMongo" :disabled="busy" :class="{ active: tab === 'aggregation' }" @click="changeTab('aggregation')">Aggregation</button><button v-if="!isRedis && !node?.readOnly" :disabled="busy" :class="{ active: tab === 'structure' }" @click="changeTab('structure')">{{ isMysql ? t('结构与索引') : t('索引') }}</button><button v-if="isRedis" :disabled="busy" :class="{ active: tab === 'console' }" @click="changeTab('console')">{{ t('命令台') }}</button><div class="tab-filler"></div><button :class="{ active: inspectorTab === 'info' }" @click="openInspector('info')">{{ t('对象信息') }}</button><button :class="{ active: inspectorTab === 'ddl' }" @click="openInspector('ddl')">{{ isRedis ? t('检查命令') : 'DDL' }}</button><button :class="{ active: inspectorTab === 'colors' }" @click="openInspector('colors')">{{ isMongo ? t('BSON 类型配色') : t('数据类型配色') }}</button><button v-if="!isRedis" @click="openHistory">{{ t('历史 / 收藏') }}</button></nav>
     <div v-if="error" class="inline-message error" role="alert">{{ localize(error) }}<button class="ghost-icon" :aria-label="t('关闭错误')" @click="error = ''">×</button></div>
     <div v-if="notice" class="inline-message notice" role="status">{{ localize(notice) }}</div>
@@ -690,7 +699,7 @@ onBeforeUnmount(() => { disposed = true; generation++; if (inspectionTimer) clea
       </div>
     </template>
     <template v-else>
-      <div class="editor-toolbar browser-top-toolbar"><template v-if="tab === 'data' && !isRedis"><button class="btn secondary small" :aria-label="t('编辑')" :disabled="busy || !canEditRow || !canWrite" @click="openEdit"><span aria-hidden="true">✎</span> {{ t('编辑') }}</button><button class="btn secondary small" :aria-label="t('查询条件')" :aria-expanded="showMongoFilters" :class="{ 'active-filter': filtersActive || showMongoFilters }" @click="showMongoFilters = !showMongoFilters"><span aria-hidden="true">⌕</span> {{ t('查询条件') }} <span v-if="filtersActive" aria-hidden="true">•</span></button><button class="btn secondary small" :disabled="busy || !hasEntity || !canWrite" @click="importData">{{ t('导入') }} {{ isMysql ? 'CSV / JSON' : 'EJSON' }}</button></template><button v-if="isMongo && tab !== 'data'" class="btn secondary small" :disabled="selectedRow < 0 || !result?.documents?.[selectedRow]" @click="viewMongoDocument()">{{ t('查看文档') }}</button><span class="toolbar-spacer"></span><button class="btn secondary small" :disabled="!result?.rows.length" @click="exportData('json')">{{ t('导出当前页 JSON') }}</button><button class="btn secondary small" :disabled="!result?.rows.length" @click="exportData('csv')">CSV</button></div>
+      <div class="editor-toolbar browser-top-toolbar"><template v-if="tab === 'data' && !isRedis"><button class="btn secondary small" :aria-label="t('编辑')" :disabled="busy || !canEditRow || !canWrite" @click="openEdit"><span aria-hidden="true">✎</span> {{ t('编辑') }}</button><button class="btn secondary small" :aria-label="t('查询条件')" :aria-expanded="showMongoFilters" :class="{ 'active-filter': filtersActive || showMongoFilters }" @click="showMongoFilters = !showMongoFilters"><span aria-hidden="true">⌕</span> {{ t('查询条件') }} <span v-if="filtersActive" aria-hidden="true">•</span></button><button class="btn secondary small" :disabled="busy || !hasEntity || !canImportRecords" @click="importData">{{ t('导入') }} {{ isMysql ? 'CSV / JSON' : 'EJSON' }}</button></template><button v-if="isMongo && tab !== 'data'" class="btn secondary small" :disabled="selectedRow < 0 || !result?.documents?.[selectedRow]" @click="viewMongoDocument()">{{ t('查看文档') }}</button><span class="toolbar-spacer"></span><button class="btn secondary small" :disabled="!result?.rows.length" @click="exportData('json')">{{ t('导出当前页 JSON') }}</button><button class="btn secondary small" :disabled="!result?.rows.length" @click="exportData('csv')">CSV</button></div>
       <section v-if="tab === 'data' && !isRedis && showMongoFilters" class="browse-filter-panel">
         <header class="filter-panel-header"><span>{{ t('查询条件') }}</span><div v-if="isMongo" class="filter-mode-switch"><button type="button" :class="{ active: filterMode === 'builder' }" @click="filterMode = 'builder'">{{ t('创建工具') }}</button><button type="button" :class="{ active: filterMode === 'text' }" @click="filterMode = 'text'">{{ t('文本') }}</button></div></header>
         <div v-if="filterError" class="inline-message error" role="alert">{{ localize(filterError) }}</div><p v-if="mongoFindRecovery.error.value" class="compact-help">{{ t(mongoFindRecovery.error.value) }}</p><div v-if="mongoFindRecovery.available.value" class="recovery-banner"><span>{{ t('发现未恢复的查询草稿') }}</span><button class="btn secondary small" @click="mongoFindRecovery.restore">{{ t('恢复草稿') }}</button><button class="btn secondary small" @click="mongoFindRecovery.dismiss">{{ t('放弃草稿') }}</button></div>
@@ -698,11 +707,11 @@ onBeforeUnmount(() => { disposed = true; generation++; if (inspectionTimer) clea
         <div v-else class="mongo-filters"><label>Filter<textarea v-model="filter" rows="3" spellcheck="false" /></label><label>Projection<textarea v-model="projection" rows="3" spellcheck="false" /></label><label>Sort<textarea v-model="sort" rows="3" spellcheck="false" /></label><button class="btn primary" :disabled="busy || !hasEntity" @click="applyTextFilter">{{ t('查询') }}</button><button class="btn secondary" :disabled="busy || !hasEntity" @click="resetBrowseFilter">{{ t('重置筛选') }}</button></div>
       </section>
       <BrowseRecordView v-if="result && tab === 'data' && !isRedis && browseView !== 'grid'" :result="result" :selected="selectedRow" :mongo="isMongo" :mode="browseView" :offset="offset" @select="selectedRow = $event" @open="viewMongoDocument" />
-      <ResultGrid v-else-if="result" :columns="result.columns" :rows="result.rows" :column-types="isMysql ? result.columnTypes : undefined" :sqlite-types="result.sqliteTypes" :null-cells="result.nullCells" :redis-row-types="isRedis ? result.redisRowTypes : undefined" :selected="selectedRow" :offset="offset" :bson-types="isMongo ? result.bsonTypes : undefined"  :documents="isMongo ? result.documents : undefined" :document-menu="isMongo && !!result.documents?.length && !busy" :can-edit-document="isMongo && tab === 'data' && editableRows && canWrite && !busy" :can-add-document="isMongo && tab === 'data' && hasEntity && canWrite && !busy" :can-filter-document="isMongo && tab === 'data' && hasEntity && !busy" @document-action="mongoContextAction" @document-edit="editMongoRow" @document-view="viewMongoDocument" @select="selectedRow = $event" @open="openResultRow" />
+      <ResultGrid v-else-if="result" :columns="result.columns" :rows="result.rows" :column-types="isMysql ? result.columnTypes : undefined" :relational-kind="session.kind==='mariadb'?'mariadb':'mysql'" :sqlite-types="result.sqliteTypes" :null-cells="result.nullCells" :redis-row-types="isRedis ? result.redisRowTypes : undefined" :selected="selectedRow" :offset="offset" :bson-types="isMongo ? result.bsonTypes : undefined"  :documents="isMongo ? result.documents : undefined" :document-menu="isMongo && !!result.documents?.length && !busy" :can-edit-document="isMongo && tab === 'data' && editableRows && canWrite && !busy" :can-add-document="isMongo && tab === 'data' && hasEntity && canWrite && !busy" :can-filter-document="isMongo && tab === 'data' && hasEntity && !busy" @document-action="mongoContextAction" @document-edit="editMongoRow" @document-view="viewMongoDocument" @select="selectedRow = $event" @open="openResultRow" />
       <div v-else class="empty-state"><span class="empty-icon">▤</span><strong>{{ hasEntity ? t('运行查询查看结果') : t('选择数据库中的表或集合') }}</strong><span>{{ isMysql ? t('可直接切换到 SQL 编辑器执行查询。') : t('使用左侧资源树选择目标。') }}</span></div>
       <footer v-if="tab === 'data' && !isRedis" class="result-footer browse-footer">
         <div class="browse-record-actions">
-          <button class="browse-icon" type="button" :title="t('新增')" :aria-label="t('新增')" :disabled="busy || !hasEntity || !canWrite" @click="openInsert">＋</button>
+          <button class="browse-icon" type="button" :title="t('新增')" :aria-label="t('新增')" :disabled="busy || !hasEntity || !canInsertRecord" @click="openInsert">＋</button>
           <button class="browse-icon" type="button" :title="t('删除')" :aria-label="t('删除')" :disabled="busy || !canEditRow || !canWrite" @click="deleteRow">−</button>
           <button class="browse-icon" type="button" :title="t('刷新')" :aria-label="t('刷新')" :disabled="busy || !hasEntity" @click="loadData(offset)">↻</button>
           <button class="browse-icon" type="button" :title="t('取消并断开')" :aria-label="t('取消并断开')" :disabled="!busy" @click="cancel">■</button>
@@ -743,7 +752,7 @@ onBeforeUnmount(() => { disposed = true; generation++; if (inspectionTimer) clea
         <div v-if="isMongo && edit.mode !== 'import'" class="mongo-edit-mode"><span class="muted-text">{{ t(edit.syntax === 'typed' ? 'BSON 文档语法' : '原始 EJSON') }}</span><button v-if="edit.syntax === 'typed'" class="btn secondary small" type="button" :disabled="busy || validatingEdit" @click="useRawEjson">{{ t('原始 EJSON') }}</button><span class="toolbar-spacer"></span><span class="muted-text">{{ t(edit.mode === 'update' ? '修改时必须保留 _id' : '未指定 _id 时自动生成') }}</span></div>
         <p v-else class="compact-help">{{ isMysql ? t('JSON 字段值支持字符串、数字、布尔、null；BIGINT / DECIMAL 请使用字符串。省略自增字段可使用默认值。') : t('使用 Extended JSON 保留 ObjectId、Date、Decimal128 等 BSON 类型；修改时必须保留 _id。') }}</p>
         <div class="document-editor"><CodeEditor v-model="edit.text" :language="edit.syntax === 'typed' ? 'dbex-bson-document' : 'json'" :readonly="!canWrite || busy || validatingEdit" /></div>
-        <footer class="dialog-footer"><button v-if="isMongo && edit.mode !== 'import'" class="btn secondary" type="button" :disabled="busy || validatingEdit" @click="validateEdit">{{ t(validatingEdit ? '处理中…' : '验证') }}</button><span v-if="isMongo && edit.mode !== 'import'" class="toolbar-spacer"></span><button class="btn secondary" :disabled="busy || validatingEdit" @click="closeEdit">{{ t('取消') }}</button><button class="btn primary" :disabled="busy || validatingEdit || !canWrite" @click="saveEdit">{{ t(isMongo && edit.mode === 'update' ? '更新' : isMongo && edit.mode === 'insert' ? '新增' : '审阅并保存') }}</button></footer>
+        <footer class="dialog-footer"><button v-if="isMongo && edit.mode !== 'import'" class="btn secondary" type="button" :disabled="busy || validatingEdit" @click="validateEdit">{{ t(validatingEdit ? '处理中…' : '验证') }}</button><span v-if="isMongo && edit.mode !== 'import'" class="toolbar-spacer"></span><button class="btn secondary" :disabled="busy || validatingEdit" @click="closeEdit">{{ t('取消') }}</button><button class="btn primary" :disabled="busy || validatingEdit || !canWrite || !supportsRecordMutation(edit.mode)" @click="saveEdit">{{ t(isMongo && edit.mode === 'update' ? '更新' : isMongo && edit.mode === 'insert' ? '新增' : '审阅并保存') }}</button></footer>
       </section>
     </div>
     <div v-if="indexDialog" class="modal-backdrop"><section class="dialog" role="dialog" aria-modal="true" aria-labelledby="index-title"><header class="dialog-header"><h2 id="index-title">{{ t('创建 MongoDB 索引') }}</h2><button class="icon-button" @click="indexDialog = false">×</button></header><div v-if="error" class="inline-message error">{{ localize(error) }}</div><div class="dialog-body"><label class="field field-wide">{{ t('索引字段 JSON') }}<textarea v-model="indexKeys" rows="4" /></label><label class="field field-wide">{{ t('选项 JSON（name / unique / sparse / expireAfterSeconds）') }}<textarea v-model="indexOptions" rows="4" /></label></div><footer class="dialog-footer"><button class="btn secondary" @click="indexDialog = false">{{ t('取消') }}</button><button class="btn primary" :disabled="busy" @click="createIndex">{{ t('审阅并创建') }}</button></footer></section></div>

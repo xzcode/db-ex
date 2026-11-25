@@ -602,3 +602,5 @@ html[dir=rtl] .tree-chevron:not(.expanded) { transform: rotate(180deg); }
 .pref-tab-icon {font-size:24px;line-height:26px;font-weight:500;}
 .preferences-backdrop {z-index:100;}
 .preferences-tabs button {min-width:77px;padding:7px 9px;}
+
+.db-icon.mariadb,.db-small-icon.mariadb {color:#c99a73;background:rgba(201,154,115,.13);}

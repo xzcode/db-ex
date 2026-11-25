@@ -14,6 +14,7 @@ export interface AdapterContext {
   sqliteModulePath?: string
 }
 export interface AdapterSession {
+  serverVersion?:string
   execute(input:DatabaseOperation,context:OperationContext):Promise<OperationResult>
   roots(context:OperationContext):Promise<ExplorerNode[]>
   children(database:string,category:MongoCategory|undefined,context:OperationContext):Promise<ExplorerNode[]>
@@ -27,6 +28,7 @@ export interface DatabaseAdapter {
   readonly kind:DatabaseKind
   readonly actions:readonly OperationAction[]
   readonly rollback?:DatabaseOperation
+  writes(input:DatabaseOperation,writable:boolean):boolean
   connect(context:AdapterContext):Promise<AdapterSession>
   preview?(database:string,entity:string,offset:number):DatabaseOperation
   connectionError?(error:unknown):string|undefined

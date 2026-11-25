@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { isMysqlFamily } from '../shared/relational-capabilities'
 import { t, localize } from './i18n'
 import { ref, computed } from 'vue'
 import type { ConnectionConfig, ConnectionDraft, DatabaseKind, SavedConnection, SessionInfo, SshImportResult } from '../shared/types'
@@ -28,8 +29,8 @@ const authMode = ref<DatabaseAuthMode>(initialAuth(config.value, props.draft))
 const revealPassword = ref(false)
 const revealUri = ref(false)
 const pages=computed(()=>config.value.kind==='sqlite'?allPages.filter(p=>p.key==='basic'||p.key==='advanced'):allPages)
-const kinds: DatabaseKind[] = ['mysql', 'mongodb', 'redis','sqlite']
-const symbols: Record<DatabaseKind, string> = { mysql: '▤', mongodb: '◈', redis: '⬡', sqlite:'▧' }
+const kinds: DatabaseKind[] = ['mysql','mariadb','mongodb','redis','sqlite']
+const symbols: Record<DatabaseKind, string> = { mysql: '▤',mariadb:'▥', mongodb: '◈', redis: '⬡', sqlite:'▧' }
 const mongoUriActive = computed(() => config.value.kind === 'mongodb' && entry.value === 'uri')
 const usesSeeds = computed(() => config.value.kind === 'mongodb' ? !mongoUriActive.value && Boolean(config.value.nodes?.length) : config.value.kind === 'redis' && config.value.redisMode !== 'standalone')
 const showSeedEditor = computed(() => config.value.kind === 'mongodb' && !mongoUriActive.value && (config.value.mongoTopology !== 'direct' || Boolean(config.value.nodes?.length)) || config.value.kind === 'redis' && config.value.redisMode !== 'standalone')
@@ -148,8 +149,8 @@ function secretLabel(path: string) {
                 <label v-if="config.kind === 'mongodb' && (config.mongoTopology === 'discover' || config.mongoReplicaSet)" class="connection-row"><span>{{ t('Replica Set 名称') }}</span><input v-model.trim="config.mongoReplicaSet" :placeholder="t('例如 rs0')" /></label>
                 <label v-if="config.kind === 'redis' && config.redisMode === 'sentinel'" class="connection-row"><span>{{ t('Master 名称') }}</span><input v-model.trim="config.sentinelMaster" placeholder="mymaster" /></label>
                 <div class="connection-field-divider"></div>
-                <label v-if="config.kind !== 'mysql'" class="connection-row"><span>{{ t('认证方式') }}</span><select v-model="authMode"><option value="none">{{ t('无认证') }}</option><option value="password">{{ t('密码认证') }}</option></select></label>
-                <template v-if="config.kind === 'mysql' || authMode === 'password'">
+                <label v-if="!isMysqlFamily(config.kind)" class="connection-row"><span>{{ t('认证方式') }}</span><select v-model="authMode"><option value="none">{{ t('无认证') }}</option><option value="password">{{ t('密码认证') }}</option></select></label>
+                <template v-if="isMysqlFamily(config.kind) || authMode === 'password'">
                   <label v-if="config.kind === 'mongodb'" class="connection-row"><span>{{ t('认证库 (authSource)') }}</span><input v-model.trim="config.authSource" placeholder="admin" /></label>
                   <label class="connection-row"><span>{{ t('用户名') }}</span><input v-model.trim="config.username" autocomplete="off" :placeholder="config.kind === 'redis' ? t('可留空') : ''" /></label>
                   <div class="connection-row"><label for="db-password">{{ t('密码') }}</label><div class="password-input"><input id="db-password" v-model="config.password" :type="revealPassword ? 'text' : 'password'" autocomplete="new-password" :placeholder="props.draft?.secretFields.includes('password') ? t('已保存 · 留空保留') : t('可留空')" /><button class="btn secondary small" type="button" :aria-label="t(revealPassword ? '隐藏密码' : '显示密码')" @click="revealPassword = !revealPassword">{{ t(revealPassword ? '隐藏' : '显示') }}</button></div></div>
@@ -161,7 +162,7 @@ function secretLabel(path: string) {
                   <label class="checkbox-row connection-indent"><input v-model="config.sentinelTls" type="checkbox" /> {{ t('Sentinel 使用 TLS') }}</label>
                 </template>
               </template>
-              <p v-if="mongoUriActive || config.kind === 'mysql' || authMode === 'password'" class="helper connection-indent">{{ t('密码自动加密保存') }}</p>
+              <p v-if="mongoUriActive || isMysqlFamily(config.kind) || authMode === 'password'" class="helper connection-indent">{{ t('密码自动加密保存') }}</p>
               <p v-if="config.kind === 'mongodb' && !mongoUriActive" class="helper connection-indent">{{ t('使用单个主机、无 Replica Set 名称时，“自动”将直连指定地址，适合公网端口映射；填写 Replica Set 名称或多个种子节点则自动发现。使用 URI 时保留 URI 的拓扑设置。SRV 查询使用本机 DNS。需要自动故障转移时请选择副本集发现，成员地址需可达。') }}</p>
             </div>
           </template>

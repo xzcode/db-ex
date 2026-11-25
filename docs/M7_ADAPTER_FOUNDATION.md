@@ -16,3 +16,7 @@ Dynamic capability negotiation for server versions, table storage engines and ac
 
 ## Local verification
 Typecheck, production build, 8 targeted tests and the isolated SQLite process cancellation/rollback passed on the Seoul host. Four-engine full CI and packaged checks are still required for this new branch.
+
+## Second batch: MariaDB and metadata-aware dispatch
+
+The adapter registry now dispatches native write confirmation by engine rather than by global operation names. MariaDB registers its own identity and reuses the MySQL family transport and operations. Actual table type, storage engine, and primary-key metadata control structured MariaDB mutations; the general SQL editor retains explicit write confirmation. See [M8 MariaDB](M8_MARIADB.md). Dynamic ClickHouse capabilities and further dialect coverage remain future work.

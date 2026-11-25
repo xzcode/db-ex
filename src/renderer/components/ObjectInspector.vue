@@ -11,7 +11,7 @@ const emit = defineEmits<{ change: [tab: 'info' | 'ddl' | 'colors']; close: []; 
 const copyNotice = ref('')
 const expanded = ref(false)
 const ddl = computed(() => props.inspection?.definition || '')
-const objectLabel = computed(() => t(props.inspection?.kind === 'view' ? '视图' : (props.kind === 'mysql'||props.kind==='sqlite') ? '表' : props.kind === 'mongodb' ? '集合' : 'Key'))
+const objectLabel = computed(() => t(props.inspection?.kind === 'view' ? '视图' : (props.kind === 'mysql'||props.kind==='mariadb'||props.kind==='sqlite') ? '表' : props.kind === 'mongodb' ? '集合' : 'Key'))
 function display(metric: ObjectMetric) {
   if (metric.format === 'bytes') return formatBytes(metric.value, locale.value)
   if (metric.format === 'boolean') return metric.value === 'true' ? t('是') : metric.value === 'false' ? t('否') : metric.value
@@ -29,7 +29,7 @@ async function copy() {
 async function exportDefinition() {
   copyNotice.value = ''
   if (!ddl.value) return
-  const suffix = (props.kind === 'mysql'||props.kind==='sqlite') ? '.sql' : props.kind === 'mongodb' ? '.js' : '.txt'
+  const suffix = (props.kind === 'mysql'||props.kind==='mariadb'||props.kind==='sqlite') ? '.sql' : props.kind === 'mongodb' ? '.js' : '.txt'
   const safe = props.name.replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 80) || 'object'
   try { if (await window.dbex.exportFile(safe + suffix, ddl.value, 'text')) copyNotice.value = '语句已导出' }
   catch (error) { copyNotice.value = error instanceof Error ? error.message : String(error) }
@@ -62,7 +62,7 @@ watch([() => props.name, () => props.tab], () => { copyNotice.value = '' })
         <div class="inspector-definition-toolbar"><button class="btn secondary small" type="button" :disabled="!ddl" @click="copy">{{ t('复制语句') }}</button><button class="btn secondary small" type="button" :disabled="!ddl" @click="exportDefinition">{{ t('导出语句') }}</button></div>
         <div v-if="copyNotice" class="compact-help">{{ localize(copyNotice) }}</div>
         <p v-if="inspection?.definitionNote" class="compact-help">{{ t(inspection.definitionNote) }}</p>
-        <div v-if="ddl" class="inspector-definition"><CodeEditor :model-value="ddl" :language="(kind === 'mysql'||kind==='sqlite') ? 'sql' : kind === 'mongodb' ? 'dbex-mongo-ddl' : 'plaintext'" readonly /></div>
+        <div v-if="ddl" class="inspector-definition"><CodeEditor :model-value="ddl" :language="(kind === 'mysql'||kind==='mariadb'||kind==='sqlite') ? 'sql' : kind === 'mongodb' ? 'dbex-mongo-ddl' : 'plaintext'" readonly /></div>
       </template>
     </template>
   </aside>

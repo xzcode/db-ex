@@ -13,10 +13,8 @@ import { initNativePreferences, getNativePreferences, saveNativePreferences, che
 import { nativeTasks,runNativeTool,toolVersion } from './operations/native-tools'
 import { nativeToolTasks,toolNames, type ToolName,type NativeToolTask } from '../shared/preferences'
 import { parseSshConfig } from './connections/ssh-config'
-import { inspectSqliteSql } from './operations/sqlite-policy'
-import { inspectSql } from './operations/sql-policy'
+import { adapterOperationWrites } from './connections/adapters'
 import { validateMongoDocumentEdit } from './operations/mongodb'
-import { redisCommandWrites, validateRedisCommand } from './operations/redis'
 
 function getSystemLanguage(): string { return app.getPreferredSystemLanguages()[0] || app.getLocale() || 'en' }
 let currentLocale: Locale = 'en'
@@ -54,9 +52,7 @@ async function confirm(win: BrowserWindow, message: string, detail: string, acti
 function writes(op: DatabaseOperation, writable: boolean, kind:import('../shared/types').DatabaseKind): boolean {
   if (!op || typeof op !== 'object' || typeof op.action !== 'string') throw new Error('INVALID_OPERATION: 操作参数无效')
   if (Buffer.byteLength(JSON.stringify(op)) > 4 * 1024 * 1024) throw new Error('LIMIT_EXCEEDED: 操作参数最多4 MiB')
-  if (op.action === 'mysql.query') return (kind==='sqlite'?inspectSqliteSql(op.sql):inspectSql(op.sql,writable)).mode === 'write'
-  if (op.action === 'redis.command') return redisCommandWrites(validateRedisCommand(op.args))
-  return new Set(['mysql.createDatabase', 'mysql.dropDatabase', 'mongo.createDatabase', 'mongo.dropDatabase', 'mysql.insert', 'mysql.update', 'mysql.delete', 'mysql.import', 'mysql.begin', 'mysql.commit', 'mongo.insert', 'mongo.replace', 'mongo.delete', 'mongo.createIndex', 'mongo.dropIndex', 'redis.set', 'redis.mutate', 'redis.ttl', 'redis.delete']).has(op.action)
+  return adapterOperationWrites(kind,op,writable)
 }
 function operationDetail(id: string, op: DatabaseOperation): string {
   const info = sessions.info(id)

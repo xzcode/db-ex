@@ -1,11 +1,12 @@
 import type { RedisOperation } from '../../../shared/types'
 import { createRedisClient,setRedisReadBudget } from '../redis-client'
-import { RedisOperations } from '../../operations/redis'
+import { RedisOperations,redisCommandWrites,validateRedisCommand } from '../../operations/redis'
 import type { DatabaseAdapter,OperationAction } from './types'
 
 const actions=['redis.scan','redis.get','redis.inspect','redis.set','redis.mutate','redis.ttl','redis.delete','redis.command','redis.nodes'] as const satisfies readonly OperationAction[]
 export const redisAdapter:DatabaseAdapter={
   kind:'redis',actions,
+  writes(input){return input.action==='redis.command'?redisCommandWrites(validateRedisCommand(input.args)):['redis.set','redis.mutate','redis.ttl','redis.delete'].includes(input.action)},
   async connect({config,transport,tls}){
     const client=await createRedisClient(config,transport,tls)
     const operations=new RedisOperations(client)
