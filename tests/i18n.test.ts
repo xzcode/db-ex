@@ -53,3 +53,7 @@ test('app messages retain error codes, diagnostics and user-controlled values', 
   assert.equal(localizeMessage('zh-CN', '连接成功'), '连接成功')
   assert.equal(localizeMessage('en', '未翻译的诊断'), '未翻译的诊断')
 })
+
+test('BSON appearance and expanded color picker controls have translations in every locale', () => {
+  for (const { locale } of languages) if (locale !== 'zh-CN') for (const key of ['BSON 类型配色','BSON 数据类型','按类型着色','显示类型标记','缺失字段','未知类型','最近使用的颜色','恢复此类型默认颜色','恢复全部默认颜色','配色仅影响显示，不修改数据库数据。','查看文档','文档树','原始 EJSON','无法解析文档，请查看原始 EJSON。','部分类型或字段预览受限，完整内容请查看原始 EJSON。','预览','字段','字段值']) assert.ok(Object.hasOwn(catalogs[locale], key), locale + ': ' + key)
+})

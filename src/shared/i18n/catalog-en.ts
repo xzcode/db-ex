@@ -735,5 +735,21 @@ export const en: Readonly<Record<string, string>> = {
   "移出分组": "Remove from group",
   "INVALID_CONNECTION: 连接颜色无效": "INVALID_CONNECTION: Invalid connection color.",
   "INVALID_CONNECTION: 分组名称无效": "INVALID_CONNECTION: Invalid group name.",
-  "INVALID_CONNECTION: 连接外观参数无效": "INVALID_CONNECTION: Invalid connection appearance parameters."
+  "INVALID_CONNECTION: 连接外观参数无效": "INVALID_CONNECTION: Invalid connection appearance parameters.",
+  "BSON 类型配色": "BSON type colors",
+  "BSON 数据类型": "BSON data types",
+  "按类型着色": "Color by type",
+  "显示类型标记": "Show type labels",
+  "缺失字段": "Missing field",
+  "未知类型": "Unknown type",
+  "最近使用的颜色": "Recent colors",
+  "恢复此类型默认颜色": "Reset this type color",
+  "恢复全部默认颜色": "Reset all colors",
+  "配色仅影响显示，不修改数据库数据。": "Colors affect display only; database data is unchanged.",
+  "查看文档": "View document",
+  "文档树": "Document tree",
+  "原始 EJSON": "Raw EJSON",
+  "无法解析文档，请查看原始 EJSON。": "Cannot parse document; view raw EJSON.",
+  "部分类型或字段预览受限，完整内容请查看原始 EJSON。": "Some type or field previews are limited; view raw EJSON for the complete document.",
+  "预览": "Preview"
 }

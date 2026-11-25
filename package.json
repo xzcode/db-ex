@@ -1,6 +1,6 @@
 {
   "name": "db-ex",
-  "version": "0.5.4",
+  "version": "0.5.5",
   "private": true,
   "type": "module",
   "description": "DB EX — local-first database explorer for MySQL, MongoDB and Redis",

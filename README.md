@@ -2,7 +2,7 @@
 
 本地优先的桌面数据库工具，统一管理 **MySQL、MongoDB、Redis**。基于 Electron、Vue 3、TypeScript 与 Monaco，不依赖账号、云端服务或遥测。
 
-当前版本：**0.5.4 预览版**。M2–M5 的功能实现已接入；完整范围、验收证据和限制见 [路线图](docs/ROADMAP.md)。预览安装包与最终发行签名是不同的交付项。
+当前版本：**0.5.5 预览版**。M2–M5 的功能实现已接入；完整范围、验收证据和限制见 [路线图](docs/ROADMAP.md)。预览安装包与最终发行签名是不同的交付项。
 
 ## 功能
 
@@ -126,3 +126,7 @@ Choose System default or one of 14 supported languages from the top toolbar. You
 Database-first connection creation inspired by familiar desktop database tools. Separate MySQL, MongoDB and Redis forms, direct MongoDB URI entry, visible topology and authentication, advanced settings, and native certificate/key file selection. All 14 interface languages are retained.
 
 The navigation pane supports right-click connection colors, nine presets, a native custom color selector, clearing colors, named groups with collapse/expand and drag-to-group. Connection colors follow active tabs and explorer headers, and color/group metadata travels with encrypted connection backups.
+
+## v0.5.5 Preview
+
+MongoDB results distinguish per-value BSON types (including numeric widths, explicit null and missing fields). Double-click a row to view an expandable typed document tree or raw canonical EJSON; editing remains a separate action. The `BSON type colors` control supports per-type colors, no-color, labels, reset and local preference persistence. Connection and BSON palettes share 36 presets, native color selection, hex input and 12 recent custom colors.
