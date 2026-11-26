@@ -44,7 +44,7 @@ case "$tool" in
   mysql|mysqldump) image="$DBEX_TEST_MYSQL_IMAGE";;
   *) image="$DBEX_TEST_MONGO_IMAGE";;
 esac
-exec docker run --rm -i --network host --mount "type=bind,src=$DBEX_NATIVE_FIXTURE,dst=$DBEX_NATIVE_FIXTURE,readonly" --entrypoint "$tool" "$image" "$@"
+exec docker run --rm -i --network host -e MYSQL_TEST_LOGIN_FILE --mount "type=bind,src=$DBEX_NATIVE_FIXTURE,dst=$DBEX_NATIVE_FIXTURE,readonly" --entrypoint "$tool" "$image" "$@"
 WRAPPER
   chmod 700 "$fixture/bin/$tool"
 done

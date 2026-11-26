@@ -1,0 +1,136 @@
+name: M11 database and upgrade compatibility
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: m11-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  engines:
+    if: >-
+      github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'feature/m11-') || startsWith(github.event.head_commit.message, 'release: DB EX v1.')
+    name: TLS and version matrix (${{ matrix.engine }} / ${{ matrix.image }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        include:
+          - {engine: mysql, image: 'mysql:8.0'}
+          - {engine: mysql, image: 'mysql:8.4'}
+          - {engine: mariadb, image: 'mariadb:10.6'}
+          - {engine: mariadb, image: 'mariadb:11.8'}
+          - {engine: mongodb, image: 'mongo:7'}
+          - {engine: mongodb, image: 'mongo:8.0'}
+          - {engine: redis, image: 'redis:7.4'}
+          - {engine: redis, image: 'redis:8.2'}
+          - {engine: clickhouse, image: 'clickhouse/clickhouse-server:24.8'}
+          - {engine: clickhouse, image: 'clickhouse/clickhouse-server:25.8'}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      - run: npx tsc --noEmit -p tsconfig.m11.json
+      - name: Isolated real server over SOCKS + SSH + mTLS
+        env:
+          ENGINE: ${{ matrix.engine }}
+          IMAGE: ${{ matrix.image }}
+        run: bash scripts/test-m11-engine-docker.sh "$ENGINE" "$IMAGE"
+  cluster:
+    if: >-
+      github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'feature/m11-') || startsWith(github.event.head_commit.message, 'release: DB EX v1.')
+    name: ClickHouse two-server replication, distributed reads and recovery
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      - run: bash scripts/test-m11-clickhouse-cluster-docker.sh
+  sqlite:
+    if: >-
+      github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'feature/m11-') || startsWith(github.event.head_commit.message, 'release: DB EX v1.')
+    name: SQLite large-file, backup, WAL and cancellation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      - run: npm run build:main
+      - run: node --import tsx scripts/test-m11-sqlite.ts
+  upgrade:
+    if: >-
+      github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'feature/m11-') || startsWith(github.event.head_commit.message, 'release: DB EX v1.')
+    name: Native installation and upgrade (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - if: runner.os == 'Linux'
+        run: npx playwright install-deps chromium
+      - name: Build native installer
+        shell: bash
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          CSC_FOR_PULL_REQUEST: ${{ runner.os == 'macOS' && 'true' || 'false' }}
+        run: |
+          if [[ "$RUNNER_OS" == Linux ]]; then npm exec electron-builder -- --linux deb --publish never
+          elif [[ "$RUNNER_OS" == macOS ]]; then npm exec electron-builder -- --mac dmg --publish never
+          else npm exec electron-builder -- --win nsis --publish never
+          fi
+      - name: Download and verify previous public release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p previous
+          case "$RUNNER_OS" in
+            Linux) pattern='*.deb' ;;
+            macOS) pattern='*.dmg' ;;
+            Windows) pattern='*.exe' ;;
+          esac
+          gh release download v0.7.0 --repo "$GITHUB_REPOSITORY" --pattern "$pattern" --pattern "SHA256SUMS-$RUNNER_OS-$RUNNER_ARCH.txt" --dir previous
+          # check-packages normally expects every installer format. This
+          # compatibility job builds only the format actually being installed.
+          node --input-type=module -e "import {readdir,writeFile,readFile} from 'node:fs/promises';import {createHash} from 'node:crypto';const files=(await readdir('release')).filter(n=>/\\.(dmg|deb|exe)$/.test(n));const lines=[];for(const file of files)lines.push(createHash('sha256').update(await readFile('release/'+file)).digest('hex')+'  '+file);if(lines.length!==1)throw Error('Expected one native installer');await writeFile('release/SHA256SUMS.txt',lines.join('\\n')+'\\n');"
+      - name: Install previous version, upgrade and verify profile preservation
+        shell: bash
+        env:
+          DBEX_M11_PREVIOUS_DIR: previous
+          DBEX_M11_CURRENT_DIR: release
+        run: |
+          if [[ "$RUNNER_OS" == Linux ]]; then xvfb-run -a node scripts/test-m11-upgrade.mjs
+          else node scripts/test-m11-upgrade.mjs
+          fi

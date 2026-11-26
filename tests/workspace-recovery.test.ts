@@ -37,3 +37,14 @@ test('workspace restores multiple validated object tabs and stable draft identit
  assert.equal(result.positions.abc?.tabs?.[0]?.tab,'structure')
  assert(!JSON.stringify(result).includes('SECRET'));assert(!JSON.stringify(result).includes('writable'))
 })
+
+import {mergePendingWorkspace,forgetWorkspaceConnection} from '../src/shared/workspace-recovery'
+test('temporarily unavailable saved connections retain workspace recovery data until a retry or explicit removal',()=>{
+ const pending=normalizeWorkspace({ids:['offline'],active:'offline',positions:{offline:{tab:'query',node:{kind:'table',database:'app',entity:'events'}}}})
+ const live=normalizeWorkspace({ids:['online'],active:'online',positions:{online:{tab:'data'}}})
+ const recovered=mergePendingWorkspace(live,pending)
+ assert.deepEqual(recovered.ids,['online','offline'])
+ assert.equal(recovered.positions.offline?.node?.entity,'events')
+ assert.equal(recovered.active,'online')
+ assert.deepEqual(forgetWorkspaceConnection(recovered,'offline').ids,['online'])
+})

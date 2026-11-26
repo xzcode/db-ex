@@ -25,7 +25,7 @@ for tool in mariadb mariadb-dump; do
 #!/bin/sh
 set -eu
 tool="$(basename "$0")"
-exec docker run --rm -i --network host --mount "type=bind,src=$DBEX_MARIA_FIXTURE,dst=$DBEX_MARIA_FIXTURE,readonly" --entrypoint "$tool" "$DBEX_MARIA_IMAGE" "$@"
+exec docker run --rm -i --network host -e MYSQL_TEST_LOGIN_FILE --mount "type=bind,src=$DBEX_MARIA_FIXTURE,dst=$DBEX_MARIA_FIXTURE,readonly" --entrypoint "$tool" "$DBEX_MARIA_IMAGE" "$@"
 WRAPPER
  chmod 700 "$fixture/bin/$tool"
 done

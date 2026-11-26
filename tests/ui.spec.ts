@@ -53,7 +53,7 @@ async function installBridge(page: Page) {
       async editConnection(id: string) { return { config: { ...configs.find(value => value.id === id), password: '', ssh: { enabled: false, host: '', port: 22, username: '', authMode: 'agent' }, tls: { enabled: false } }, secretFields: ['password'] } },
       async deleteConnection(id: string) { calls.push({ action: 'deleteConnection', id }) },
       async trustHostKey() {},
-      async connectSaved(id: string) { const config = configs.find(value => value.id === id)!; sessions[id] = { ...config, id, connectionId: id, displayHost: config.host, writable: false, transaction: false }; return sessions[id] },
+      async connectSaved(id: string) { if(localStorage.getItem('mock.failed-connection')===id)throw new Error('Fixture unavailable'); const config = configs.find(value => value.id === id)!; sessions[id] = { ...config, id, connectionId: id, displayHost: config.host, writable: false, transaction: false }; return sessions[id] },
       async connectTemporary(config: any) { return { ...config, id: 'temporary', writable: false, transaction: false, displayHost: config.host } },
       async testConnection(config: any, clearSecrets: string[]) { calls.push({ action: 'testConnection', config, clearSecrets }); return '连接成功' },
       async pickConnectionFile(kind: string) { calls.push({ action: 'pickConnectionFile', kind }); return '/test/client.pem' },
@@ -1372,4 +1372,30 @@ test('MariaDB sequence panel reads without consuming and submits explicit restar
  await dialog.locator('input').fill('42')
  await dialog.getByRole('button',{name:'重设序列起始值'}).click()
  await expect.poll(()=>page.evaluate(()=>(window as any).__dbexCalls.filter((c:any)=>c.action==='mariadb.sequenceRestart').at(-1))).toMatchObject({database:'app',entity:'seq',value:'42',confirmed:true})
+})
+
+
+test('temporarily unavailable startup connection retains workspace and restores it after manual retry',async({page})=>{
+ await page.evaluate(()=>{
+  localStorage.setItem('dbex.preferences.v1',JSON.stringify({startup:'workspace'}))
+  localStorage.setItem('mock.failed-connection','ch')
+  localStorage.setItem('dbex.workspace.v1',JSON.stringify({ids:['ch'],active:'ch',positions:{ch:{tab:'management',node:{kind:'table',database:'app',entity:'events'}}}}))
+ })
+ await page.reload()
+ await expect(page.getByText('Fixture unavailable')).toBeVisible()
+ await expect.poll(()=>page.evaluate(()=>JSON.parse(localStorage.getItem('dbex.workspace.v1')||'{}').positions?.ch?.node?.entity)).toBe('events')
+ await page.evaluate(()=>localStorage.removeItem('mock.failed-connection'))
+ await connect(page,'ClickHouse Local')
+ await expect(page.locator('[data-ch-management]')).toBeVisible()
+ await expect(page.locator('.clickhouse-workbench:visible .data-table')).toContainText('p1')
+})
+
+test('shared preferences update other workspaces without reloading',async({page})=>{
+ await page.evaluate(()=>{
+  const p=JSON.stringify({theme:'light',language:'ar',startup:'welcome'})
+  window.dispatchEvent(new StorageEvent('storage',{key:'dbex.preferences.v1',newValue:p}))
+ })
+ await expect(page.locator('html')).toHaveAttribute('lang','ar')
+ await expect(page.locator('html')).toHaveAttribute('dir','rtl')
+ await expect(page.locator('html')).toHaveAttribute('data-theme','light')
 })

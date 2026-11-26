@@ -58,6 +58,8 @@ test('MongoDB URI and SRV TLS settings activate certificate loading without chan
   assert.equal(mongoUriTlsEnabled('mongodb://db.example.test:27017/admin?ssl=true'), true)
   assert.equal(mongoUriTlsEnabled('mongodb+srv://cluster.example.test/admin'), true)
   assert.equal(mongoUriTlsEnabled('mongodb+srv://cluster.example.test/admin?tls=false'), false)
+  assert.equal(mongoUriTlsEnabled('mongodb://db.example.test/admin?TLS=TRUE'), true)
+  assert.equal(mongoUriTlsEnabled('mongodb+srv://cluster.example.test/admin?SSL=false'), false)
   assert.equal(mongoUriTlsEnabled(undefined), false)
 })
 

@@ -267,3 +267,9 @@ MySQL/MongoDB 集成测试用 `DB_EX_INTEGRATION=1` 显式开启，连接 `MYSQL
 - Integrated CI on `078b160` passed 168 tests and 46 UI cases. MariaDB 10.11.19 and 11.4.13 real-engine sequence, temporal history and partition checks passed. ClickHouse 25.8.33.6 lightweight mutation and Keeper replication fixtures passed.
 - All three installer builds finished, but the packaged smoke failed; Linux/macOS test incorrectly relied on Electron reporting additionalArguments, and Windows had an empty renderer root. Corrected the window test to use the real BrowserWindow handle; added startup diagnostics and a real application quit/restart check with two workspaces, independent sessions and recovery drafts, no restored write access. Local Linux built and packaged applications pass these tests. Windows failure root cause remains unverified pending the new CI.
 - Prepare separate v0.7.1 Preview candidate without altering v0.7.0. The new publisher is deferred pending workflow write authorization; the existing verification gates remain unchanged. See [M11 compatibility matrix](M11_COMPATIBILITY.md) for evidence, remaining limits, and release gates.
+
+### M11 compatibility hardening — implementation candidate
+
+- v0.7.1 Preview published with eight assets; keep the release unchanged.
+- Implemented M11.1–M11.8 acceptance harness and focused production fixes: MongoDB TLS context, atomic file publication, native process cleanup, failed-connection workspace preservation, cross-window preference sync and version diagnostics.
+- Local real isolated MariaDB, MongoDB, Redis, ClickHouse and SQLite workloads passed; Linux DEB v0.7.0 -> v0.7.1 migration verified. Local full tests 151 passed, 8 skipped; four UI regressions, script/application typechecks and build passed. Multi-version matrix, two-host ClickHouse outage/catch-up, MySQL new TLS workload and macOS/Windows upgrade require actual CI. See [M11 compatibility evidence](M11_COMPATIBILITY.md). Not yet v1.0.0.

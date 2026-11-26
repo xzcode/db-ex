@@ -21,6 +21,15 @@ export function savePreferences(value:AppPreferences){preferences.value=normaliz
 export function setTheme(value:AppPreferences['theme']){savePreferences({...preferences.value,theme:value})}
 watch(languagePreference,language=>{if(preferences.value.language!==language){preferences.value.language=language;persist()}})
 watch(()=>preferences.value.theme,applyTheme,{immediate:true})
+window.addEventListener('storage',event=>{
+ if(event.key!==KEY||!event.newValue)return
+ try{
+  const next=normalizePreferences(JSON.parse(event.newValue))
+  preferences.value=next
+  if(languagePreference.value!==next.language)setLanguage(next.language)
+  applyTheme()
+ }catch{/* Ignore malformed external preference data. */}
+})
 // Keep the legacy language storage key compatible when migrating old profiles.
 // Language selection now lives exclusively in the preferences dialog.
 preferences.value.language=languagePreference.value
