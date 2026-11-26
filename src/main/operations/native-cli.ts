@@ -7,7 +7,7 @@ import {isAbsolute,join} from 'node:path'
 import type {ConnectionConfig,NativeCliSnapshot} from '../../shared/types'
 import {inspectSql} from './sql-policy'
 import {inspectSqliteSql} from './sqlite-policy'
-import {nativeToolCommand,type NativeRoute} from './native-tools'
+import {nativeToolCommand,nativeToolEnvironment,type NativeRoute} from './native-tools'
 
 const OUTPUT_LIMIT=256*1024
 const INPUT_LIMIT=64*1024
@@ -58,7 +58,7 @@ export class NativeCliProcess{
  }
  async start(path:string,args:string[],signal:AbortSignal){
   if(signal.aborted||this.closed)throw new Error('CANCELLED: 已取消操作')
-  const proc=spawn(path,args,{shell:false,windowsHide:true,stdio:'pipe'})
+  const proc=spawn(path,args,{shell:false,windowsHide:true,env:nativeToolEnvironment(args),stdio:'pipe'})
   this.proc=proc
   const abort=()=>this.stop()
   signal.addEventListener('abort',abort,{once:true})

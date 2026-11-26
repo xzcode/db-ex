@@ -36,7 +36,7 @@ export function nativeToolCommand(task:NativeToolTask,config:ConnectionConfig,da
  safeName(database)
  if(isMysqlFamily(config.kind)){
    const contents=['[client]','host='+mysqlOption(endpoint.host),'port='+endpoint.port,'protocol=TCP','user='+mysqlOption(config.username||''),'password='+mysqlOption(config.password||''),...(config.tls.enabled?[...(config.tls.caPath?['ssl-ca='+mysqlOption(config.tls.caPath)]:[]),...(config.tls.certPath?['ssl-cert='+mysqlOption(config.tls.certPath)]:[]),...(config.tls.keyPath?['ssl-key='+mysqlOption(config.tls.keyPath)]:[])]:[])].join('\n')+'\n'
-   const args=['--defaults-file='+credentials,...(config.kind==='mariadb'?(config.tls.enabled?['--ssl','--ssl-verify-server-cert']:['--skip-ssl']):['--no-login-paths',config.tls.enabled?'--ssl-mode=VERIFY_IDENTITY':'--ssl-mode=DISABLED'])]
+   const args=['--defaults-file='+credentials,...(config.kind==='mariadb'?(config.tls.enabled?['--ssl','--ssl-verify-server-cert']:['--skip-ssl']):[config.tls.enabled?'--ssl-mode=VERIFY_IDENTITY':'--ssl-mode=DISABLED'])]
    if(task==='mysql-backup'||task==='mariadb-backup')args.push('--single-transaction','--skip-lock-tables',...(config.kind==='mysql'?['--no-tablespaces']:[]),'--hex-blob','--',database)
    else args.push('--binary-mode','--local-infile=0','--database='+database)
    return {args,contents}
@@ -56,11 +56,27 @@ export function nativeToolCommand(task:NativeToolTask,config:ConnectionConfig,da
  }
  return {args,contents}
 }
+/**
+ * MySQL 8.0 does not understand --no-login-paths (introduced in newer
+ * clients). Both 8.0 and 8.4 honor MYSQL_TEST_LOGIN_FILE. Point it at a
+ * nonexistent file inside the private credentials directory instead of
+ * letting a user's .mylogin.cnf override the selected target.
+ * Applies to the SQL-family native tools and their independent CLI.
+ */
+export function nativeToolEnvironment(args:readonly string[],base:NodeJS.ProcessEnv=process.env):NodeJS.ProcessEnv|undefined{
+ const prefix='--defaults-file='
+ if(!args[0]?.startsWith(prefix))return undefined
+ const env={...base}
+ const blocked=new Set(['MYSQL_TEST_LOGIN_FILE','MYSQL_PWD','MYSQL_HOST','MYSQL_TCP_PORT','MYSQL_UNIX_PORT','MYSQL_HOME','MYSQL_GROUP_SUFFIX','MYSQL_HISTFILE','MYSQL_PS1','LIBMYSQL_PLUGIN_DIR','MYSQL_PLUGIN_DIR'])
+ for(const key of Object.keys(env))if(blocked.has(key.toUpperCase()))delete env[key]
+ env.MYSQL_TEST_LOGIN_FILE=join(dirname(args[0].slice(prefix.length)),'.dbex-no-login.cnf')
+ return env
+}
 function child(path:string,args:string[],options:{stdin?:number;stdout?:number;signal?:AbortSignal;timeout:number;capture?:boolean}):Promise<string>{
  return new Promise((resolve,reject)=>{
    if(options.signal?.aborted){reject(new Error('CANCELLED: 已取消操作'));return}
    let output='',done=false,terminalError:Error|undefined
-   const proc=spawn(path,args,{shell:false,windowsHide:true,stdio:[options.stdin??'ignore',options.capture?'pipe':options.stdout??'ignore',options.capture?'pipe':'ignore']})
+   const proc=spawn(path,args,{shell:false,windowsHide:true,env:nativeToolEnvironment(args),stdio:[options.stdin??'ignore',options.capture?'pipe':options.stdout??'ignore',options.capture?'pipe':'ignore']})
    const finish=(error?:Error)=>{if(done)return;done=true;clearTimeout(timer);options.signal?.removeEventListener('abort',abort);error?reject(error):resolve(output.trim().slice(0,1000))}
    const stop=(error:Error)=>{if(!terminalError){terminalError=error;proc.kill('SIGKILL')}}
    const abort=()=>stop(new Error('CANCELLED: 已取消操作'))

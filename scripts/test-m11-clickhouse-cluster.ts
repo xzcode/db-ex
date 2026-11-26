@@ -13,7 +13,18 @@ const clients=ports.map(port=>createClient({url:'http://127.0.0.1:'+port,usernam
 const [a,b]=clients
 const manager=new SessionManager()
 const db='dbex_m11_replica_'+randomUUID().replaceAll('-',''),path='/dbex-m11/'+db
-async function poll(fn:()=>Promise<boolean>,timeout=90000){const until=Date.now()+timeout;while(Date.now()<until){try{if(await fn())return}catch{}await new Promise(r=>setTimeout(r,500))}throw new Error('Isolated cluster did not converge')}
+async function poll(label:string,fn:()=>Promise<boolean>,timeout=90000){
+ const until=Date.now()+timeout
+ let last='condition false'
+ while(Date.now()<until){
+  try{if(await fn())return;last='condition false'}catch(error){
+   const code=(error as {code?:unknown}).code
+   last=typeof code==='string'?code:(error instanceof Error?error.name:'unknown')
+  }
+  await new Promise(r=>setTimeout(r,500))
+ }
+ throw new Error('Isolated cluster did not converge: '+label+' ('+last+')')
+}
 async function command(i:number,query:string){await clients[i]!.command({query})}
 function docker(...args:string[]){const result=spawnSync('docker',args,{stdio:'ignore',timeout:60000});assert.equal(result.status,0,'Fixture Docker operation failed')}
 try{
@@ -28,7 +39,7 @@ try{
  const query=(i:number,sql:string)=>manager.execute(sessions[i]!.id,{action:'clickhouse.query',database:db,sql})
  const report=(i:number,view:'topology'|'replicas'|'replicationQueue')=>manager.execute(sessions[i]!.id,{action:'clickhouse.management',database:db,entity:'replicated',view})
  await command(0,"INSERT INTO "+db+".replicated VALUES (1,'replicated')")
- await poll(async()=> (await query(1,'SELECT count() AS n FROM replicated')).rows[0]?.n==='1')
+ await poll('initial replica sync',async()=> (await query(1,'SELECT count() AS n FROM replicated')).rows[0]?.n==='1')
  const replica=await report(0,'replicas')
  assert.equal(replica.rows[0]?.total_replicas,'2');assert.equal(replica.rows[0]?.active_replicas,'2')
  const topology=await report(0,'topology')
@@ -40,11 +51,20 @@ try{
  console.log('ClickHouse two distinct server processes: Keeper replication and cross-shard Distributed query passed')
  if(nodeB){
   docker('stop','--time','15',nodeB)
-  await poll(async()=> (await report(0,'replicas')).rows[0]?.active_replicas==='1')
+  await poll('replica B marked offline',async()=> (await report(0,'replicas')).rows[0]?.active_replicas==='1')
   await command(0,"INSERT INTO "+db+".replicated VALUES (2,'after-offline')")
   docker('start',nodeB)
-  await poll(async()=> (await query(1,'SELECT count() AS n FROM replicated')).rows[0]?.n==='2')
-  await poll(async()=> (await report(0,'replicas')).rows[0]?.active_replicas==='2')
+  const binding=spawnSync('docker',['port',nodeB,'8123/tcp'],{encoding:'utf8',timeout:10000})
+  assert.equal(binding.status,0);assert.equal(binding.stdout.trim(),'127.0.0.1:'+ports[1],'Replica B host endpoint changed')
+  // First check the actual authenticated server endpoint, then the same
+  // DB EX session and the replicated data. No write is automatically replayed.
+  await poll('replica B authenticated HTTP readiness',async()=>{
+   const r=await fetch('http://127.0.0.1:'+ports[1]+'/',{method:'POST',headers:{authorization:'Basic '+Buffer.from('dbex:'+password).toString('base64')},body:'SELECT 1',signal:AbortSignal.timeout(3000)})
+   return r.ok&&(await r.text()).trim()==='1'
+  })
+  console.log('Replica B returned on its original host endpoint')
+  await poll('same DB EX session catches up after restart',async()=> (await query(1,'SELECT count() AS n FROM replicated')).rows[0]?.n==='2')
+  await poll('both replicas active',async()=> (await report(0,'replicas')).rows[0]?.active_replicas==='2')
   console.log('ClickHouse replica outage, queued replication and catch-up after restart passed')
  }
 }finally{

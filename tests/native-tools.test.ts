@@ -1,7 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import {join} from 'node:path'
 import { newConnectionConfig } from '../src/shared/connection-form'
-import { nativeToolCommand, toolVersion } from '../src/main/operations/native-tools'
+import { nativeToolCommand, nativeToolEnvironment, toolVersion } from '../src/main/operations/native-tools'
 test('native tools use structured args and private credential files rather than argv secrets',()=>{
  const cfg={...newConnectionConfig('mysql'),name:'local',password:'secret"\\pw'}
  const cmd=nativeToolCommand('mysql-backup',cfg,'app',undefined,'/tmp/private.cnf','/tmp/dump.sql')
@@ -31,4 +32,22 @@ test('native tools allow verified single-host TLS and explicitly routed non-TLS 
  const m=nativeToolCommand('mongo-backup',{...mongo,tls},'app',undefined,'/tmp/client.yml','/tmp/dump.archive')
  assert(m.args.includes('--sslCAFile=/tmp/ca.pem'));assert.match(m.contents,/tls=true/)
  assert.throws(()=>nativeToolCommand('mongo-backup',{...mongo,tls:{...tls,certPath:'/tmp/cert.pem'}},'app',undefined,'/tmp/client.yml','/tmp/dump.archive'),/NATIVE_TOOL_CONNECTION/)
+})
+
+
+test('MySQL 8.0 and 8.4 native tools isolate login paths and ambient client overrides without newer flags',()=>{
+ const config={...newConnectionConfig('mysql'),name:'fixture',tls:{enabled:true,caPath:'/tmp/ca.pem'}}
+ for(const task of ['mysql-backup','mysql-restore'] as const){
+  const cmd=nativeToolCommand(task,config,'app',undefined,'/tmp/dbex-private/client.cnf','/tmp/output.sql')
+  assert.equal(cmd.args[0],'--defaults-file=/tmp/dbex-private/client.cnf')
+  assert(!cmd.args.includes('--no-login-paths'))
+  assert(cmd.args.includes('--ssl-mode=VERIFY_IDENTITY'))
+  const env=nativeToolEnvironment(cmd.args,{PATH:'/fixture/bin',MYSQL_PWD:'ambient-password',MYSQL_TEST_LOGIN_FILE:'/home/user/.mylogin.cnf',MYSQL_GROUP_SUFFIX:'_other',mysql_host:'other-host'})
+  assert.equal(env?.PATH,'/fixture/bin')
+  assert.equal(env?.MYSQL_TEST_LOGIN_FILE,join('/tmp/dbex-private','.dbex-no-login.cnf'))
+  assert.equal(env?.MYSQL_PWD,undefined)
+  assert.equal(env?.MYSQL_GROUP_SUFFIX,undefined)
+  assert.equal(env?.mysql_host,undefined)
+ }
+ assert.equal(nativeToolEnvironment(['--version'],{}),undefined)
 })
