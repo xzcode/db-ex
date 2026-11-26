@@ -12,7 +12,8 @@ concurrency:
   cancel-in-progress: true
 jobs:
   engines:
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'feature/m11-') || startsWith(github.event.head_commit.message, 'release: DB EX v1.')
+    if: >-
+      github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'feature/m11-') || startsWith(github.event.head_commit.message, 'release: DB EX v1.')
     name: TLS and version matrix (${{ matrix.engine }} / ${{ matrix.image }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -47,7 +48,8 @@ jobs:
           IMAGE: ${{ matrix.image }}
         run: bash scripts/test-m11-engine-docker.sh "$ENGINE" "$IMAGE"
   cluster:
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'feature/m11-') || startsWith(github.event.head_commit.message, 'release: DB EX v1.')
+    if: >-
+      github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'feature/m11-') || startsWith(github.event.head_commit.message, 'release: DB EX v1.')
     name: ClickHouse two-server replication, distributed reads and recovery
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -62,7 +64,8 @@ jobs:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
       - run: bash scripts/test-m11-clickhouse-cluster-docker.sh
   sqlite:
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'feature/m11-') || startsWith(github.event.head_commit.message, 'release: DB EX v1.')
+    if: >-
+      github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'feature/m11-') || startsWith(github.event.head_commit.message, 'release: DB EX v1.')
     name: SQLite large-file, backup, WAL and cancellation
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -78,7 +81,8 @@ jobs:
       - run: npm run build:main
       - run: node --import tsx scripts/test-m11-sqlite.ts
   upgrade:
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'feature/m11-') || startsWith(github.event.head_commit.message, 'release: DB EX v1.')
+    if: >-
+      github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'feature/m11-') || startsWith(github.event.head_commit.message, 'release: DB EX v1.')
     name: Native installation and upgrade (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
