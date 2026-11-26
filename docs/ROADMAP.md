@@ -273,3 +273,9 @@ MySQL/MongoDB 集成测试用 `DB_EX_INTEGRATION=1` 显式开启，连接 `MYSQL
 - v0.7.1 Preview published with eight assets; keep the release unchanged.
 - Implemented M11.1–M11.8 acceptance harness and focused production fixes: MongoDB TLS context, atomic file publication, native process cleanup, failed-connection workspace preservation, cross-window preference sync and version diagnostics.
 - Local real isolated MariaDB, MongoDB, Redis, ClickHouse and SQLite workloads passed; Linux DEB v0.7.0 -> v0.7.1 migration verified. Local full tests 151 passed, 8 skipped; four UI regressions, script/application typechecks and build passed. Multi-version matrix, two-host ClickHouse outage/catch-up, MySQL new TLS workload and macOS/Windows upgrade require actual CI. See [M11 compatibility evidence](M11_COMPATIBILITY.md). Not yet v1.0.0.
+
+### M11 accepted / v1.0.0 release gate
+
+- M11 exact candidate `96288fe`: 15/15 specialist jobs, 171 integrated tests, 48 UI cases, all three native package/launch jobs and macOS ad-hoc smoke passed. Both MySQL 8.0 native tool and ClickHouse replica restart regressions passed on real fixtures.
+- PR #20 merged at `599a123`; M0–M11 implementation and defined acceptance are complete.
+- Prepare v1.0.0 as the first stable application release within the documented compatibility limits. Publish only after the same master release SHA passes the complete integrated/native and M11 workflows, including upgrade from the actual published v0.7.1; verify all eight release assets. Keep prior tags/assets unchanged.

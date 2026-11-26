@@ -1,6 +1,6 @@
 {
   "name": "db-ex",
-  "version": "0.7.1",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "description": "DB EX — local-first database explorer for MySQL, MariaDB, MongoDB, Redis, SQLite and ClickHouse",

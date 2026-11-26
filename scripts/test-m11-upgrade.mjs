@@ -12,6 +12,8 @@ const root=await mkdtemp(join(tmpdir(),'dbex-m11-upgrade-'))
 const profile=join(root,'profile'),install=join(root,'installed')
 const previous=resolve(process.env.DBEX_M11_PREVIOUS_DIR||'')
 const next=resolve(process.env.DBEX_M11_CURRENT_DIR||'release')
+const previousVersion=process.env.DBEX_M11_PREVIOUS_VERSION||'0.7.0'
+assert(/^\d+\.\d+\.\d+$/.test(previousVersion),'Invalid previous release version')
 const osName=process.platform==='darwin'?'macOS-ARM64':process.platform==='win32'?'Windows-X64':'Linux-X64'
 const appName=process.platform==='darwin'?'DB EX.app':process.platform==='win32'?'DB EX.exe':'db-ex'
 let app
@@ -77,12 +79,12 @@ async function close(){if(app){await app.close();app=undefined}}
 try{
  if(!process.env.DBEX_M11_PREVIOUS_DIR)throw new Error('DBEX_M11_PREVIOUS_DIR is required')
  const currentVersion=JSON.parse(await readFile('package.json','utf8')).version
- assert(currentVersion!=='0.7.0','Upgrade must use a different version')
+ assert(currentVersion!==previousVersion,'Upgrade must use a different version')
  const file=join(root,'数据库 upgrade.sqlite'),seed=new DatabaseSync(file)
  try{seed.exec("CREATE TABLE records(id INTEGER PRIMARY KEY,note TEXT); INSERT INTO records VALUES(1,'keep me')")}finally{seed.close()}
- const oldExe=await installPackage(previous,'0.7.0')
+ const oldExe=await installPackage(previous,previousVersion)
  let page=await launch(oldExe)
- assert.equal(await app.evaluate(({app})=>app.getVersion()),'0.7.0')
+ assert.equal(await app.evaluate(({app})=>app.getVersion()),previousVersion)
  const state=await page.evaluate(async file=>{
   const sqlite=await window.dbex.saveConnection({name:'Upgrade SQLite',kind:'sqlite',host:'',port:0,filePath:file,ssh:{enabled:false},tls:{enabled:false}})
   const sql=await window.dbex.saveConnection({name:'Upgrade encrypted profile',kind:'mysql',host:'localhost',port:3306,username:'fixture',password:'m11-synthetic-only',ssh:{enabled:false},tls:{enabled:false},color:'#abcdef',group:'Upgrade'})
@@ -128,5 +130,5 @@ try{
  }
  // Removing the application must never remove the separate profile/database.
  assert(await exists(file));assert(await exists(join(profile,'connections.secure.json')))
- console.log('M11 upgrade passed: v0.7.0 -> '+currentVersion+' '+osName+', preferences, encrypted connections, saved query, draft, SQLite data, application removal')
+ console.log('M11 upgrade passed: v'+previousVersion+' -> '+currentVersion+' '+osName+', preferences, encrypted connections, saved query, draft, SQLite data, application removal')
 }finally{await close().catch(()=>{});await rm(root,{recursive:true,force:true})}

@@ -121,7 +121,7 @@ jobs:
             macOS) pattern='*.dmg' ;;
             Windows) pattern='*.exe' ;;
           esac
-          gh release download v0.7.0 --repo "$GITHUB_REPOSITORY" --pattern "$pattern" --pattern "SHA256SUMS-$RUNNER_OS-$RUNNER_ARCH.txt" --dir previous
+          gh release download v0.7.1 --repo "$GITHUB_REPOSITORY" --pattern "$pattern" --pattern "SHA256SUMS-$RUNNER_OS-$RUNNER_ARCH.txt" --dir previous
           # check-packages normally expects every installer format. This
           # compatibility job builds only the format actually being installed.
           node --input-type=module -e "import {readdir,writeFile,readFile} from 'node:fs/promises';import {createHash} from 'node:crypto';const files=(await readdir('release')).filter(n=>/\\.(dmg|deb|exe)$/.test(n));const lines=[];for(const file of files)lines.push(createHash('sha256').update(await readFile('release/'+file)).digest('hex')+'  '+file);if(lines.length!==1)throw Error('Expected one native installer');await writeFile('release/SHA256SUMS.txt',lines.join('\\n')+'\\n');"
@@ -129,6 +129,7 @@ jobs:
         shell: bash
         env:
           DBEX_M11_PREVIOUS_DIR: previous
+          DBEX_M11_PREVIOUS_VERSION: 0.7.1
           DBEX_M11_CURRENT_DIR: release
         run: |
           if [[ "$RUNNER_OS" == Linux ]]; then xvfb-run -a node scripts/test-m11-upgrade.mjs

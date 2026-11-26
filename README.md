@@ -2,7 +2,7 @@
 
 本地优先的桌面数据库工具，统一管理 **MySQL、MariaDB、MongoDB、Redis、SQLite、ClickHouse**。基于 Electron、Vue 3、TypeScript 与 Monaco，不依赖账号、云端服务或遥测。
 
-已发布版本：**0.7.0 预览版**；当前开发发行候选为 **0.7.1 预览版**（通过验收后发布）。M2–M5 的功能实现已接入；完整范围、验收证据和限制见 [路线图](docs/ROADMAP.md)。预览安装包与最终发行签名是不同的交付项。
+已发布版本及下载：[Releases](https://github.com/xzcode/db-ex/releases)。当前代码版本：**1.0.0**。M0–M11 已完成开发，M11 合并候选通过全部 15 项专项兼容性验收；正式发行仍以对应 master 提交的 CI 结果为准。完整范围、验收证据和限制见 [路线图](docs/ROADMAP.md) 与 [M11 兼容性矩阵](docs/M11_COMPATIBILITY.md)。macOS 为 ad-hoc 签名，Windows 未商业代码签名。
 
 ## 功能
 
