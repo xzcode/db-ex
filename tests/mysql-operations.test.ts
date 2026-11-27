@@ -7,7 +7,7 @@ import { MysqlOperations } from '../src/main/operations/mysql'
 const read = { writable: false, confirmed: false }
 const write = { writable: true, confirmed: true }
 
-function fixture(options: { affected?: number; huge?: boolean; many?: boolean; pending?: boolean; failInsert?: number } = {}) {
+function fixture(options: { affected?: number; huge?: boolean; binary?:boolean; many?: boolean; pending?: boolean; failInsert?: number } = {}) {
   const calls: { sql: string; values: unknown[]; prepared: boolean }[] = []
   let destroyed = false
   let inserts = 0
@@ -27,7 +27,7 @@ function fixture(options: { affected?: number; huge?: boolean; many?: boolean; p
       else if (input.sql.startsWith('SELECT ENGINE')) emit(query, ['ENGINE'], [['InnoDB']])
       else if (input.sql.startsWith('SELECT * FROM (')) {
         onSelect()
-        if (!options.pending) emit(query, ['id', 'name'], options.many?Array.from({length:40},(_,i)=>[i+1,'a'.repeat(100*1024)]):[[1, options.huge ? 'x'.repeat(512 * 1024 + 1) : 'Alice']])
+        if (!options.pending) emit(query, ['id', 'name'], options.many?Array.from({length:40},(_,i)=>[i+1,'a'.repeat(100*1024)]):[[1, options.huge ? 'x'.repeat(512 * 1024 + 1) : options.binary?Buffer.alloc(5000,255):'Alice']])
       } else if (input.sql.startsWith('INSERT') && ++inserts === options.failInsert) query.emit('error', Object.assign(new Error('sensitive raw SQL error'), { code: 'ER_DUP_ENTRY' }))
       else { query.emit('result', { affectedRows: options.affected ?? 1 }); query.emit('end') }
     })
@@ -134,4 +134,12 @@ test('bounded page aggregate byte cap returns actual next offset without disconn
  assert.equal(result.nextOffset,20+result.rows.length)
  assert.equal(destroyed(),false)
  assert.equal(operations.disconnected,false)
+})
+
+test('SQL binary preview keeps all bounded bytes separate from lossy row display and editable originals',async()=>{
+ const {operations}=fixture({binary:true})
+ const result=await operations.execute({action:'mysql.query',sql:'SELECT * FROM users'},read)
+ assert.equal(result.rawRows,undefined)
+ assert.equal(result.binaryCells?.[0]?.name,Buffer.alloc(5000,255).toString('base64'))
+ assert(result.rows[0]?.name?.endsWith('…'))
 })

@@ -56,27 +56,27 @@ export class SqliteOperations {
   private result(sql:string,args:SQLInputValue[],limit:number,offset=0):OperationResult {
     const stmt=this.statement(sql),columns=stmt.columns().map(c=>c.name)
     if(new Set(columns).size!==columns.length)throw new Error('INVALID_INPUT: SQL 查询请为重复字段设置别名')
-    const rows:Record<string,string>[]=[],rawRows:SqlRow[]=[],sqliteTypes:string[][]=[],nullCells:number[][]=[]
+    const rows:Record<string,string>[]=[],rawRows:SqlRow[]=[],sqliteTypes:string[][]=[],nullCells:number[][]=[],binaryCells:Record<string,string>[]=[]
     let bytes=0,exact=true,more=false,reason:OperationResult['truncationReason']
     for(const row of stmt.iterate(...args)){
       if(rows.length>=limit){more=true;reason='page';break}
-      const display:Record<string,string>=Object.create(null),raw:SqlRow=Object.create(null),types:string[]=[],nulls:number[]=[]
+      const display:Record<string,string>=Object.create(null),raw:SqlRow=Object.create(null),types:string[]=[],nulls:number[]=[],binary:Record<string,string>=Object.create(null)
       let rowExact=true
       for(const [i,col] of columns.entries()){
         const value=row[col]??null
         display[col]=displayCell(value instanceof Uint8Array?Buffer.from(value):value)
         types.push(storageType(value));if(value===null)nulls.push(i)
         if(typeof value==='bigint'){if(value<=BigInt(Number.MAX_SAFE_INTEGER)&&value>=BigInt(Number.MIN_SAFE_INTEGER))raw[col]=Number(value);else rowExact=false}
-        else if(value instanceof Uint8Array)rowExact=false
+        else if(value instanceof Uint8Array){rowExact=false;if(value.byteLength<=512*1024)binary[col]=Buffer.from(value).toString('base64')}
         else if(typeof value==='number'&&!Number.isFinite(value))rowExact=false
         else if(typeof value==='string'&&Buffer.byteLength(value)>512*1024)rowExact=false
         else raw[col]=value
       }
-      const size=Buffer.byteLength(JSON.stringify(display))+Buffer.byteLength(JSON.stringify(raw))
+      const size=Buffer.byteLength(JSON.stringify(display))+Buffer.byteLength(JSON.stringify(raw))+Buffer.byteLength(JSON.stringify(binary))
       if(bytes+size>MAX_BYTES){more=true;reason=size>MAX_BYTES?'document':'bytes';break}
-      bytes+=size;rows.push(display);rawRows.push(raw);sqliteTypes.push(types);nullCells.push(nulls);exact=exact&&rowExact
+      bytes+=size;rows.push(display);rawRows.push(raw);binaryCells.push(binary);sqliteTypes.push(types);nullCells.push(nulls);exact=exact&&rowExact
     }
-    return {columns,rows,rawRows:exact?rawRows:undefined,sqliteTypes,nullCells,nextOffset:more&&rows.length&&reason!=='document'?offset+rows.length:undefined,truncated:more,truncationReason:reason}
+    return {columns,rows,rawRows:exact?rawRows:undefined,...(binaryCells.some(row=>Object.keys(row).length)?{binaryCells}:{}),sqliteTypes,nullCells,nextOffset:more&&rows.length&&reason!=='document'?offset+rows.length:undefined,truncated:more,truncationReason:reason}
   }
   private atomic<T>(fn:()=>T):T{
     this.db.exec('SAVEPOINT dbex_row')

@@ -320,3 +320,11 @@ See [Q1–Q5 refinement evidence and remaining scope](Q1_Q5_REFINEMENT.md). Core
 
 ### Q1–Q5 follow-up
 Added typed record locator, continuous read-only page append, column comments/selected export, nested BSON tree editing, read-only multi-result SQL batch, named encrypted file presets, additional input encodings and full conversion-error reports. The previous Traditional Chinese catalog failure is fixed. See Q1_Q5_REFINEMENT.md for evidence, real server matrix and remaining scope.
+
+### Query history and SQL field refinement
+Previous combined Q1–Q5 candidate d565d8f passed full integration and
+three-platform package CI, all seven real M12 jobs including SQL/MongoDB
+file round trips. New candidate adds execution metadata/history dialog,
+calendar/precise time editing and exact read-only SQL binary previews.
+SQL query edit/retarget wiring and other remaining advanced features are
+not claimed complete. See Q1_Q5_REFINEMENT.md.

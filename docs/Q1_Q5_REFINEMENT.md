@@ -41,3 +41,43 @@ Real isolated SQLite: 50,001 record round-trip (6,616,788 bytes, 3.766 s combine
 Added dedicated MySQL 8.0/8.4, MariaDB 11.8, MongoDB 8.0 mTLS/SOCKS file round-trip fixtures to the existing isolated M12 workflow. They have not run locally. Full combined candidate CI and desktop packaging are still required before merging/releasing.
 
 Outstanding deeper parity: editable SQL query results, query retargeting, mixed read/write script semantics, full CTE and version-aware metadata, history metrics, SQL date/BLOB editor, raw SQL filter text, Excel/SQL/Parquet general import, and consistent Redis/ClickHouse file wizard integration. No claim that Q1–Q5 are fully complete.
+
+## Query history and field refinement — next candidate
+
+The previous exact candidate `d565d8f` passed complete integration/UI CI,
+all three desktop packages, macOS ad-hoc verification, and the seven M12
+real-fixture jobs. MySQL 8.0/8.4 and MariaDB 11.8 each copied 1,001
+records through verified TLS/SOCKS JSONL export/import; UInt64, DECIMAL,
+binary and NULL matched, rollback and transactional replacement passed.
+MongoDB 8.0 copied 1,001 EJSON documents with byte-exact BSON and explicit
+upsert. These are results for the previous commit, not the new candidate.
+
+- Saved query execution history now stores optional execution time, elapsed
+  time, returned preview rows, affected rows, status, stable error code
+  and batch completion counts alongside the existing encrypted snippets.
+  Explicit runs only; paging does not duplicate history. Search, status
+  filter, favorite, delete, copy and explicit load into editor. No automatic
+  execution. Old snippets remain readable; the existing storage retention
+  policy remains. Raw driver diagnostic text is not persisted in the new
+  execution metadata.
+- SQL DATE/DATETIME/TIMESTAMP/TIME field editor uses native date selection
+  and exact time text. Validate Gregorian date and precision without JS
+  timezone conversion or fractional-second rounding. Existing optimistic
+  concurrency and staged write flow are unchanged.
+- MySQL/MariaDB and SQLite complete bounded BLOB previews are returned as
+  separate base64 metadata, aligned with the result rows. Hex/image viewing
+  and copying use this exact preview rather than truncated table text.
+  Binary row originals remain read-only; no SQL binary mutation is claimed.
+- Typecheck and production build passed. 36 focused tests passed (including
+  real SQLite binary read). Both new UI cases passed: history
+  success/failure/filter/load-without-execution and microsecond date editing
+  plus read-only exact hex preview. The latter initially failed because the
+  fixture omitted the name expected by the existing openUsers test helper;
+  corrected fixture and rerun passed.
+- Conservative single-table SQL result edit groundwork was preserved as
+  local WIP commit `3c13098` on `work/q-query-result-edit`. The combined
+  execution-target wiring tool call was blocked; no bypass was attempted.
+  Neither SQL result editing nor query retargeting is included in this
+  candidate. Remaining mixed write scripts, raw SQL browse filter and
+  general Excel/SQL/Parquet file formats are still outstanding. Full exact
+  candidate CI is required before merging or publishing.

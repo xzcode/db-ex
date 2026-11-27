@@ -10,6 +10,19 @@ export const qRefinementTraditional:Record<string,string>={
 }
 
 const followupPairs:Record<string,[string,string]>={
+ '查询执行历史':['Query execution history','查詢執行歷史'],
+ '搜索查询':['Search queries','搜尋查詢'],
+ '执行状态':['Execution status','執行狀態'],
+ '执行时间':['Executed at','執行時間'],
+ '旧版记录':['Legacy entry','舊版記錄'],
+ '暂无执行历史':['No execution history','尚無執行歷史'],
+ '载入到编辑器':['Load into editor','載入編輯器'],
+ '返回行数':['Returned rows','傳回筆數'],
+ '原始时间值':['Database time value','原始時間值'],
+ '按数据库原始时间字符串编辑，不自动转换时区或舍入小数秒。':['Edit the original database time string, without timezone conversion or fractional-second rounding.','依資料庫原始時間字串編輯，不自動轉換時區或捨入小數秒。'],
+ 'INVALID_TEMPORAL: 日期或时间格式无效':['INVALID_TEMPORAL: Invalid date or time format.','INVALID_TEMPORAL: 日期或時間格式無效。'],
+ 'INVALID_QUERY_HISTORY: 执行记录无效':['INVALID_QUERY_HISTORY: Invalid execution record.','INVALID_QUERY_HISTORY: 執行記錄無效。'],
+
  '编辑文档树':['Edit document tree','編輯文件樹'],
  '文本编辑器':['Text editor','文字編輯器'],
  '新增节点':['Add node','新增節點'],

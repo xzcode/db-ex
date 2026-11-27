@@ -16,6 +16,8 @@ import {parseBsonDocument} from '../../shared/bson-display'
 import {compileMongoScript,mongoPageOperation,legacyMongoScript,type MongoScriptPlan} from '../../shared/mongo-query-script'
 import {formatQuery} from '../../shared/query-format'
 import QueryParameterDialog from './QueryParameterDialog.vue'
+import QueryHistoryDialog from './QueryHistoryDialog.vue'
+import {queryExecution,type QueryExecution} from '../../shared/query-history'
 import type {QueryBatchResult} from '../../shared/query-batch'
 import {sqlStatements} from '../../shared/sql-statements'
 import {useQueryRecovery} from '../composables/useQueryRecovery'
@@ -38,6 +40,7 @@ const targets=ref<ExplorerNode[]>([]),legacy=ref<QuerySnippet[]>([]),legacySelec
 const baseline=ref('')
 const editor=ref<InstanceType<typeof CodeEditor>>()
 const parameterDialog=ref(false)
+const historyDialog=ref(false)
 const saveAsOpen=ref(false),copyName=ref('')
 let disposed=false
 const applied=shallowRef<DatabaseOperation>()
@@ -223,6 +226,19 @@ onMounted(()=>{void task(async()=>{
  if(!currentId.value)baseline.value=fingerprint.value
  loaded.value=true
 })})
+async function recordHistory(text:string,execution:QueryExecution,params?:string){
+ if(!preferences.value.records.recordHistory||!text.trim())return
+ await window.dbex.saveSnippet({name:text.trim().split('\n')[0]!.slice(0,80),kind:props.session.kind,database,connectionId:props.session.connectionId,text,parameters:params,...(mode!=='sql'?{mongoKind:'script' as const}:{}),favorite:false,execution}).catch(()=>{})
+}
+function loadHistory(item:QuerySnippet){
+ if(busy.value)return
+ try{
+  // Explicitly adopt text only, not the saved query's name, ID, or target.
+  if(mode==='sql'){sql.value=item.text;parameters.value=item.parameters||(clickhouse?'{}':'[]')}
+  else script.value=item.mongoKind==='script'?item.text:legacyMongoScript(mode,item.entity,item.text)
+  historyDialog.value=false
+ }catch(e){fail(e)}
+}
 function loadLegacy(){
  const item=legacy.value.find(x=>x.id===legacySelected.value)
  if(!item||busy.value)return
@@ -261,6 +277,7 @@ async function executeBatch(){
   const source=editor.value?.selection()||sql.value,params=JSON.parse(parameters.value)
   if(sqlStatements(source,props.session.kind).length<2)throw new Error('SQL_POLICY: 批量查询至少需要两条语句')
   running.value=true;disconnectRequired.value=false;batchResults.value=undefined
+  const started=new Date().toISOString(),clock=performance.now()
   try{
    const batch=await window.dbex.executeReadBatch(props.session.id,{database,text:source,parameters:params,limit:limit.value})
    if(disposed)return
@@ -269,7 +286,8 @@ async function executeBatch(){
    if(batch.items.length)selectBatch(0);else runId.value++
    notice.value=t('已完成 {0} / {1} 条语句',[batch.items.length,batch.total])
    if(batch.error)error.value=batch.error
-  }finally{running.value=false;disconnectRequired.value=false}
+   await recordHistory(source,queryExecution(started,performance.now()-clock,undefined,undefined,batch),JSON.stringify(params))
+  }catch(e){await recordHistory(source,queryExecution(started,performance.now()-clock,undefined,e),JSON.stringify(params));throw e}finally{running.value=false;disconnectRequired.value=false}
  })
 }
 async function execute(paging?:number,selection=false,current=false){
@@ -300,7 +318,11 @@ async function execute(paging?:number,selection=false,current=false){
   }
   running.value=true;disconnectRequired.value=false
   let next:OperationResult
-  try{next=await window.dbex.executeQuery(props.session.id,op)}finally{running.value=false;disconnectRequired.value=false}
+  const started=new Date().toISOString(),clock=performance.now(),historyParameters='parameters'in op?JSON.stringify(op.parameters):undefined
+  try{next=await window.dbex.executeQuery(props.session.id,op)}catch(e){
+   if(paging===undefined)await recordHistory(executedText,queryExecution(started,performance.now()-clock,undefined,e),historyParameters)
+   throw e
+  }finally{running.value=false;disconnectRequired.value=false}
   if(disposed)return
   appliedMongoPlan.value=nextPlan
   if(paging===undefined)appliedPageSize.value=limit.value
@@ -311,11 +333,9 @@ async function execute(paging?:number,selection=false,current=false){
   else visited.value=[...new Set([...visited.value,nextOffset])].sort((a,b)=>a-b)
   result.value=next;offset.value=nextOffset;applied.value=op;runId.value++
   if(next.transaction!==undefined)emit('updateSession',{...props.session,transaction:next.transaction})
+  if(paging===undefined)await recordHistory(executedText,queryExecution(started,next.durationMs??performance.now()-clock,next),historyParameters)
   if(next.disconnected){emit('disconnect');return}
   if(next.message)notice.value=next.message
-  if(preferences.value.records.recordHistory&&mode==='sql'&&(op.action==='mysql.query'||op.action==='clickhouse.query')){
-   await window.dbex.saveSnippet({name:op.sql.trim().split('\n')[0].slice(0,80),kind:props.session.kind,database,connectionId:props.session.connectionId,text:op.sql,parameters:JSON.stringify(op.parameters||(clickhouse?{}:[])),favorite:false}).catch(()=>{})
-  }else if(preferences.value.records.recordHistory&&mode!=='sql'&&paging===undefined){await window.dbex.saveSnippet({name:executedText.trim().split('\n')[0].slice(0,80),kind:props.session.kind,database,connectionId:props.session.connectionId,text:executedText,mongoKind:'script',favorite:false}).catch(()=>{})}
  })
 }
 async function beautify(){
@@ -339,7 +359,7 @@ async function exportQuery(format:'json'|'sql'){if(!currentId.value)return;await
    <button class="btn secondary small" :disabled="busy||!loaded||!canPersist" @click="openSaveAs">{{ t('另存为') }}</button>
    <button class="btn secondary small" :disabled="busy||!currentId" @click="exportQuery('json')">{{ t('导出查询') }}</button>
    <button v-if="mode==='sql'" class="btn secondary small" :disabled="busy||!currentId" @click="exportQuery('sql')">{{ t('导出 SQL') }}</button>
-   <span class="toolbar-spacer"></span><label class="inline-field" v-if="legacy.length">{{ t('历史 / 收藏') }}<select v-model="legacySelected" :disabled="busy"><option value="">{{ t('未选择对象') }}</option><option v-for="item in legacy" :key="item.id" :value="item.id">{{ item.name }}</option></select></label><button v-if="legacy.length" class="btn secondary small" :disabled="busy||!legacySelected" @click="loadLegacy">{{ t('载入') }}</button>
+   <button class="btn secondary small" :disabled="busy||!loaded" @click="historyDialog=true">{{t('查询执行历史')}}</button><span class="toolbar-spacer"></span><label class="inline-field" v-if="legacy.length">{{ t('历史 / 收藏') }}<select v-model="legacySelected" :disabled="busy"><option value="">{{ t('未选择对象') }}</option><option v-for="item in legacy" :key="item.id" :value="item.id">{{ item.name }}</option></select></label><button v-if="legacy.length" class="btn secondary small" :disabled="busy||!legacySelected" @click="loadLegacy">{{ t('载入') }}</button>
   </div>
   <div v-if="error" class="inline-message error" role="alert">{{ localize(error) }}</div><div v-if="notice" class="inline-message notice" role="status">{{ localize(notice) }}</div>
   <div v-if="!canPersist" class="compact-help">{{ t('请先保存数据库连接，再保存查询。') }}</div>
@@ -371,6 +391,7 @@ async function exportQuery(format:'json'|'sql'){if(!currentId.value)return;await
    </template>
    <template #result><div v-if="batchResults" class="batch-results-strip"><button v-for="(item,i) in batchResults.items" :key="i" :title="item.sql" :class="['btn','secondary','small',{selected:batchIndex===i}]" @click="selectBatch(i)">{{t('语句结果')}} {{i+1}}</button><span class="muted-text">{{batchResults.items.length}} / {{batchResults.total}}</span><span v-if="batchResults.failedAt" class="danger-text">{{t('停止于语句')}} {{batchResults.failedAt}}</span></div><QueryResultPanel :result="result" :kind="session.kind" :offset="offset" :query-text="executedQuery" :busy="busy" :active="active" :error="error" :notice="notice" :can-back="!batchResults&&!clickhouse&&canPageBack" :can-first="!batchResults&&!clickhouse&&canPageBack" :can-next="!batchResults&&!clickhouse&&result?.nextOffset!==undefined" :can-refresh="!batchResults&&canRefresh" :editable="canEditResult" :can-add="canAddResult" :run-id="runId" :source-label="sourceLabel" @page="page" @edit="editResult" @add="addResult" @remove="removeResult" @draft="draftResult" @collapse="setLayout('editor')"/></template>
   </QuerySplit>
+  <QueryHistoryDialog v-if="historyDialog&&active" :session="session" :database="database" @close="historyDialog=false" @load="loadHistory"/>
   <QueryParameterDialog v-if="parameterDialog&&active" :model-value="parameters" :named="clickhouse" @close="parameterDialog=false" @apply="value=>{parameters=value;parameterDialog=false}"/>
   <Teleport to="body"><div v-if="resultEdit&&active" class="modal-backdrop"><section class="dialog query-result-edit" role="dialog" :aria-label="t(resultEdit.mode==='insert'?'新增文档':'编辑文档')">
    <header class="dialog-header"><div><span class="eyebrow">{{sourceLabel}} / {{resultEdit.entity}}</span><h2>{{t(resultEdit.mode==='insert'?'新增文档':'编辑文档')}}</h2></div><button class="icon-button" :disabled="busy" @click="resultEdit=undefined">×</button></header>

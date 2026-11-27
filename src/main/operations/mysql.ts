@@ -448,6 +448,7 @@ export class MysqlOperations {
   private result(data: QueryData): OperationResult {
     const records = this.records(data)
     const rows = records.map(row => Object.fromEntries(data.columns.map(column => [column, displayCell(row[column])])))
+    const binaryCells=records.map(row=>Object.fromEntries(Object.entries(row).filter(([,value])=>Buffer.isBuffer(value)&&value.length<=MAX_VALUE_BYTES).map(([key,value])=>[key,(value as Buffer).toString('base64')])))
     const editable = !records.some(row => Object.values(row).some(value => Buffer.isBuffer(value)))
     const rawRows: SqlRow[] | undefined = editable ? records.map(row => Object.fromEntries(Object.entries(row).map(([key, value]) => {
       if (value === null || value === undefined) return [key, null]
@@ -457,7 +458,7 @@ export class MysqlOperations {
       return [key, value]
     })) as SqlRow) : undefined
     return {
-      columns: data.columns, rows, rawRows, columnTypes: data.columnTypes, nullCells: data.values.map(values => values.flatMap((value, index) => value === null || value === undefined ? [index] : [])), truncated: data.truncated,truncationReason:data.truncationReason,
+      columns: data.columns, rows, rawRows,...(binaryCells.some(row=>Object.keys(row).length)?{binaryCells}:{}), columnTypes: data.columnTypes, nullCells: data.values.map(values => values.flatMap((value, index) => value === null || value === undefined ? [index] : [])), truncated: data.truncated,truncationReason:data.truncationReason,
       message: data.truncated ? '返回量达到上限；请缩小查询范围后重试' : editable ? undefined : '含二进制字段的结果仅供浏览，避免从编码预览误写数据',
     }
   }

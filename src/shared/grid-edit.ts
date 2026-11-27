@@ -1,3 +1,4 @@
+import {sqlTemporalKind,validateSqlTemporal} from './sql-temporal'
 import type {DatabaseKind,OperationResult,SqlValue,SqlRow,SqlGridEdit,MongoGridEdit} from './types'
 import {parseBsonDocument} from './bson-display'
 import {childType,typeName} from './bson-types'
@@ -62,6 +63,7 @@ export function sqlCellValue(kind:DatabaseKind,type:string,text:string,original:
   }
   throw new Error('表格编辑值与原始字段类型不匹配。')
  }
+ if(sqlTemporalKind(type))return value===String(original)?value:validateSqlTemporal(type,value)
  if(/^(?:TINYINT|SMALLINT|MEDIUMINT|INT|INTEGER|BIGINT|YEAR)\b/i.test(type)){
   if(!/^-?\d+$/.test(value))throw new Error('表格编辑值与原始字段类型不匹配。')
   return typeof original==='number'&&Number.isSafeInteger(Number(value))?Number(value):value

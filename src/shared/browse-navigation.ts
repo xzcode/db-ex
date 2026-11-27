@@ -24,5 +24,5 @@ export function appendBrowsePage(first:OperationResult,next:OperationResult,kind
  if(!mongo&&JSON.stringify(first.columnTypes)!==JSON.stringify(next.columnTypes))throw new Error('INVALID_FILTER: 结果字段已变化，请重新加载')
  const columns=mongo?[...new Set([...first.columns,...next.columns])]:first.columns
  const join=<T>(a:T[]|undefined,b:T[]|undefined)=>a&&b?[...a,...b]:undefined
- return {...next,columns,rows:[...first.rows,...next.rows],documents:join(first.documents,next.documents),bsonTypes:join(first.bsonTypes,next.bsonTypes),rawRows:join(first.rawRows,next.rawRows),sqliteTypes:join(first.sqliteTypes,next.sqliteTypes),nullCells:join(first.nullCells,next.nullCells)}
+ return {...next,columns,rows:[...first.rows,...next.rows],documents:join(first.documents,next.documents),bsonTypes:join(first.bsonTypes,next.bsonTypes),rawRows:join(first.rawRows,next.rawRows),binaryCells:first.binaryCells||next.binaryCells?[...(first.binaryCells||first.rows.map(()=>({}))),...(next.binaryCells||next.rows.map(()=>({})))]:undefined,sqliteTypes:join(first.sqliteTypes,next.sqliteTypes),nullCells:join(first.nullCells,next.nullCells)}
 }

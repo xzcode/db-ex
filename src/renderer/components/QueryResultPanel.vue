@@ -7,11 +7,13 @@ import {mongoFieldText} from '../../shared/bson-editor'
 import {csvFromRows} from '../data-format'
 import ResultGrid from './ResultGrid.vue'
 import BsonDocumentTree from './BsonDocumentTree.vue'
+import FieldValueDialog from './FieldValueDialog.vue'
 const props=defineProps<{result?:OperationResult;kind:DatabaseKind;offset:number;queryText:string;busy:boolean;active:boolean;error:string;notice:string;canBack:boolean;canFirst:boolean;canNext:boolean;canRefresh?:boolean;editable?:(index:number)=>boolean;canAdd?:boolean;runId:number;sourceLabel:string}>()
 const emit=defineEmits<{page:[direction:'first'|'prev'|'next'|'refresh'];edit:[index:number];add:[];remove:[index:number];draft:[index:number,action:'duplicate'|'null'|'empty',field?:string];collapse:[]}>()
 type Snapshot={id:number;data:OperationResult;offset:number;queryText:string;sourceLabel:string;time:number}
 const pins=ref<Snapshot[]>([]),pinId=ref<number>(),tab=ref<'messages'|'summary'|'data'>('data'),view=ref<'grid'|'tree'|'json'>('grid')
 const selected=ref(-1),colors=ref(true),cell=ref<{title:string;text:string;document?:string;index:number}>(),localError=ref('')
+const binaryCell=ref<{field:string;value:string}>()
 let nextId=0
 const pinned=computed(()=>pins.value.find(p=>p.id===pinId.value))
 const data=computed(()=>pinned.value?.data||props.result)
@@ -26,8 +28,8 @@ const selectedRaw=computed(()=>document.value||JSON.stringify(data.value?.rawRow
 const jsonText=computed(()=>data.value?resultJSON(data.value):'')
 watch(()=>props.runId,()=>{pinId.value=undefined;tab.value=props.error?'messages':props.result?.rows.length?'data':'summary';selected.value=props.result?.rows.length?0:-1;cell.value=undefined;localError.value=''})
 watch(()=>props.error,v=>{if(v&&!pinned.value)tab.value='messages'})
-watch(data,v=>{selected.value=v?.rows.length?0:-1;cell.value=undefined;if(!v?.documents&&view.value==='tree')view.value='grid'})
-watch(()=>props.active,active=>{if(!active)cell.value=undefined})
+watch(data,v=>{selected.value=v?.rows.length?0:-1;cell.value=undefined;binaryCell.value=undefined;if(!v?.documents&&view.value==='tree')view.value='grid'})
+watch(()=>props.active,active=>{if(!active){cell.value=undefined;binaryCell.value=undefined}})
 function pin(){
  if(!props.result||pinned.value||pins.value.length>=maxPins)return
  pins.value.push({id:++nextId,data:JSON.parse(JSON.stringify(props.result)),offset:props.offset,queryText:props.queryText,sourceLabel:props.sourceLabel,time:Date.now()})
@@ -55,6 +57,7 @@ function exportRows(indices:number[]){
 function viewRow(index:number,field?:string){
  if(!data.value?.rows[index])return
  selected.value=index
+ if(field!==undefined&&data.value.binaryCells?.[index]&&Object.hasOwn(data.value.binaryCells[index]!,field)){binaryCell.value={field,value:JSON.stringify({$dbexBinary:data.value.binaryCells[index]![field]})};return}
  const raw=data.value.documents?.[index],row=data.value.rawRows?.[index]||data.value.rows[index]!
  const value=field===undefined?raw||JSON.stringify(row,null,2):raw?mongoFieldText(raw,data.value.bsonTypes?.[index],field)??String(row[field]??''):row[field]===null?'NULL':String(row[field]??'')
  cell.value={title:field||t(raw?'查看文档':'查看记录'),text:value,document:field===undefined?raw:undefined,index}
@@ -127,6 +130,7 @@ function edit(index:number){if(!pinned.value&&props.editable?.(index))emit('edit
     </div>
    </footer>
   </template>
+  <FieldValueDialog v-if="binaryCell&&active" :field="binaryCell.field" type="BINARY" :value="binaryCell.value" :editable="false" :exact="true" :mongo="false" @close="binaryCell=undefined"/>
   <Teleport to="body"><div v-if="cell&&active" class="modal-backdrop"><section class="dialog query-cell-dialog" role="dialog" :aria-label="cell.title"><header class="dialog-header"><h2>{{cell.title}}</h2><button class="icon-button" :aria-label="t('关闭')" @click="cell=undefined">×</button></header><BsonDocumentTree v-if="cell.document" :document="cell.document" :metadata="data?.bsonTypes?.[cell.index]"/><pre v-else>{{cell.text}}</pre><footer class="dialog-footer"><button class="btn secondary" @click="actionCopy(cell.text)">{{t('复制')}}</button><button class="btn primary" @click="cell=undefined">{{t('关闭')}}</button></footer></section></div></Teleport>
  </section>
 </template>

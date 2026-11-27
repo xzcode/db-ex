@@ -201,6 +201,7 @@ function rememberGridLayout(value:GridLayout){lastGridLayout=value}
 const gridLayoutScope=computed(()=>JSON.stringify([props.session.connectionId||props.session.id,props.session.kind,entity.value.database,entity.value.entity,'browse']))
 const gridCanWrite=computed(()=>tab.value==='data'&&!busy.value&&!edit.value&&canWrite.value&&editableRows.value&&supportsRecordMutation('update')&&(isMysql.value||isMongo.value)&&!gridUncertain.value)
 function exactCell(row:number,field:string){
+ const binary=result.value?.binaryCells?.[row]?.[field];if(typeof binary==='string')return 'base64:'+binary
  const doc=result.value?.documents?.[row]
  if(doc){const obj=parseBsonDocument(doc);if(obj&&Object.hasOwn(obj,field))return typeof obj[field]==='string'?String(obj[field]):JSON.stringify(obj[field])}
  const raw=result.value?.rawRows?.[row];if(raw&&Object.hasOwn(raw,field))return raw[field]===null?'NULL':String(raw[field])
@@ -209,6 +210,8 @@ function exactCell(row:number,field:string){
 function openField(row:number,field:string){
  if(!result.value||busy.value||!finishInline()||columnDraft.value)return
  const candidate=fieldCellSpec(result.value,structure.value,props.session.kind,primaryKeys.value,row,field)
+ const binary=result.value.binaryCells?.[row]?.[field]
+ if(typeof binary==='string'){fieldDialog.value={row,field,type:'BINARY',value:JSON.stringify({$dbexBinary:binary}),editable:false,exact:true};return}
  const raw=exactCell(row,field),draft=gridDrafts.value.find(d=>d.row===row&&d.field===field)
  // Composite BSON uses explicit canonical EJSON, including null and binary.
  const mongoDoc=result.value.documents?.[row],doc=mongoDoc?parseBsonDocument(mongoDoc):undefined

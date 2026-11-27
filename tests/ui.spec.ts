@@ -112,6 +112,10 @@ async function installBridge(page: Page) {
 
         if(op.action==='mongo.createDatabase'||op.action==='mysql.createDatabase'){additionalDbs[id]=[...(additionalDbs[id]||[]),op.database];return {columns:[],rows:[],message:'数据库已创建'}}
         if(op.action==='mongo.dropDatabase'||op.action==='mysql.dropDatabase'){additionalDbs[id]=(additionalDbs[id]||[]).filter(name=>name!==op.database);return {columns:[],rows:[],message:'数据库已删除'}}
+        if (op.action === 'mysql.structure' && (window as any).__dbexTemporalFixture) return { ...grid([{name:'id',type:'bigint',key:'PRI'},{name:'name',type:'varchar(255)',key:''},{name:'stamp',type:'DATETIME(6)',key:''}]),primaryKeys:['id']}
+        if (op.action === 'mysql.browse' && !op.countOnly && (window as any).__dbexTemporalFixture) {const values=[{id:'1',name:'Ada',stamp:'2024-02-29 12:34:56.123456'}];return {...grid(values),rawRows:values,columnTypes:['BIGINT','VARCHAR','DATETIME'],nullCells:[[]]}}
+        if(op.action==='mysql.query'&&op.sql?.includes('history_failure'))throw new Error('SQL_POLICY: fixture failure')
+        if(op.action==='mysql.query'&&op.sql?.includes('blob_preview'))return {columns:['payload'],rows:[{payload:'base64:AP8B'}],columnTypes:['BLOB'],binaryCells:[{payload:'AP8B'}],queryReadOnly:true,durationMs:3}
         if (op.action === 'mysql.structure') return { ...grid([{ name: 'id', type: 'int', key: 'PRI' }, { name: 'name', type: 'varchar', key: '' }]), primaryKeys: ['id'] }
         if (op.action === 'mysql.browse' && op.countOnly) return { columns: [], rows: [], totalRows: '501', countLimited: false }
         if (op.action === 'mongo.count') return { columns: [], rows: [], totalRows: '401', countLimited: false,queryReadOnly:true }
@@ -1872,4 +1876,61 @@ test('Q follow-up: named file preset saves format and mapping, requires fresh pr
  await expect(d.getByLabel('文件编码',{exact:true})).toHaveValue('gb18030')
  await d.getByRole('button',{name:'选择数据文件',exact:true}).click()
  await expect(d.locator('.file-sample')).toContainText('New record')
+})
+
+
+test('Q history: success and failure metrics, filter and load without executing',async({page})=>{
+ await connect(page,'MySQL Local')
+ await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ await page.locator('[data-object-kind="query-folder"]').click()
+ await page.locator('.object-list-panel:visible').getByRole('button',{name:/新建查询/}).click()
+ const editor=page.locator('.saved-query-editor:visible')
+ const input='.saved-query-editor:visible .query-editor .monaco-editor'
+ await replaceEditor(page,input,'SELECT 1 AS history_success')
+ await editor.getByRole('button',{name:'运行选中 / 全部',exact:true}).click()
+ await expect(editor.locator('.query-result-panel .data-table')).toBeVisible()
+ await replaceEditor(page,input,'SELECT 1 AS history_failure')
+ await editor.getByRole('button',{name:'运行选中 / 全部',exact:true}).click()
+ await expect(editor.locator('.inline-message.error').first()).toContainText('SQL_POLICY')
+ await editor.getByRole('button',{name:'查询执行历史',exact:true}).click()
+ const dialog=page.getByRole('dialog',{name:'查询执行历史'})
+ await expect(dialog.locator('tbody')).toContainText('history_success')
+ await expect(dialog.locator('tbody')).toContainText('history_failure')
+ await expect(dialog.locator('tbody')).toContainText('SQL_POLICY')
+ await expect(dialog.locator('tbody')).toContainText('4 ms')
+ await dialog.getByLabel('执行状态',{exact:true}).selectOption('failed')
+ await expect(dialog.locator('tbody tr')).toHaveCount(1)
+ await dialog.getByLabel('执行状态',{exact:true}).selectOption('success')
+ await dialog.locator('tbody tr').first().click()
+ const count=await page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.query').length)
+ await dialog.getByRole('button',{name:'载入到编辑器',exact:true}).click()
+ await expect(dialog).toHaveCount(0)
+ await expect(editor.locator('.view-lines').first()).toContainText('history_success')
+ expect(await page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.query').length)).toBe(count)
+})
+
+test('Q fields: datetime precision stages safely and binary result opens exact hex read-only',async({page})=>{
+ await page.evaluate(()=>{(window as any).__dbexTemporalFixture=true})
+ await connect(page,'MySQL Local');await openUsers(page)
+ const w=page.locator('.workbench:visible')
+ await w.getByRole('button',{name:'只读 · 启用写入',exact:true}).click()
+ await w.locator('tr[data-row-index="0"] [data-grid-field="stamp"]').click()
+ await w.getByRole('button',{name:'字段编辑器',exact:true}).click()
+ const field=page.getByRole('dialog',{name:'字段编辑器'})
+ await expect(field.getByLabel('日期',{exact:true})).toHaveValue('2024-02-29')
+ await expect(field.getByLabel('时间',{exact:true})).toHaveValue('12:34:56.123456')
+ await field.getByLabel('时间',{exact:true}).fill('09:10:11.000001')
+ await field.getByRole('button',{name:'暂存修改',exact:true}).click()
+ await w.getByRole('button',{name:'保存全部修改',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.updateBatch').at(-1)?.edits[0]?.changes.stamp)).toBe('2024-02-29 09:10:11.000001')
+ await page.locator('.resource-node[data-object-kind="query-folder"]').click()
+ await page.locator('.object-list-panel:visible').getByRole('button',{name:/新建查询/}).click()
+ const editor=page.locator('.saved-query-editor:visible')
+ await replaceEditor(page,'.saved-query-editor:visible .query-editor .monaco-editor','SELECT 1 AS blob_preview')
+ await editor.getByRole('button',{name:'运行选中 / 全部',exact:true}).click()
+ await editor.locator('tr[data-row-index="0"] [data-grid-field="payload"]').click()
+ await editor.getByRole('button',{name:'字段编辑器',exact:true}).click()
+ await expect(field.locator('textarea')).toHaveValue('00 ff 01')
+ await expect(field.locator('textarea')).toHaveAttribute('readonly','')
+ await expect(field.getByRole('button',{name:'暂存修改',exact:true})).toHaveCount(0)
 })

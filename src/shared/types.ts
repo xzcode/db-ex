@@ -126,6 +126,8 @@ export interface OperationResult extends DataPreview {
   ttl?: number
   length?: number
   rawRows?: SqlRow[]
+  /** Complete bounded binary cell previews; never editable SQL originals. */
+  binaryCells?:Record<string,string>[]
   documents?: string[]
   /** Per-document metadata aligned with rows and canonical Extended JSON. */
   bsonTypes?: BsonTypeBranch[]
@@ -211,6 +213,7 @@ export type ClickHouseOperation =
   | ({action:'clickhouse.insert';rows:SqlRow[]} & Entity & Confirmed)
 export type DatabaseOperation = MysqlOperation | MongoOperation | RedisOperation | ClickHouseOperation
 export interface QuerySnippet {
+  execution?:import('./query-history').QueryExecution
   /** Optional fields keep existing encrypted history files compatible. */
   mongoKind?: 'query' | 'aggregation' | 'script'
   parameters?:string

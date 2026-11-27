@@ -53,6 +53,7 @@ test('SQLite recognizes integer bindings, named indexes, exact Int64 and BLOB wi
   assert.deepEqual(result.sqliteTypes?.map(row=>row[1]),['INTEGER','BLOB'])
   assert.equal(result.rows[0]?.value,'9223372036854775807')
   assert.equal(result.rows[1]?.value,'base64:AAH/')
+  assert.deepEqual(JSON.parse(JSON.stringify(result.binaryCells)),[{}, {value:'AAH/'}])
   assert.equal(result.rawRows,undefined)
   const structure=db.execute({action:'mysql.structure',database:'main',entity:'t'},read)
   assert.match(structure.rows.find(row=>row.name==='note')?.indexes||'',/idx_note/)
