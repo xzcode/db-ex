@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import {inferCteMetadata} from '../metadata-completion'
 import { t } from '../i18n'
 import { currentSqlStatement } from '../../shared/sql-statements'
 import { sqlContext,sqlKeywords,dialectFunctions,sqlFunctionArgs,mongoSuggestions,redisSuggestions } from '../../shared/editor-completion'
@@ -150,9 +151,17 @@ onMounted(() => {
         if(language==='sql'){
           const context=sqlContext(prefix)
           const quote=(name:string)=>props.sqlDialect==='clickhouse'?'"'+name.replaceAll('\\','\\\\').replaceAll('"','\\"')+'"':props.sqlDialect==='sqlite'?'"'+name.replaceAll('"','""')+'"':'\x60'+name.replaceAll('\x60','\x60\x60')+'\x60'
-          add(props.tableSuggestions||[],kinds.Class,context==='table'?'0':'2',quote)
+          // Use the current Monaco buffer, not only Vue's asynchronously
+          // updated props: completion can trigger on the same keystroke as '.'.
+          const ctes=inferCteMetadata(model.getValue())
+          const qualified={...props.qualifiedSuggestions,...ctes.fields}
           const qualifier=/([A-Za-z_][\w$]*)\.[\w$]*$/.exec(prefix)?.[1]
-          add(qualifier&&props.qualifiedSuggestions?.[qualifier]?props.qualifiedSuggestions[qualifier]!:props.suggestions||[],kinds.Field,context==='field'||qualifier?'0':'2',quote)
+          if(qualifier&&Object.hasOwn(qualified,qualifier)){
+            add(qualified[qualifier]!,kinds.Field,'0',quote)
+            return {suggestions:entries}
+          }
+          add([...(props.tableSuggestions||[]),...ctes.names],kinds.Class,context==='table'?'0':'2',quote)
+          add([...(props.suggestions||[]),...Object.values(ctes.fields).flat()],kinds.Field,context==='field'||qualifier?'0':'2',quote)
           add(sqlKeywords,kinds.Keyword,'3')
           for(const name of dialectFunctions(props.sqlDialect,props.serverVersion)){
            const args=sqlFunctionArgs(name),snippet=name+'('+args.map((a,i)=>'$'+'{'+(i+1)+':'+a+'}').join(', ')+')$0'

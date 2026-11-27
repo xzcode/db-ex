@@ -15,13 +15,44 @@ export function sqlContext(prefix:string):'table'|'field'|'general' {
 const mysqlExtra=['CONCAT','CONCAT_WS','SUBSTRING','SUBSTRING_INDEX','CHAR_LENGTH','OCTET_LENGTH','LOCATE','INSTR','LPAD','RPAD','LTRIM','RTRIM','LEFT','RIGHT','REVERSE','REPEAT','SPACE','STRCMP','ASCII','CHAR','HEX','UNHEX','TO_BASE64','FROM_BASE64','FORMAT','FIND_IN_SET','REPLACE','REGEXP_REPLACE','REGEXP_SUBSTR','REGEXP_LIKE','CAST','CONVERT','IF','IFNULL','GREATEST','LEAST','CEIL','CEILING','FLOOR','TRUNCATE','MOD','POW','POWER','SQRT','LOG','LOG10','EXP','SIGN','RAND','PI','NOW','CURRENT_DATE','CURRENT_TIMESTAMP','CURDATE','CURTIME','UTC_DATE','UTC_TIMESTAMP','DATE_ADD','DATE_SUB','DATEDIFF','TIMESTAMPDIFF','TIMESTAMPADD','DATE_FORMAT','STR_TO_DATE','UNIX_TIMESTAMP','FROM_UNIXTIME','YEAR','MONTH','DAY','HOUR','MINUTE','SECOND','DAYOFWEEK','WEEK','LAST_DAY','GROUP_CONCAT','JSON_OBJECT','JSON_ARRAY','JSON_EXTRACT','JSON_UNQUOTE','JSON_SET','JSON_INSERT','JSON_REPLACE','JSON_REMOVE','JSON_CONTAINS','JSON_CONTAINS_PATH','JSON_LENGTH','JSON_KEYS','JSON_TYPE','JSON_VALID','JSON_SEARCH','JSON_ARRAYAGG','JSON_OBJECTAGG','JSON_TABLE','ROW_NUMBER','RANK','DENSE_RANK','LAG','LEAD','NTILE','FIRST_VALUE','LAST_VALUE','NTH_VALUE','STDDEV_POP','VAR_POP','MD5','SHA1','SHA2','UUID','VERSION','DATABASE','CURRENT_USER','CONNECTION_ID'] as const
 const sqliteExtra=['abs','changes','char','coalesce','concat','concat_ws','format','glob','hex','instr','length','likelihood','likely','lower','ltrim','max','min','nullif','quote','random','randomblob','replace','round','rtrim','sign','soundex','substr','substring','total_changes','trim','typeof','unhex','unicode','unlikely','upper','zeroblob','date','time','timediff','json','json_array','json_array_length','json_error_position','json_insert','json_object','json_patch','json_quote','json_remove','json_replace','json_set','json_type','json_each','json_tree','json_group_array','json_group_object','row_number','rank','dense_rank','lag','lead','ntile','first_value','last_value','nth_value','group_concat','total'] as const
 const chExtra=['toInt8','toInt16','toInt32','toInt64','toInt128','toUInt8','toUInt16','toUInt32','toUInt128','toFloat32','toFloat64','toDecimal32','toDecimal128','toDecimal256','toDate32','toDateTime64','toUnixTimestamp','parseDateTimeBestEffort','formatDateTime','dateTrunc','toStartOfDay','toStartOfWeek','toStartOfMonth','toYear','toMonth','toDayOfMonth','addDays','subtractDays','multiIf','if','coalesce','assumeNotNull','isNull','isNotNull','nullIf','arrayMap','arrayFilter','arrayReduce','arrayDistinct','arraySort','arrayConcat','arrayFlatten','arrayExists','arrayAll','arrayElement','arrayEnumerate','arraySum','length','empty','notEmpty','has','hasAny','hasAll','splitByChar','splitByString','concat','substring','replaceAll','match','extract','position','lowerUTF8','upperUTF8','JSONExtract','JSONExtractString','JSONExtractUInt','JSONHas','JSONExtractRaw','isValidJSON','cityHash64','sipHash64','MD5','SHA256','uniqCombined','topK','any','anyLast','argMaxIf','groupUniqArray','groupArrayIf','minIf','maxIf','avgIf','quantileExact','median','stddevPop','row_number','rank','dense_rank','lagInFrame','leadInFrame'] as const
+const windowFunctions=new Set(['ROW_NUMBER','RANK','DENSE_RANK','LAG','LEAD','NTILE','FIRST_VALUE','LAST_VALUE','NTH_VALUE'])
+function versionAtLeast(version:string|undefined,minimum:[number,number,number],dialect?:string){
+ if(!version)return true
+ const value=dialect==='mariadb'?version.replace(/^5\.5\.5-/,''):version
+ const match=/^(\d+)\.(\d+)(?:\.(\d+))?/.exec(value.trim())
+ if(!match)return true
+ const parts=[Number(match[1]),Number(match[2]),Number(match[3]||0)]
+ for(let i=0;i<3;i++){if(parts[i]!==minimum[i])return parts[i]!>minimum[i]!}
+ return true
+}
 export function dialectFunctions(dialect?:string,version?:string):string[]{
  const common=[...sqlFunctions]
- if(dialect==='sqlite')return [...new Set([...common,...sqliteFunctions,...sqliteExtra])]
+ const supports=(minimum:[number,number,number])=>versionAtLeast(version,minimum,dialect)
+ if(dialect==='sqlite')return [...new Set([...common,...sqliteFunctions,...sqliteExtra])].filter(n=>{
+  if(windowFunctions.has(n.toUpperCase()))return supports([3,25,0])
+  if(['concat','concat_ws'].includes(n))return supports([3,44,0])
+  if(n==='timediff')return supports([3,43,0])
+  if(n==='json_error_position')return supports([3,42,0])
+  if(n==='unhex')return supports([3,41,0])
+  if(n==='unixepoch')return supports([3,38,0])
+  return true
+ })
  if(dialect==='clickhouse')return [...new Set([...common,...clickHouseFunctions,...chExtra])]
- // MariaDB doesn't implement MySQL's REGEXP_LIKE or all identical JSON functions.
- const mysql=mysqlExtra.filter(n=>dialect!=='mariadb'||!['REGEXP_LIKE','REGEXP_SUBSTR','JSON_TABLE'].includes(n))
+ const mysql=mysqlExtra.filter(n=>{
+  if(dialect==='mariadb'){
+   if(n==='REGEXP_LIKE')return false
+   if(n==='JSON_TABLE')return !!version&&supports([10,6,0])
+   if(n==='JSON_ARRAYAGG'||n==='JSON_OBJECTAGG')return supports([10,5,0])
+   if(windowFunctions.has(n))return supports([10,2,0])
+   return true
+  }
+  if(windowFunctions.has(n))return supports([8,0,2])
+  if(['REGEXP_REPLACE','REGEXP_SUBSTR','REGEXP_LIKE','JSON_TABLE'].includes(n))return supports([8,0,4])
+  if(n==='JSON_ARRAYAGG'||n==='JSON_OBJECTAGG')return supports([5,7,22])
+  if(n.startsWith('JSON_'))return supports([5,7,8])
+  return true
+ })
  return [...new Set([...common,...mysql])]
 }
-const functionArgs:Record<string,string[]>={COUNT:['expression'],SUM:['expression'],AVG:['expression'],MIN:['expression'],MAX:['expression'],CONCAT:['string','string'],CONCAT_WS:['separator','string','string'],COALESCE:['expression','fallback'],IF:['condition','true_value','false_value'],IFNULL:['expression','fallback'],NULLIF:['expression','expression'],ROUND:['number','digits'],SUBSTRING:['string','start','length'],SUBSTR:['string','start','length'],JSON_EXTRACT:['document','path'],JSON_SET:['document','path','value'],JSON_OBJECT:['key','value'],JSON_ARRAY:['value'],DATE_FORMAT:['date','format'],TIMESTAMPDIFF:['unit','start','end'],DATEDIFF:['date1','date2'],REPLACE:['string','from','to'],REGEXP_REPLACE:['string','pattern','replacement'],LAG:['expression','offset'],LEAD:['expression','offset'],ARRAYMAP:['lambda','array'],ARRAYFILTER:['lambda','array'],JSONEXTRACTSTRING:['json','key'],TODATETIME64:['value','precision'],QUANTILE:['expression'],STRFTIME:['format','time_value'],JSON_EXTRACT_STRING:['document','path']}
+const functionArgs:Record<string,string[]>={COUNT:['expression'],SUM:['expression'],AVG:['expression'],MIN:['expression'],MAX:['expression'],CONCAT:['string','string'],CONCAT_WS:['separator','string','string'],COALESCE:['expression','fallback'],IF:['condition','true_value','false_value'],IFNULL:['expression','fallback'],NULLIF:['expression','expression'],ROUND:['number','digits'],SUBSTRING:['string','start','length'],SUBSTR:['string','start','length'],JSON_EXTRACT:['document','path'],JSON_SET:['document','path','value'],JSON_OBJECT:['key','value'],JSON_ARRAY:['value'],DATE_FORMAT:['date','format'],TIMESTAMPDIFF:['unit','start','end'],DATEDIFF:['date1','date2'],REPLACE:['string','from','to'],REGEXP_REPLACE:['string','pattern','replacement'],LAG:['expression','offset'],LEAD:['expression','offset'],ARRAYMAP:['lambda','array'],ARRAYFILTER:['lambda','array'],JSONEXTRACTSTRING:['json','key'],TODATETIME64:['value','precision'],QUANTILE:['expression'],STRFTIME:['format','time_value'],JSON_EXTRACT_STRING:['document','path'],JSON_ARRAYAGG:['expression'],JSON_OBJECTAGG:['key','value'],JSON_CONTAINS:['document','candidate'],JSON_CONTAINS_PATH:['document','one_or_all','path'],REGEXP_SUBSTR:['string','pattern'],REGEXP_LIKE:['string','pattern'],TIMESTAMPADD:['unit','interval','datetime'],DATE_ADD:['date','interval'],DATE_SUB:['date','interval'],CONVERT:['expression','type'],CAST:['expression AS type'],LEAST:['expression','expression'],GREATEST:['expression','expression'],GROUP_CONCAT:['expression'],ARRAYREDUCE:['aggregate_function','array'],DATE_TRUNC:['unit','datetime'],UNIXEPOCH:['time_value']}
 export function sqlFunctionArgs(name:string){return functionArgs[name.toUpperCase()]||[]}

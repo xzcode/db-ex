@@ -1,6 +1,6 @@
 import type {DatabaseKind,OperationResult} from './types'
 import {protectedDatabase} from './database-admin'
-import {fieldCellSpec,prepareGridEdits,type CellDraft} from './grid-edit'
+import {fieldCellSpec,gridCellSpec,cellDraftKey,prepareGridEdits,type CellDraft} from './grid-edit'
 export interface SqlResultTarget {database:string;entity:string}
 /** Only a plain SELECT * from one actual table. Conservative eligibility:
  * no aliases, derived tables, comments, set operations, or projections.
@@ -48,4 +48,21 @@ export function prepareSqlResultEdit(result:OperationResult,structure:OperationR
  }
  if(!drafts.length)return undefined
  return prepareGridEdits(result,structure,kind,structure.primaryKeys!,drafts).sqlEdits[0]
+}
+
+
+/** Validate the entire paste/replacement before publishing any local draft. */
+export function stageSqlResultDrafts(result:OperationResult,structure:OperationResult,kind:DatabaseKind,current:CellDraft[],incoming:CellDraft[]){
+ if(!incoming.length)throw Error('选区含不可编辑字段或超出当前页，未暂存任何修改。')
+ const next=new Map(current.map(d=>[cellDraftKey(d.row,d.field),d]))
+ for(const d of incoming){
+  const spec=canEditSqlRow(result,structure,d.row)?gridCellSpec(result,structure,kind,structure.primaryKeys!,d.row,d.field):undefined
+  if(!spec||typeof d.text!=='string'||d.format)throw Error('选区含不可编辑字段或超出当前页，未暂存任何修改。')
+  const key=cellDraftKey(d.row,d.field)
+  if(d.text===spec.text)next.delete(key)
+  else next.set(key,{row:d.row,field:d.field,text:d.text})
+ }
+ const drafts=[...next.values()]
+ if(drafts.length)prepareGridEdits(result,structure,kind,structure.primaryKeys!,drafts)
+ return drafts
 }

@@ -13,7 +13,7 @@ import type { SqliteProcessFactory } from '../operations/sqlite-client'
 import { databaseError, resourceName, type OperationContext } from '../operations/common'
 import { databaseAdapter, isKnownDatabaseAction, adapterAllowsAction } from './adapters'
 import type { AdapterSession } from './adapters/types'
-import {planReadBatch,sessionSensitiveSql} from '../operations/query-batch'
+import {planReadBatch,planScriptBatch,sessionSensitiveSql} from '../operations/query-batch'
 import type {QueryBatchResult} from '../../shared/query-batch'
 
 interface LiveSession {
@@ -24,6 +24,7 @@ interface LiveSession {
   tls: TlsConnectionOptions
   controller?: AbortController
   isolatedRead?:boolean
+  scriptStop?:{requested:boolean}
 }
 export class SessionManager {
   private readonly sessions = new Map<string, LiveSession>()
@@ -201,8 +202,65 @@ export class SessionManager {
     }
     return batch
   }
+  /** Explicit mixed script. Use one fresh, verified connection and keep
+   * the original explorer session locked for the whole script. Statements
+   * autocommit individually, no implicit outer transaction, no replay. */
+  async executeScriptBatch(id:string,request:unknown,confirmed:boolean):Promise<QueryBatchResult>{
+    const session=this.session(id)
+    if(!session.info.writable||!confirmed)throw new Error('WRITE_CONFIRMATION_REQUIRED: 请先解锁会话，并主动确认写入')
+    const plan=planScriptBatch(session.info.kind,request,session.info.writable)
+    const batch:QueryBatchResult={items:[],total:plan.length,script:true}
+    return this.external(id,true,async(config,parent)=>{
+      const stop={requested:false};session.scriptStop=stop
+      let transport:ConnectionTransport|undefined,driver:AdapterSession|undefined,closing:Promise<unknown>|undefined
+      const close=()=>{if(!closing)closing=Promise.allSettled([driver?.close(),transport?.close()]);return closing}
+      const abort=()=>{if(driver)void close();else void transport?.close().catch(()=>{})}
+      parent.addEventListener('abort',abort,{once:true})
+      let bytes=0
+      try{
+        parent.throwIfAborted()
+        transport=await createTransport({ssh:config.ssh,proxy:config.proxy,timeoutMs:config.connectTimeoutMs})
+        parent.throwIfAborted()
+        driver=await databaseAdapter(config.kind).connect({config,transport,tls:session.tls,sqliteProcessFactory:this.sqliteProcessFactory,sqliteModulePath:this.sqliteModulePath})
+        for(const [index,item] of plan.entries()){
+          if(stop.requested||parent.aborted){
+            batch.failedAt=index+1;batch.error='CANCELLED: 已停止后续语句，已执行的语句不会回滚';break
+          }
+          const signal=AbortSignal.any([parent,AbortSignal.timeout(30000)])
+          let onAbort:(()=>void)|undefined
+          try{
+            const result=await Promise.race([
+              driver.execute(item.operation,{writable:item.write,confirmed:item.write,signal}),
+              new Promise<never>((_,reject)=>{onAbort=()=>reject(new Error(parent.aborted?'CANCELLED: 操作已取消':'TIMEOUT: 操作超过30秒，写入结果请核对'));signal.addEventListener('abort',onAbort,{once:true})})
+            ])
+            signal.throwIfAborted()
+            if(result.disconnected||driver.disconnected?.())throw Error('SESSION_CLOSED: 会话已关闭，请重新连接')
+            const entry={sql:item.operation.sql,result,write:item.write}
+            const size=Buffer.byteLength(JSON.stringify(entry))
+            if(bytes+size>32*1024*1024){
+              // The statement has already executed. Retain its outcome
+              // without the oversized row preview, and stop before the next.
+              batch.items.push({sql:item.operation.sql,write:item.write,previewOmitted:true,result:{columns:[],rows:[],affectedRows:result.affectedRows,durationMs:result.durationMs,message:'结果预览超过上限；语句已执行',truncated:true}})
+              if(index+1<plan.length){batch.failedAt=index+2;batch.error='LIMIT_EXCEEDED: 批量结果预览超过32 MiB，请分批运行查询或使用流式导出'}
+              break
+            }
+            bytes+=size;batch.items.push(entry)
+          }catch(e){
+            batch.failedAt=index+1;batch.error=this.redact(databaseError(e).message)
+            if(item.write)batch.writeFailure=true
+            break
+          }finally{if(onAbort)signal.removeEventListener('abort',onAbort)}
+        }
+        return batch
+      }finally{
+        parent.removeEventListener('abort',abort);session.scriptStop=undefined
+        await close()
+      }
+    })
+  }
   cancelQuery(id:string):boolean{
     const session=this.session(id)
+    if(session.scriptStop){session.scriptStop.requested=true;return true}
     if(!session.isolatedRead||!session.controller)return false
     session.controller.abort()
     return true

@@ -6,7 +6,7 @@ import {BrowseProfileStore} from '../src/main/storage/browse-profiles'
 import type {BrowseProfile,BrowseProfileDraft} from '../src/shared/browse-profile'
 import {newBrowseFilter,browseOffset} from '../src/shared/browse-filter'
 import {sqlStatements,currentSqlStatement} from '../src/shared/sql-statements'
-import {inferMetadataReferences} from '../src/renderer/metadata-completion'
+import {inferMetadataReferences,inferCteMetadata} from '../src/renderer/metadata-completion'
 import {dialectFunctions,sqlFunctionArgs} from '../src/shared/editor-completion'
 import {csvRecords,mappedValue,sqlFileValue,sqlFileRow} from '../src/main/file-transfer/records'
 import {normalizeFileTransfer} from '../src/shared/file-transfer'
@@ -56,4 +56,30 @@ test('Q5 CSV parser handles chunk boundaries, CRLF, doubled quotes, delimiters a
  assert.deepEqual(sqlFileValue(mappedValue('base64:AP8=','binary',false)),Buffer.from([0,255]))
  assert.deepEqual(sqlFileRow(['id','b'],[9223372036854775807n,Buffer.from([0,255])]),{id:{$dbexInteger:'9223372036854775807'},b:{$dbexBinary:'AP8='}})
  assert.throws(()=>normalizeFileTransfer({direction:'export',database:'app',entity:'t',format:'csv',delimiter:',',fields:[]},'mysql'))
+})
+
+
+test('Q4 CTE columns and aliases use local metadata, not physical table names',()=>{
+ const sql='WITH RECURSIVE counts(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM counts WHERE n<3), totals AS (SELECT u.id, SUM(u.amount) AS total FROM users u GROUP BY u.id) SELECT c.n,t.total FROM counts c JOIN totals AS t ON t.id=c.n'
+ const ctes=inferCteMetadata(sql)
+ assert.deepEqual(ctes.names,['counts','totals'])
+ assert.deepEqual(ctes.fields.counts,['n'])
+ assert.deepEqual(ctes.fields.totals,['id','total'])
+ assert.deepEqual(ctes.fields.c,['n'])
+ assert.deepEqual(ctes.fields.t,['id','total'])
+ assert.deepEqual(inferMetadataReferences(sql,['users','counts','totals'],'app'),[{database:'app',table:'users',alias:'u'}])
+ assert.deepEqual(inferCteMetadata("SELECT 'WITH fake AS (SELECT 1)'").names,[])
+ assert.deepEqual(inferCteMetadata('WITH a AS (SELECT * FROM users) SELECT * FROM a').fields.a,[])
+ assert.deepEqual(inferCteMetadata('WITH "A"("x","y") AS MATERIALIZED (SELECT 1,2) SELECT * FROM "A" z').fields.z,['x','y'])
+})
+
+test('Q4 completion respects reported major/minor versions without promising optional server features',()=>{
+ assert(!dialectFunctions('mysql','5.7.21').includes('ROW_NUMBER'))
+ assert(!dialectFunctions('mysql','5.7.21').includes('JSON_ARRAYAGG'))
+ assert(dialectFunctions('mysql','8.0.36').includes('ROW_NUMBER'))
+ assert(dialectFunctions('mariadb','5.5.5-10.11.8-MariaDB').includes('JSON_TABLE'))
+ assert(!dialectFunctions('mariadb','10.4.33-MariaDB').includes('JSON_TABLE'))
+ assert(!dialectFunctions('sqlite','3.39.0').includes('timediff'))
+ assert(dialectFunctions('sqlite','3.45.1').includes('concat_ws'))
+ assert.deepEqual(sqlFunctionArgs('JSON_CONTAINS'),['document','candidate'])
 })

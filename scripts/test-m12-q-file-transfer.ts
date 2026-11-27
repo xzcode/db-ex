@@ -100,5 +100,33 @@ try{
  const partial=await sessions.executeReadBatch(original.id,{database:'main',text:'SELECT 1 AS n; SELECT * FROM no_such_q_table; SELECT 3 AS n',parameters:[],limit:100})
  assert.equal(partial.items.length,1);assert.equal(partial.failedAt,2)
  console.log('Q4 SQLite: read batch parameter binding, preflight rejection, partial result retention passed')
+ s.exec('CREATE TABLE script_records(id INTEGER PRIMARY KEY, note TEXT)')
+ const request={database:'main',text:'INSERT INTO script_records VALUES (?,?); SELECT * FROM script_records WHERE id=?; UPDATE script_records SET note=? WHERE id=?',parameters:[1,'original',1,'updated',1],limit:20}
+ await assert.rejects(sessions.executeScriptBatch(original.id,request,true),/WRITE_CONFIRMATION_REQUIRED/)
+ await sessions.setWriteAccess(original.id,true)
+ await assert.rejects(sessions.executeScriptBatch(original.id,request,false),/WRITE_CONFIRMATION_REQUIRED/)
+ await assert.rejects(sessions.executeScriptBatch(original.id,{...request,text:'INSERT INTO script_records VALUES(1,1); BEGIN',parameters:[]},true),/SQL_POLICY/)
+ assert.equal(s.prepare('SELECT COUNT(*) n FROM script_records').get()?.n,0)
+ const script=await sessions.executeScriptBatch(original.id,request,true)
+ assert.equal(script.script,true);assert.equal(script.items.length,3);assert.equal(script.items[1]?.result.rows[0]?.note,'original')
+ assert.equal(s.prepare('SELECT note FROM script_records WHERE id=1').get()?.note,'updated')
+ const failedScript=await sessions.executeScriptBatch(original.id,{...request,text:"INSERT INTO script_records VALUES(2,'committed'); INSERT INTO script_records VALUES(2,'duplicate'); DELETE FROM script_records",parameters:[]},true)
+ assert.equal(failedScript.items.length,1);assert.equal(failedScript.failedAt,2);assert.equal(failedScript.writeFailure,true)
+ assert.equal(s.prepare('SELECT COUNT(*) n FROM script_records').get()?.n,2)
+ const scriptRunning=sessions.executeScriptBatch(original.id,{...request,text:"INSERT INTO script_records VALUES(3,'first'); WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<5000000) SELECT sum(x) total FROM n; DELETE FROM script_records",parameters:[]},true)
+ let observed=false
+ for(let i=0;i<500;i++){
+  try{if(s.prepare('SELECT id FROM script_records WHERE id=3').get()){observed=true;break}}
+  catch(e){if(![5,6].includes(Number((e as {errcode?:number}).errcode)))throw e}
+  await new Promise(r=>setTimeout(r,5))
+ }
+ assert(observed,'first statement committed')
+ assert.equal(sessions.cancelQuery(original.id),true)
+ const stoppedScript=await scriptRunning
+ assert.match(stoppedScript.error||'',/CANCELLED/);assert(stoppedScript.items.length>=1&&stoppedScript.items.length<=2);assert.equal(stoppedScript.failedAt,stoppedScript.items.length+1)
+ assert.equal(s.prepare('SELECT COUNT(*) n FROM script_records').get()?.n,3)
+ assert.equal((await sessions.execute(original.id,{action:'mysql.query',database:'main',sql:'SELECT COUNT(*) n FROM script_records'})).rows[0]?.n,'3')
+ console.log('Q4 SQLite mixed script: preflight/confirmation, ordered writes and reads, partial commit, stop at boundary and original-session reuse passed')
+
 
 }finally{await sessions.closeAll();await service.closeAll();s.close();t.close();await rm(dir,{recursive:true,force:true})}

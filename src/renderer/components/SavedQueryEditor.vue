@@ -9,7 +9,8 @@ import CodeEditor from './CodeEditor.vue'
 import QuerySplit,{type QueryLayout} from './QuerySplit.vue'
 import QueryResultPanel from './QueryResultPanel.vue'
 import SqlResultEditDialog from './SqlResultEditDialog.vue'
-import {sqlResultTarget,canEditSqlRow,sqlResultFields,type SqlResultTarget} from '../../shared/sql-result-edit'
+import {sqlResultTarget,canEditSqlRow,sqlResultFields,stageSqlResultDrafts,type SqlResultTarget} from '../../shared/sql-result-edit'
+import {gridCellSpec,prepareGridEdits,cellDraftKey,type CellDraft} from '../../shared/grid-edit'
 import {editableMongoResult} from '../../shared/query-results'
 import {ordinaryMongoCollection} from '../../shared/object-menu'
 import {protectedDatabase} from '../../shared/database-admin'
@@ -23,7 +24,7 @@ import {queryExecution,type QueryExecution} from '../../shared/query-history'
 import type {QueryBatchResult} from '../../shared/query-batch'
 import {sqlStatements} from '../../shared/sql-statements'
 import {useQueryRecovery} from '../composables/useQueryRecovery'
-import {cachedMetadata,rememberMetadata,metadataFields,metadataKey,inferMetadataTable,inferMetadataReferences} from '../metadata-completion'
+import {cachedMetadata,rememberMetadata,metadataFields,metadataKey,inferMetadataTable,inferMetadataReferences,inferCteMetadata} from '../metadata-completion'
 const props=defineProps<{session:SessionInfo;availableSessions:SessionInfo[];node:ExplorerNode;active:boolean;tableSuggestions?:string[]}>()
 const emit=defineEmits<{saved:[value:QuerySummary];busyChange:[value:boolean];dirtyChange:[value:boolean];updateSession:[session:SessionInfo];disconnect:[id:string];executionBusy:[id:string,value:boolean]}>()
 const homeDatabase=props.node.database||''
@@ -44,10 +45,13 @@ const executedQuery=ref(''),runId=ref(0),visited=ref<number[]>([])
 const resultEdit=ref<{mode:'insert'|'update';original?:string;index:number;entity:string;text:string;syntax:'typed'|'ejson';error:string}>()
 const sqlEditSource=shallowRef<{target:SqlResultTarget;structure:OperationResult;result:OperationResult}>()
 const sqlEdit=ref<{index:number;run:number;error:string}>()
-const editDialogOpen=computed(()=>!!resultEdit.value||!!sqlEdit.value)
+const sqlGridMode=ref(false),sqlGridDrafts=ref<CellDraft[]>([]),sqlInlineCell=ref<CellDraft>(),sqlGridError=ref(''),sqlGridBlocked=ref(false)
+const sqlGridDirty=computed(()=>sqlGridDrafts.value.length>0||!!sqlInlineCell.value)
+const sqlGridMap=computed(()=>Object.fromEntries(sqlGridDrafts.value.map(d=>[cellDraftKey(d.row,d.field),d.text])))
+const editDialogOpen=computed(()=>!!resultEdit.value||!!sqlEdit.value||sqlGridMode.value)
 const batchResults=ref<QueryBatchResult>(),batchIndex=ref(0)
 const result=ref<OperationResult>(),offset=ref(0),limit=ref<number>(pageSizeFor(preferences.value,executionSession.value.kind))
-const disconnectRequired=ref(false)
+const disconnectRequired=ref(false),scriptRunning=ref(false),stopRequested=ref(false)
 const busy=ref(false),running=ref(false),loaded=ref(false),error=ref(''),notice=ref('')
 const targets=ref<ExplorerNode[]>([]),legacy=ref<QuerySnippet[]>([]),legacySelected=ref('')
 const baseline=ref('')
@@ -61,6 +65,9 @@ const appliedMongoPlan=shallowRef<MongoScriptPlan>()
 const appliedPageSize=ref(100)
 const metadataColumns=ref<string[]>([]),metadataTables=ref<string[]>([])
 const sqlTables=computed(()=>[...new Set([...metadataTables.value,...(isHomeTarget.value?(props.tableSuggestions||[]):[])])])
+const cteMetadata=computed(()=>mode==='sql'?inferCteMetadata(sql.value):{names:[],fields:{}})
+const completionTables=computed(()=>[...new Set([...sqlTables.value,...cteMetadata.value.names])])
+const completionQualified=computed(()=>({...qualifiedFields.value,...cteMetadata.value.fields}))
 const metadataReferences=computed(()=>inferMetadataReferences(sql.value,sqlTables.value,database.value))
 const selectedMetadataTable=computed(()=>inferMetadataTable(sql.value,sqlTables.value,database.value)||metadataReferences.value[0]?.table||'')
 const qualifiedFields=ref<Record<string,string[]>>({})
@@ -72,7 +79,7 @@ async function refreshMetadataTables(){
  metadataTables.value=objects.filter(n=>n.kind==='table'||n.kind==='view').map(n=>n.entity||n.label)
 }
 async function loadMetadata(force=false){
- if(!executionAvailable.value||targetDialog.value||!metadataReferences.value.length||mode!=='sql'||busy.value||!loaded.value||!props.active)return
+ if(!executionAvailable.value||sqlGridMode.value||targetDialog.value||!metadataReferences.value.length||mode!=='sql'||busy.value||!loaded.value||!props.active)return
  await task(async()=>{
   const refs=[...metadataReferences.value],key=metadataScope.value,fields:Record<string,string[]>=Object.create(null)
   if(force)await refreshMetadataTables()
@@ -89,7 +96,7 @@ async function loadMetadata(force=false){
   if(metadataScope.value===key){qualifiedFields.value=fields;metadataColumns.value=[...new Set(Object.values(fields).flat())]}
  })
 }
-const sqlFields=computed(()=>[...new Set([...metadataColumns.value,...(result.value?.columns||[])])])
+const sqlFields=computed(()=>[...new Set([...metadataColumns.value,...Object.values(cteMetadata.value.fields).flat(),...(result.value?.columns||[])])])
 watch([metadataScope,loaded,()=>props.active],()=>{
  if(metadataTimer)clearTimeout(metadataTimer)
  qualifiedFields.value=Object.fromEntries(metadataReferences.value.flatMap(ref=>{const fields=cachedMetadata(metadataKey(executionSession.value.id,ref.database,ref.table));return fields?[[ref.alias,fields],[ref.table,fields]]:[]}));metadataColumns.value=[...new Set(Object.values(qualifiedFields.value).flat())]
@@ -130,7 +137,7 @@ const canPageBack=computed(()=>offset.value>(appliedMongoPlan.value?.baseOffset|
 const sourceLabel=computed(()=>executionSession.value.name+' / '+database.value)
 const safeMongoCollection=computed(()=>applied.value?.action==='mongo.find'&&!protectedDatabase('mongodb',database.value)&&ordinaryMongoCollection(applied.value.entity)&&targets.value.some(n=>n.kind==='collection'&&!n.readOnly&&!n.maintenanceRestricted&&(n.entity||n.label)===(applied.value as {entity:string}).entity))
 function canEditResult(index:number){
- if(!executionAvailable.value||batchResults.value||busy.value||!executionSession.value.writable)return false
+ if(sqlGridMode.value||!executionAvailable.value||batchResults.value||busy.value||!executionSession.value.writable)return false
  if(mode==='sql'){
   const source=sqlEditSource.value
   return !!source&&source.result===result.value&&!executionSession.value.transaction&&canEditSqlRow(result.value,source.structure,index)&&sqlResultFields(result.value!,source.structure,executionSession.value.kind,index).length>0
@@ -140,7 +147,7 @@ function canEditResult(index:number){
  return !!doc&&Object.hasOwn(doc,'_id')
 }
 const canAddResult=computed(()=>executionAvailable.value&&!batchResults.value&&!!executionSession.value.writable&&!busy.value&&safeMongoCollection.value&&applied.value?.action==='mongo.find'&&(()=>{try{return !Object.keys(JSON.parse(applied.value.projection||'{}')).length}catch{return false}})())
-function setLayout(value:QueryLayout){layout.value=value;try{if(value==='bottom'||value==='right')localStorage.setItem('dbex.query-layout',value)}catch{}}
+function setLayout(value:QueryLayout){if(sqlGridMode.value)return;layout.value=value;try{if(value==='bottom'||value==='right')localStorage.setItem('dbex.query-layout',value)}catch{}}
 try{if(localStorage.getItem('dbex.query-layout')==='right')layout.value='right'}catch{}
 function showResults(){if(layout.value==='editor'){let next:QueryLayout='bottom';try{if(localStorage.getItem('dbex.query-layout')==='right')next='right'}catch{}setLayout(next)}}
 function editResult(index:number){
@@ -197,6 +204,68 @@ async function identifySqlEditSource(op:DatabaseOperation,next:OperationResult){
   if(!disposed&&result.value&&canEditSqlRow(result.value,structure,0))sqlEditSource.value={target,structure,result:result.value}
  }catch{/* Permission or metadata unavailable: results remain read-only. */}
 }
+const sqlGridCanStart=computed(()=>{
+ const source=sqlEditSource.value
+ return mode==='sql'&&executionAvailable.value&&executionSession.value.writable&&!executionSession.value.transaction&&!busy.value&&!batchResults.value&&!resultEdit.value&&!sqlEdit.value&&!!source&&source.result===result.value&&!!result.value?.rows.some((_,row)=>canEditSqlRow(result.value,source.structure,row)&&result.value!.columns.some(field=>!!gridCellSpec(result.value!,source.structure,executionSession.value.kind,source.structure.primaryKeys!,row,field)))
+})
+function sqlGridSpec(row:number,field:string){
+ const source=sqlEditSource.value
+ if(!sqlGridMode.value||sqlGridBlocked.value||!sqlGridCanStart.value||!source||!result.value||!canEditSqlRow(result.value,source.structure,row))return
+ return gridCellSpec(result.value,source.structure,executionSession.value.kind,source.structure.primaryKeys!,row,field)
+}
+function startSqlGrid(){if(sqlGridCanStart.value){sqlGridMode.value=true;sqlGridError.value='';sqlGridBlocked.value=false}}
+function clearSqlGrid(){sqlGridMode.value=false;sqlGridDrafts.value=[];sqlInlineCell.value=undefined;sqlGridError.value='';sqlGridBlocked.value=false}
+function stageSqlGrid(incoming:CellDraft[]):boolean{
+ const source=sqlEditSource.value
+ if(!sqlGridMode.value||sqlGridBlocked.value||!sqlGridCanStart.value||!source||!result.value)return false
+ try{sqlGridDrafts.value=stageSqlResultDrafts(result.value,source.structure,executionSession.value.kind,sqlGridDrafts.value,incoming);sqlGridError.value='';return true}
+ catch(e){sqlGridError.value=e instanceof Error?e.message:String(e);return false}
+}
+function finishSqlInline(cancel=false):boolean{
+ const d=sqlInlineCell.value;if(!d)return true
+ if(!cancel&&!stageSqlGrid([d]))return false
+ sqlInlineCell.value=undefined;return true
+}
+function beginSqlInline(row:number,field:string){
+ if(!finishSqlInline())return
+ const spec=sqlGridSpec(row,field)
+ if(spec)sqlInlineCell.value={row,field,text:sqlGridMap.value[cellDraftKey(row,field)]??spec.text}
+}
+function pasteSqlGrid(cells:CellDraft[]){if(finishSqlInline())stageSqlGrid(cells)}
+function discardSqlGrid(){
+ if(busy.value)return
+ const refresh=sqlGridBlocked.value;clearSqlGrid()
+ if(refresh){sqlEditSource.value=undefined;page('refresh')}
+}
+async function saveSqlGrid(){
+ const source=sqlEditSource.value,op=applied.value
+ if(!sqlGridMode.value||sqlGridBlocked.value||!sqlGridCanStart.value||!source||!result.value||op?.action!=='mysql.query'||!finishSqlInline()||!sqlGridDrafts.value.length)return
+ const snapshot=result.value
+ let edits:SqlGridEdit[]
+ try{
+  if(sqlGridDrafts.value.some(d=>!sqlGridSpec(d.row,d.field)))throw Error('QUERY_EDIT: 查询结果无法安全编辑')
+  edits=prepareGridEdits(snapshot,source.structure,executionSession.value.kind,source.structure.primaryKeys!,sqlGridDrafts.value).sqlEdits
+ }catch(e){sqlGridError.value=e instanceof Error?e.message:String(e);return}
+ await task(async()=>{
+  try{
+   const response=await window.dbex.execute(executionSession.value.id,{action:'mysql.updateBatch',...source.target,edits,queryResult:true,confirmed:true})
+   if(response.disconnected){clearSqlGrid();sqlEditSource.value=undefined;emit('disconnect',executionSession.value.id);return}
+   const batch=response.gridBatch
+   if(!batch||!batch.atomic||batch.failed||batch.uncertain||batch.completed!==edits.length||batch.total!==edits.length)throw Error(batch?.error||'BATCH_UNCERTAIN: 写入结果待核对，请重新连接。')
+   clearSqlGrid();sqlEditSource.value=undefined;result.value=undefined
+   notice.value=t('已保存 {0} 条记录',[edits.length])
+   try{
+    const next=await window.dbex.executeQuery(executionSession.value.id,op)
+    if(next.disconnected){emit('disconnect',executionSession.value.id);return}
+    result.value=next;runId.value++;await identifySqlEditSource(op,next)
+   }catch(e){fail(e)}
+  }catch(e){
+   sqlGridError.value=e instanceof Error?e.message:String(e)
+   // Do not automatically retry any write whose acknowledgement or row identity is uncertain.
+   if(!/CANCELLED: 已取消操作/.test(sqlGridError.value))sqlGridBlocked.value=true
+  }
+ })
+}
 async function saveSqlEdit(edit:SqlGridEdit){
  const d=sqlEdit.value,source=sqlEditSource.value,op=applied.value
  if(!d||!source||!op||op.action!=='mysql.query'||d.run!==runId.value||!canEditResult(d.index))return
@@ -245,7 +314,7 @@ function page(direction:'first'|'prev'|'next'|'refresh'){
 
 const draft=computed<QueryDraft>(()=>({name:name.value.trim(),mode,text:mode==='sql'?sql.value:script.value,...(mode==='sql'?{parameters:parameters.value}:{syntax:'mongo-shell' as const})}))
 const fingerprint=computed(()=>JSON.stringify(draft.value))
-const dirty=computed(()=>loaded.value&&fingerprint.value!==baseline.value)
+const dirty=computed(()=>loaded.value&&(fingerprint.value!==baseline.value||sqlGridDirty.value))
 const canPersist=computed(()=>!!props.session.connectionId&&!!homeDatabase)
 let busyTarget=''
 watch(busy,value=>{
@@ -281,10 +350,11 @@ async function refreshExecutionMetadata(){
  legacy.value=history.filter(item=>item.kind===executionSession.value.kind&&item.favorite&&(!item.database||item.database===database.value)&&(!item.connectionId||item.connectionId===executionSession.value.connectionId)&&(mode==='sql'||item.mongoKind==='script'||(mode==='mongo-find'?item.mongoKind==='query':!item.mongoKind||item.mongoKind==='aggregation')))
 }
 function clearExecutionResult(){
+ clearSqlGrid()
  applied.value=undefined;appliedMongoPlan.value=undefined;sqlEditSource.value=undefined;sqlEdit.value=undefined;resultEdit.value=undefined;batchResults.value=undefined
  result.value=undefined;offset.value=0;visited.value=[];executedQuery.value='';runId.value++
 }
-watch(executionAvailable,available=>{if(!available){clearExecutionResult();targets.value=[];metadataTables.value=[];metadataColumns.value=[];qualifiedFields.value={};mongoFields.value=[];legacy.value=[];historyDialog.value=false}})
+watch(executionAvailable,available=>{if(!available){const lost=sqlGridDirty.value;clearExecutionResult();if(lost)notice.value=t('执行目标已断开，未保存的查询结果修改已丢弃。');targets.value=[];metadataTables.value=[];metadataColumns.value=[];qualifiedFields.value={};mongoFields.value=[];legacy.value=[];historyDialog.value=false}})
 async function loadTargetDatabases(){
  targetDatabases.value=[];targetDatabase.value='';targetError.value=''
  const id=targetCandidate.value
@@ -361,25 +431,27 @@ function selectBatch(index:number){
  const item=batchResults.value?.items[index];if(!item)return
  batchIndex.value=index;result.value=item.result;executedQuery.value=item.sql;offset.value=0;runId.value++
 }
-async function executeBatch(){
+async function executeBatch(asScript=false){
  if(!executionAvailable.value||mode!=='sql'||busy.value||!loaded.value||executionSession.value.transaction||editDialogOpen.value||targetDialog.value)return
+ if(asScript&&(clickhouse||!executionSession.value.writable))return
  if(!Number.isInteger(limit.value)||limit.value<1||limit.value>500){fail('INVALID_INPUT: 每页数量必须在 1 至 500 之间');return}
  showResults()
  await task(async()=>{
   const source=editor.value?.selection()||sql.value,params=JSON.parse(parameters.value)
   if(sqlStatements(source,executionSession.value.kind).length<2)throw new Error('SQL_POLICY: 批量查询至少需要两条语句')
-  running.value=true;disconnectRequired.value=false;batchResults.value=undefined
+  running.value=true;disconnectRequired.value=false;scriptRunning.value=asScript;stopRequested.value=false;clearExecutionResult()
   const started=new Date().toISOString(),clock=performance.now()
   try{
-   const batch=await window.dbex.executeReadBatch(executionSession.value.id,{database:database.value,text:source,parameters:params,limit:limit.value})
+   const request={database:database.value,text:source,parameters:params,limit:limit.value}
+   const batch=asScript?await window.dbex.executeScriptBatch(executionSession.value.id,request):await window.dbex.executeReadBatch(executionSession.value.id,request)
    if(disposed||!executionAvailable.value)return
    applied.value=undefined;appliedMongoPlan.value=undefined;sqlEditSource.value=undefined;visited.value=[];result.value=undefined;offset.value=0
    batchResults.value=batch;batchIndex.value=0
    if(batch.items.length)selectBatch(0);else runId.value++
    notice.value=t('已完成 {0} / {1} 条语句',[batch.items.length,batch.total])
-   if(batch.error)error.value=batch.error
+   if(batch.error)error.value=batch.error+(batch.writeFailure?' · '+t('失败的写入可能部分完成，请核对数据。'):'')
    await recordHistory(source,queryExecution(started,performance.now()-clock,undefined,undefined,batch),JSON.stringify(params))
-  }catch(e){await recordHistory(source,queryExecution(started,performance.now()-clock,undefined,e),JSON.stringify(params));throw e}finally{running.value=false;disconnectRequired.value=false}
+  }catch(e){await recordHistory(source,queryExecution(started,performance.now()-clock,undefined,e),JSON.stringify(params));throw e}finally{running.value=false;disconnectRequired.value=false;scriptRunning.value=false;stopRequested.value=false}
  })
 }
 async function execute(paging?:number,selection=false,current=false){
@@ -436,17 +508,22 @@ async function beautify(){
  const before=mode==='sql'?sql.value:script.value
  await task(async()=>{const formatted=await formatQuery(before,executionSession.value.kind,preferences.value.editor.tabSize);if((mode==='sql'?sql.value:script.value)===before){if(mode==='sql')sql.value=formatted;else script.value=formatted}})
 }
-async function toggleWrite(){if(!executionAvailable.value)return;await task(async()=>emit('updateSession',await window.dbex.setWriteAccess(executionSession.value.id,!executionSession.value.writable)))}
-async function transaction(action:'mysql.begin'|'mysql.commit'|'mysql.rollback'){if(!executionAvailable.value)return;await task(async()=>{const next=await window.dbex.execute(executionSession.value.id,{action,confirmed:true});emit('updateSession',{...executionSession.value,transaction:!!next.transaction});notice.value=next.message||''})}
+async function toggleWrite(){if(!executionAvailable.value||sqlGridMode.value)return;await task(async()=>emit('updateSession',await window.dbex.setWriteAccess(executionSession.value.id,!executionSession.value.writable)))}
+async function transaction(action:'mysql.begin'|'mysql.commit'|'mysql.rollback'){if(!executionAvailable.value||sqlGridMode.value)return;await task(async()=>{const next=await window.dbex.execute(executionSession.value.id,{action,confirmed:true});emit('updateSession',{...executionSession.value,transaction:!!next.transaction});notice.value=next.message||''})}
 async function cancel(){
  if(!executionAvailable.value)return
- try{if(disconnectRequired.value){await window.dbex.cancel(executionSession.value.id);emit('disconnect',executionSession.value.id);return}if(!await window.dbex.cancelQuery(executionSession.value.id)){disconnectRequired.value=true;notice.value='当前操作无法独立停止；再次选择取消并断开将关闭会话。'}}catch(reason){fail(reason)}
+ try{
+ if(scriptRunning.value){
+  if(await window.dbex.cancelQuery(executionSession.value.id)){stopRequested.value=true;notice.value=t('当前语句结束后停止；已执行的写入不会回滚。')}
+  return
+ }
+ if(disconnectRequired.value){await window.dbex.cancel(executionSession.value.id);emit('disconnect',executionSession.value.id);return}if(!await window.dbex.cancelQuery(executionSession.value.id)){disconnectRequired.value=true;notice.value='当前操作无法独立停止；再次选择取消并断开将关闭会话。'}}catch(reason){fail(reason)}
 }
 async function exportQuery(format:'json'|'sql'){if(!currentId.value)return;await task(async()=>{if(await window.dbex.exportSavedQuery(props.session.id,homeDatabase,currentId.value!,format))notice.value='操作已完成'})}
 </script>
 <template>
  <section :class="['workbench','saved-query-editor',{'mongo-library':mode!=='sql'}]">
-  <header class="workbench-header query-context-header"><div class="query-context-label"><strong>{{executionSession.name}}</strong><span> / </span><strong>{{database}}</strong><span v-if="!executionAvailable" class="danger-text"> · {{t('执行目标已断开')}}</span><span v-else-if="!isHomeTarget" class="muted-text" :title="session.name+' / '+homeDatabase"> · {{t('保存位置')}}: {{session.name}} / {{homeDatabase}}</span></div><div class="header-tools"><button class="btn secondary small" :disabled="busy||!loaded||executionSession.transaction||editDialogOpen" @click="openTarget">{{t('切换执行目标')}}</button><span v-if="executionSession.transaction" class="transaction-badge">{{ t('事务进行中') }}</span><button :class="['btn',executionSession.writable?'warning':'secondary']" :disabled="busy||!executionAvailable" @click="toggleWrite">{{ executionSession.writable?t('写入已启用 · 锁定'):t('只读 · 启用写入') }}</button></div></header>
+  <header class="workbench-header query-context-header"><div class="query-context-label"><strong>{{executionSession.name}}</strong><span> / </span><strong>{{database}}</strong><span v-if="!executionAvailable" class="danger-text"> · {{t('执行目标已断开')}}</span><span v-else-if="!isHomeTarget" class="muted-text" :title="session.name+' / '+homeDatabase"> · {{t('保存位置')}}: {{session.name}} / {{homeDatabase}}</span></div><div class="header-tools"><button class="btn secondary small" :disabled="busy||!loaded||executionSession.transaction||editDialogOpen" @click="openTarget">{{t('切换执行目标')}}</button><span v-if="executionSession.transaction" class="transaction-badge">{{ t('事务进行中') }}</span><button :class="['btn',executionSession.writable?'warning':'secondary']" :disabled="busy||!executionAvailable||sqlGridMode" @click="toggleWrite">{{ executionSession.writable?t('写入已启用 · 锁定'):t('只读 · 启用写入') }}</button></div></header>
   <div class="editor-toolbar query-object-toolbar">
    <button class="btn primary small" :disabled="busy||!loaded||!canPersist" :title="'Ctrl / ⌘ + S'" @click="save()"><span aria-hidden="true">▣</span> {{ t('保存') }}</button>
    <button class="btn secondary small" :disabled="busy||!loaded" @click="beautify">{{ t('美化语句') }}</button>
@@ -464,26 +541,26 @@ async function exportQuery(format:'json'|'sql'){if(!currentId.value)return;await
    <label class="field"><span>{{ t('每页') }}</span><input v-model.number="limit" type="number" min="1" max="500" :aria-label="t('每页')" :disabled="busy"/></label>
   </div>
   <div class="editor-toolbar">
-   <button class="btn primary small" :disabled="busy||!loaded||!executionAvailable" @click="execute(undefined,true)">{{ t('运行选中 / 全部') }}</button>
-   <button v-if="mode==='sql'" class="btn secondary small" :disabled="busy||!loaded||!executionAvailable" @click="execute(undefined,false,true)">{{t('运行当前语句')}}</button><button v-if="mode==='sql'" class="btn secondary small" :disabled="busy||!loaded||executionSession.transaction||!executionAvailable" @click="executeBatch">{{t('批量查询（只读）')}}</button><button v-if="running" class="btn secondary small" @click="cancel">{{t(disconnectRequired?'取消并断开':'停止查询')}}</button>
+   <button class="btn primary small" :disabled="busy||!loaded||!executionAvailable||sqlGridMode" @click="execute(undefined,true)">{{ t('运行选中 / 全部') }}</button>
+   <button v-if="mode==='sql'" class="btn secondary small" :disabled="busy||!loaded||!executionAvailable||sqlGridMode" @click="execute(undefined,false,true)">{{t('运行当前语句')}}</button><button v-if="mode==='sql'" class="btn secondary small" :disabled="busy||!loaded||executionSession.transaction||!executionAvailable||sqlGridMode" @click="executeBatch()">{{t('批量查询（只读）')}}</button><button v-if="mode==='sql'&&!clickhouse" class="btn secondary small" :disabled="busy||!loaded||!executionAvailable||!executionSession.writable||executionSession.transaction||sqlGridMode" @click="executeBatch(true)">{{t('执行读写脚本')}}</button><button v-if="running" class="btn secondary small" :disabled="stopRequested" @click="cancel">{{t(scriptRunning?(stopRequested?'正在等待当前语句结束':'停止后续语句'):disconnectRequired?'取消并断开':'停止查询')}}</button>
    <span class="toolbar-spacer"></span>
-   <template v-if="mode==='sql'&&!clickhouse"><button class="btn secondary small" :disabled="busy||!executionAvailable||!executionSession.writable||executionSession.transaction" @click="transaction('mysql.begin')">{{ t('开始事务') }}</button><button class="btn secondary small" :disabled="busy||!executionAvailable||!executionSession.transaction" @click="transaction('mysql.commit')">{{ t('提交') }}</button><button class="btn secondary small" :disabled="busy||!executionAvailable||!executionSession.transaction" @click="transaction('mysql.rollback')">{{ t('回滚') }}</button></template>
+   <template v-if="mode==='sql'&&!clickhouse"><button class="btn secondary small" :disabled="busy||!executionAvailable||!executionSession.writable||executionSession.transaction||sqlGridMode" @click="transaction('mysql.begin')">{{ t('开始事务') }}</button><button class="btn secondary small" :disabled="busy||!executionAvailable||!executionSession.transaction||sqlGridMode" @click="transaction('mysql.commit')">{{ t('提交') }}</button><button class="btn secondary small" :disabled="busy||!executionAvailable||!executionSession.transaction||sqlGridMode" @click="transaction('mysql.rollback')">{{ t('回滚') }}</button></template>
    <span class="query-layout-buttons">
    <span v-if="mode==='sql'&&selectedMetadataTable" class="muted-text">{{t('字段补全来源')}}: {{selectedMetadataTable}}</span>
    <button v-if="mode==='sql'" class="btn secondary small" :disabled="busy||!selectedMetadataTable||!executionAvailable" @click="loadMetadata(true)">{{t('刷新补全')}}</button><button v-else class="btn secondary small" :disabled="busy||!loaded||!executionAvailable" @click="sampleMongoFields">{{t('刷新字段样本')}}</button>
 
-   <button v-for="item in [{id:'bottom',label:'结果在下方',symbol:'⊟'},{id:'right',label:'结果在右侧',symbol:'◧'},{id:'editor',label:'仅编辑器',symbol:'□'},{id:'result',label:'仅结果集',symbol:'▣'}]" :key="item.id" type="button" :class="['btn','secondary','small',{selected:layout===item.id}]" :aria-label="t(item.label)" :title="t(item.label)" @click="setLayout(item.id as QueryLayout)">{{item.symbol}}</button></span>
+   <button v-for="item in [{id:'bottom',label:'结果在下方',symbol:'⊟'},{id:'right',label:'结果在右侧',symbol:'◧'},{id:'editor',label:'仅编辑器',symbol:'□'},{id:'result',label:'仅结果集',symbol:'▣'}]" :key="item.id" type="button" :class="['btn','secondary','small',{selected:layout===item.id}]" :aria-label="t(item.label)" :title="t(item.label)" :disabled="sqlGridMode" @click="setLayout(item.id as QueryLayout)">{{item.symbol}}</button></span>
   </div>
 
   <QuerySplit v-model:layout="layout" :active="active">
    <template #editor>
     <template v-if="mode==='sql'">
-     <div class="query-editor"><CodeEditor ref="editor" v-model="sql" language="sql" :sql-dialect="executionSession.kind==='mongodb'||executionSession.kind==='redis'?undefined:executionSession.kind" :readonly="running||!loaded" :suggestions="sqlFields" :qualified-suggestions="qualifiedFields" :server-version="executionSession.serverVersion" :table-suggestions="sqlTables" @execute="execute(undefined,true)" /></div>
+     <div class="query-editor"><CodeEditor ref="editor" v-model="sql" language="sql" :sql-dialect="executionSession.kind==='mongodb'||executionSession.kind==='redis'?undefined:executionSession.kind" :readonly="running||!loaded" :suggestions="sqlFields" :qualified-suggestions="completionQualified" :server-version="executionSession.serverVersion" :table-suggestions="completionTables" @execute="execute(undefined,true)" /></div>
      <label class="parameter-line">{{ t('参数') }}<input v-model="parameters" :aria-label="clickhouse?t('ClickHouse 参数 JSON 对象'):t('SQL 参数 JSON 数组')" spellcheck="false" :disabled="busy||!loaded" /><button class="btn secondary small" :disabled="busy||!loaded" @click="parameterDialog=true">{{t('参数编辑器')}}</button></label>
     </template>
     <div v-else class="query-editor native-mongo-editor"><CodeEditor ref="editor" v-model="script" language="dbex-mongo-script" completion-kind="mongodb" :readonly="busy||!loaded" :table-suggestions="targets.map(item=>item.entity||item.label)" :suggestions="fieldSuggestions" @execute="execute(undefined,true)" /></div>
    </template>
-   <template #result><div v-if="batchResults" class="batch-results-strip"><button v-for="(item,i) in batchResults.items" :key="i" :title="item.sql" :class="['btn','secondary','small',{selected:batchIndex===i}]" @click="selectBatch(i)">{{t('语句结果')}} {{i+1}}</button><span class="muted-text">{{batchResults.items.length}} / {{batchResults.total}}</span><span v-if="batchResults.failedAt" class="danger-text">{{t('停止于语句')}} {{batchResults.failedAt}}</span></div><QueryResultPanel :result="result" :kind="executionSession.kind" :offset="offset" :query-text="executedQuery" :busy="busy||!executionAvailable" :active="active" :error="error" :notice="notice" :can-back="!batchResults&&!clickhouse&&canPageBack" :can-first="!batchResults&&!clickhouse&&canPageBack" :can-next="!batchResults&&!clickhouse&&result?.nextOffset!==undefined" :can-refresh="!batchResults&&canRefresh" :editable="canEditResult" :can-remove="mode!=='sql'" :can-add="canAddResult" :run-id="runId" :source-label="sourceLabel" @page="page" @edit="editResult" @add="addResult" @remove="removeResult" @draft="draftResult" @collapse="setLayout('editor')"/></template>
+   <template #result><div v-if="batchResults" class="batch-results-strip"><button v-for="(item,i) in batchResults.items" :key="i" :title="item.sql" :class="['btn','secondary','small',{selected:batchIndex===i}]" @click="selectBatch(i)">{{t('语句结果')}} {{i+1}}<template v-if="batchResults.script&&item.write"> · {{t('写入')}} {{item.result.affectedRows??'—'}}</template><template v-else-if="batchResults.script"> · {{item.result.rows.length}}</template></button><span class="muted-text">{{batchResults.items.length}} / {{batchResults.total}}</span><span v-if="batchResults.script" class="muted-text">{{t('逐条执行，非整体事务')}}</span><span v-if="batchResults.failedAt" class="danger-text">{{t('停止于语句')}} {{batchResults.failedAt}}</span></div><QueryResultPanel :result="result" :kind="executionSession.kind" :offset="offset" :query-text="executedQuery" :busy="busy||!executionAvailable" :active="active" :error="error" :notice="notice" :can-back="!batchResults&&!clickhouse&&canPageBack" :can-first="!batchResults&&!clickhouse&&canPageBack" :can-next="!batchResults&&!clickhouse&&result?.nextOffset!==undefined" :can-refresh="!batchResults&&canRefresh" :editable="canEditResult" :can-remove="mode!=='sql'" :can-add="canAddResult" :run-id="runId" :source-label="sourceLabel" :bulk-available="sqlGridCanStart" :bulk-mode="sqlGridMode" :bulk-count="sqlGridDrafts.length" :bulk-blocked="sqlGridBlocked" :bulk-error="sqlGridError" :bulk-inline="sqlInlineCell" :bulk-drafts="sqlGridMap" :bulk-cell-text="(row,field)=>sqlGridSpec(row,field)?.text" @bulk-start="startSqlGrid" @bulk-save="saveSqlGrid" @bulk-discard="discardSqlGrid" @bulk-stage="pasteSqlGrid" @bulk-inline-begin="beginSqlInline" @bulk-inline-input="value=>{if(sqlInlineCell)sqlInlineCell.text=value}" @bulk-inline-finish="finishSqlInline" @page="page" @edit="editResult" @add="addResult" @remove="removeResult" @draft="draftResult" @collapse="setLayout('editor')"/></template>
   </QuerySplit>
 
   <Teleport to="body"><div v-if="targetDialog&&active" class="modal-backdrop"><section class="dialog query-target-dialog" role="dialog" :aria-label="t('切换执行目标')">

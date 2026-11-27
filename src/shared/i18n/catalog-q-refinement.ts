@@ -10,6 +10,21 @@ export const qRefinementTraditional:Record<string,string>={
 }
 
 const followupPairs:Record<string,[string,string]>={
+ '批量编辑':['Bulk edit','批次編輯'],
+ '请取消修改并刷新结果后重试。':['Discard changes and refresh results before retrying.','請取消修改並重新整理結果後重試。'],
+ '执行目标已断开，未保存的查询结果修改已丢弃。':['Execution target disconnected; unsaved query-result edits were discarded.','執行目標已中斷，未儲存的查詢結果修改已捨棄。'],
+ '执行读写脚本':['Run read/write script','執行讀寫指令稿'],
+ '确认执行读写 SQL 脚本？':['Execute the read/write SQL script?','確認執行讀寫 SQL 指令稿？'],
+ '共 {0} 条语句，其中 {1} 条写入':['{0} statements, including {1} writes','共 {0} 條陳述式，其中 {1} 條寫入'],
+ '脚本使用独立连接，逐条执行；已执行的写入可能立即持久化。失败或停止不会回滚前面的语句。':['The script uses a separate connection and runs sequentially. Writes may commit immediately. Failure or stopping does not roll back earlier statements.','指令稿使用獨立連線逐條執行；已執行的寫入可能立即持久化。失敗或停止不會回復前面的陳述式。'],
+ '逐条执行，非整体事务':['Sequential, not one transaction','逐條執行，非整體交易'],
+ '停止后续语句':['Stop remaining statements','停止後續陳述式'],
+ '正在等待当前语句结束':['Waiting for current statement','正在等待目前陳述式結束'],
+ '当前语句结束后停止；已执行的写入不会回滚。':['Stop after the current statement. Earlier writes are not rolled back.','目前陳述式結束後停止；已執行的寫入不會回復。'],
+ '失败的写入可能部分完成，请核对数据。':['The failed write may have partially completed. Verify data.','失敗的寫入可能部分完成，請核對資料。'],
+ 'CANCELLED: 已停止后续语句，已执行的语句不会回滚':['CANCELLED: Remaining statements stopped; earlier statements are not rolled back.','CANCELLED: 已停止後續陳述式，已執行的陳述式不會回復。'],
+ 'SQL_POLICY: 只读脚本请使用批量查询':['SQL_POLICY: Use read-only batch execution for a read-only script.','SQL_POLICY: 唯讀指令稿請使用批次查詢。'],
+ '结果预览超过上限；语句已执行':['Result preview exceeded the limit; the statement was executed.','結果預覽超過上限；陳述式已執行。'],
  '切换执行目标':['Switch execution target','切換執行目標'],
  '执行连接':['Execution connection','執行連線'],
  '执行数据库':['Execution database','執行資料庫'],

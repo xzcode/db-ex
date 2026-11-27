@@ -17,6 +17,7 @@ import {normalizeFileTransfer,type FileTransferRequest} from '../shared/file-tra
 import {MigrationHistory} from './migration/history'
 import {migrationPolicyLabel,type MigrationJob} from '../shared/migration'
 import { SessionManager } from './connections/manager'
+import {planScriptBatch} from './operations/query-batch'
 import { validateId } from './connections/validation'
 import { SnippetStore } from './storage/snippets'
 import {BrowseProfileStore} from './storage/browse-profiles'
@@ -319,6 +320,17 @@ function registerIpc(): void {
   ipcMain.handle('sessions:execute',executeHandler(false))
   ipcMain.handle('sessions:execute-query',executeHandler(true))
   ipcMain.handle('sessions:read-batch',sessionHandler((_win,id,input:unknown)=>sessions.executeReadBatch(id,input)))
+  ipcMain.handle('sessions:script-batch',sessionHandler(async(win,id,input:unknown)=>{
+    const info=sessions.info(id)
+    if(!info.writable||info.transaction)throw Error('WRITE_CONFIRMATION_REQUIRED: 请先解锁会话，并主动确认写入')
+    const plan=planScriptBatch(info.kind,input,info.writable)
+    const database=plan[0]!.operation.database||''
+    const writes=plan.filter(item=>item.write).length
+    const preview=plan.map((item,i)=>(i+1)+'. '+item.operation.sql).join('\n')
+    const detail=tr('连接：')+' '+info.name+'\n'+tr('地址：')+' '+info.displayHost+'\n'+tr('目标：')+' '+database+'\n'+tr('共 {0} 条语句，其中 {1} 条写入',[plan.length,writes])+'\n'+tr('脚本使用独立连接，逐条执行；已执行的写入可能立即持久化。失败或停止不会回滚前面的语句。')+'\n\n'+preview.slice(0,3000)+(preview.length>3000?'\n…':'')
+    await confirm(win,'确认执行读写 SQL 脚本？',detail)
+    return sessions.executeScriptBatch(id,input,true)
+  }))
   ipcMain.handle('sessions:cancel-query',sessionHandler((_win,id)=>sessions.cancelQuery(id)))
   ipcMain.handle('clipboard:copy-text', handler((_win, value: unknown) => {
     if (typeof value !== 'string' || Buffer.byteLength(value, 'utf8') > 2 * 1024 * 1024) throw new Error('LIMIT_EXCEEDED: 剪贴板文本过大')

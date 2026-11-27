@@ -11,6 +11,7 @@ import {createTransport} from '../src/main/connections/transport'
 import {loadConnectionTls} from '../src/main/connections/tls-material'
 import {openMysqlClient} from '../src/main/connections/mysql-client'
 import {MysqlOperations} from '../src/main/operations/mysql'
+import {SessionManager} from '../src/main/connections/manager'
 import {canEditSqlRow,prepareSqlResultEdit,sqlResultTarget} from '../src/shared/sql-result-edit'
 import {openMongoClient} from '../src/main/connections/mongo-client'
 import type {ConnectionConfig,DatabaseKind} from '../src/shared/types'
@@ -108,6 +109,22 @@ try{
     assert.equal((await reader.execute(query,read)).rawRows?.[0]?.note,'updated')
     console.log('Q1 real '+kind+' isolated query edit: exact large key/decimal, optimistic conflict and temporary-table shadow rejection')
    }finally{readerClient.destroy()}
+   const sessions=new SessionManager()
+   try{
+    const original=await sessions.connect(source)
+    await client.query('CREATE TABLE '+table('script_records')+' (id INT PRIMARY KEY,note VARCHAR(100)) ENGINE=InnoDB')
+    const request={database,text:'INSERT INTO script_records VALUES (?,?); SELECT * FROM script_records WHERE id=?; UPDATE script_records SET note=? WHERE id=?',parameters:[1,'original',1,'updated',1],limit:20}
+    await assert.rejects(sessions.executeScriptBatch(original.id,request,true),/WRITE_CONFIRMATION_REQUIRED/)
+    await sessions.setWriteAccess(original.id,true)
+    await assert.rejects(sessions.executeScriptBatch(original.id,request,false),/WRITE_CONFIRMATION_REQUIRED/)
+    const script=await sessions.executeScriptBatch(original.id,request,true)
+    assert.equal(script.items.length,3,JSON.stringify(script));assert.equal(script.items[1]?.result.rows[0]?.note,'original')
+    const failed=await sessions.executeScriptBatch(original.id,{...request,text:"INSERT INTO script_records VALUES(2,'committed'); INSERT INTO script_records VALUES(2,'duplicate'); DELETE FROM script_records",parameters:[]},true)
+    assert.equal(failed.items.length,1);assert.equal(failed.failedAt,2);assert.equal(failed.writeFailure,true)
+    const verified=await sessions.execute(original.id,{action:'mysql.query',database,sql:'SELECT * FROM script_records ORDER BY id'})
+    assert.deepEqual(verified.rows.map(r=>r.note),['updated','committed'])
+    console.log('Q4 real '+kind+' mixed script: ordered execution, confirmed writes, partial commit and original-session reuse')
+   }finally{await sessions.closeAll()}
   }finally{await client.query('DROP DATABASE '+q(database)).catch(()=>{});client.destroy()}
  }
 }finally{await service.closeAll();await route.close();await rm(folder,{recursive:true,force:true})}

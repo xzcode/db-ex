@@ -25,7 +25,7 @@ export function queryExecution(start:string,elapsed:number,result?:OperationResu
  const execution:QueryExecution={executedAt:start,durationMs:Math.max(0,Math.round(elapsed)),status:failure==='CANCELLED'?'cancelled':failure?'failed':'success'}
  if(failure)execution.errorCode=failure
  if(result){execution.returnedRows=result.rows.length;execution.affectedRows=result.affectedRows;execution.truncated=!!result.truncated}
- if(batch){execution.statements=batch.total;execution.completed=batch.items.length;execution.returnedRows=batch.items.reduce((n,item)=>n+item.result.rows.length,0);execution.truncated=batch.items.some(item=>item.result.truncated)}
+ if(batch){execution.statements=batch.total;execution.completed=batch.items.length;execution.returnedRows=batch.items.reduce((n,item)=>n+item.result.rows.length,0);execution.truncated=batch.items.some(item=>item.result.truncated);if(batch.script)execution.affectedRows=batch.items.reduce((n,item)=>n+(item.result.affectedRows||0),0)}
  return execution
 }
 export function queryHistoryFor(items:QuerySnippet[],kind:QuerySnippet['kind'],connectionId:string|undefined,database:string){

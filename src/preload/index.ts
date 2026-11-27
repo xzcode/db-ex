@@ -57,6 +57,7 @@ const api: DbExAPI = {
   redisKeys: (id, cursor, pattern) => ipcRenderer.invoke('explorer:redis-keys', id, cursor, pattern),
   redisValue: (id, key) => ipcRenderer.invoke('explorer:redis-value', id, key),
   executeReadBatch:(id,request)=>ipcRenderer.invoke('sessions:read-batch',id,request),
+  executeScriptBatch:(id,request)=>ipcRenderer.invoke('sessions:script-batch',id,request),
   executeQuery:(id,operation)=>ipcRenderer.invoke('sessions:execute-query',id,operation),
   cancelQuery:id=>ipcRenderer.invoke('sessions:cancel-query',id),
   execute: (id, operation) => ipcRenderer.invoke('sessions:execute', id, operation),

@@ -2,14 +2,15 @@
 import {computed,ref,watch} from 'vue'
 import {t,localize} from '../i18n'
 import type {OperationResult,DatabaseKind} from '../../shared/types'
+import type {CellDraft} from '../../shared/grid-edit'
 import {resultJSON} from '../../shared/query-results'
 import {mongoFieldText} from '../../shared/bson-editor'
 import {csvFromRows} from '../data-format'
 import ResultGrid from './ResultGrid.vue'
 import BsonDocumentTree from './BsonDocumentTree.vue'
 import FieldValueDialog from './FieldValueDialog.vue'
-const props=defineProps<{result?:OperationResult;kind:DatabaseKind;offset:number;queryText:string;busy:boolean;active:boolean;error:string;notice:string;canBack:boolean;canFirst:boolean;canNext:boolean;canRefresh?:boolean;editable?:(index:number)=>boolean;canAdd?:boolean;canRemove?:boolean;runId:number;sourceLabel:string}>()
-const emit=defineEmits<{page:[direction:'first'|'prev'|'next'|'refresh'];edit:[index:number];add:[];remove:[index:number];draft:[index:number,action:'duplicate'|'null'|'empty',field?:string];collapse:[]}>()
+const props=defineProps<{result?:OperationResult;kind:DatabaseKind;offset:number;queryText:string;busy:boolean;active:boolean;error:string;notice:string;canBack:boolean;canFirst:boolean;canNext:boolean;canRefresh?:boolean;editable?:(index:number)=>boolean;canAdd?:boolean;canRemove?:boolean;runId:number;sourceLabel:string;bulkAvailable?:boolean;bulkMode?:boolean;bulkCount?:number;bulkBlocked?:boolean;bulkError?:string;bulkInline?:CellDraft;bulkDrafts?:Record<string,string>;bulkCellText?:(row:number,field:string)=>string|undefined}>()
+const emit=defineEmits<{page:[direction:'first'|'prev'|'next'|'refresh'];edit:[index:number];add:[];remove:[index:number];draft:[index:number,action:'duplicate'|'null'|'empty',field?:string];collapse:[];bulkStart:[];bulkSave:[];bulkDiscard:[];bulkStage:[drafts:CellDraft[]];bulkInlineBegin:[row:number,field:string];bulkInlineInput:[text:string];bulkInlineFinish:[cancel:boolean]}>()
 type Snapshot={id:number;data:OperationResult;offset:number;queryText:string;sourceLabel:string;time:number}
 const pins=ref<Snapshot[]>([]),pinId=ref<number>(),tab=ref<'messages'|'summary'|'data'>('data'),view=ref<'grid'|'tree'|'json'>('grid')
 const selected=ref(-1),colors=ref(true),cell=ref<{title:string;text:string;document?:string;index:number}>(),localError=ref('')
@@ -23,29 +24,31 @@ const text=computed(()=>pinned.value?.queryText||props.queryText)
 const document=computed(()=>data.value?.documents?.[selected.value])
 const canEdit=computed(()=>!pinned.value&&!props.busy&&selected.value>=0&&!!props.editable?.(selected.value))
 const canAdd=computed(()=>!pinned.value&&!props.busy&&!!props.canAdd)
+const canBulk=computed(()=>!pinned.value&&!props.busy&&!!props.bulkAvailable&&!props.bulkBlocked)
 const maxPins=5
 const selectedRaw=computed(()=>document.value||JSON.stringify(data.value?.rawRows?.[selected.value]||data.value?.rows[selected.value]||{},null,2))
 const jsonText=computed(()=>data.value?resultJSON(data.value):'')
 watch(()=>props.runId,()=>{pinId.value=undefined;tab.value=props.error?'messages':props.result?.rows.length?'data':'summary';selected.value=props.result?.rows.length?0:-1;cell.value=undefined;localError.value=''})
-watch(()=>props.error,v=>{if(v&&!pinned.value)tab.value='messages'})
+watch(()=>props.error,v=>{if(v&&!pinned.value&&!props.bulkMode)tab.value='messages'})
+watch(()=>props.bulkMode,v=>{if(v){pinId.value=undefined;tab.value='data';view.value='grid';cell.value=undefined}})
 watch(data,v=>{selected.value=v?.rows.length?0:-1;cell.value=undefined;binaryCell.value=undefined;if(!v?.documents&&view.value==='tree')view.value='grid'})
 watch(()=>props.active,active=>{if(!active){cell.value=undefined;binaryCell.value=undefined}})
 function pin(){
- if(!props.result||pinned.value||pins.value.length>=maxPins)return
+ if(props.bulkMode||!props.result||pinned.value||pins.value.length>=maxPins)return
  pins.value.push({id:++nextId,data:JSON.parse(JSON.stringify(props.result)),offset:props.offset,queryText:props.queryText,sourceLabel:props.sourceLabel,time:Date.now()})
  pinId.value=nextId;tab.value='data'
 }
 function unpin(id:number){pins.value=pins.value.filter(p=>p.id!==id);if(pinId.value===id)pinId.value=undefined}
-function choose(id?:number){pinId.value=id;tab.value='data';selected.value=data.value?.rows.length?0:-1}
+function choose(id?:number){if(props.bulkMode)return;pinId.value=id;tab.value='data';selected.value=data.value?.rows.length?0:-1}
 async function action(fn:()=>Promise<unknown>){localError.value='';try{await fn()}catch(e){localError.value=e instanceof Error?e.message:String(e)}}
 function copy(){if(data.value)void action(()=>window.dbex.copyText(selected.value>=0?selectedRaw.value:jsonText.value))}
 function exportData(format:'csv'|'json'){
- if(!data.value)return
+ if(props.bulkMode||!data.value)return
  const current=data.value
  void action(()=>{const rows=current.documents?.map(doc=>Object.fromEntries(Object.entries(JSON.parse(doc)).map(([key,value])=>[key,value!==null&&typeof value==='object'?JSON.stringify(value):value])))||current.rawRows||current.rows;return window.dbex.exportFile('query-result.'+format,format==='json'?resultJSON(current):csvFromRows(current.columns,rows),format)})
 }
 function exportRows(indices:number[]){
- const current=data.value;if(!current||!indices.length)return
+ const current=data.value;if(props.bulkMode||!current||!indices.length)return
  void action(async()=>{
   const rows=[...new Set(indices)].filter(i=>Number.isInteger(i)&&i>=0&&i<current.rows.length)
   if(!rows.length)return
@@ -76,12 +79,12 @@ function edit(index:number){if(!pinned.value&&props.editable?.(index))emit('edit
 <template>
  <section class="query-result-panel">
   <nav class="query-result-tabs">
-   <button :class="{active:tab==='messages'&&!pinned}" @click="pinId=undefined;tab='messages'">{{t('消息')}}<span v-if="error" class="query-error-dot">●</span></button>
-   <button :class="{active:tab==='summary'}" @click="tab='summary'">{{t('摘要')}}</button>
-   <span class="result-tab" v-for="p in pins" :key="p.id" :class="{active:tab==='data'&&pinId===p.id}"><button :title="p.queryText" @click="choose(p.id)">♧ {{t('固定结果')}} {{p.id}}</button><button :aria-label="t('取消固定')+' '+p.id" @click="unpin(p.id)">×</button></span>
+   <button :class="{active:tab==='messages'&&!pinned}" :disabled="bulkMode" @click="pinId=undefined;tab='messages'">{{t('消息')}}<span v-if="error" class="query-error-dot">●</span></button>
+   <button :class="{active:tab==='summary'}" :disabled="bulkMode" @click="tab='summary'">{{t('摘要')}}</button>
+   <span class="result-tab" v-for="p in pins" :key="p.id" :class="{active:tab==='data'&&pinId===p.id}"><button :title="p.queryText" :disabled="bulkMode" @click="choose(p.id)">♧ {{t('固定结果')}} {{p.id}}</button><button :aria-label="t('取消固定')+' '+p.id" @click="unpin(p.id)">×</button></span>
    <button :class="{active:tab==='data'&&!pinned}" @click="choose()">{{t('结果')}} 1</button>
    <span class="toolbar-spacer"/>
-   <button :aria-label="t('收起结果集')" :title="t('收起结果集')" @click="emit('collapse')">⌄</button>
+   <button :aria-label="t('收起结果集')" :title="t('收起结果集')" :disabled="bulkMode" @click="emit('collapse')">⌄</button>
   </nav>
   <div v-if="tab==='messages'" class="query-result-text">
    <p v-if="error" class="inline-message error">{{localize(error)}}</p>
@@ -98,16 +101,23 @@ function edit(index:number){if(!pinned.value&&props.editable?.(index))emit('edit
     <button class="btn secondary small" :disabled="!canEdit" @click="edit(selected)">{{t('编辑')}}</button>
     <button class="btn secondary small" :disabled="!canAdd" @click="emit('add')">{{t('新增')}}</button>
     <button class="btn secondary small danger-text" :disabled="!canEdit||canRemove===false" @click="emit('remove',selected)">{{t('删除')}}</button>
+    <button v-if="bulkAvailable&&!bulkMode&&!pinned" class="btn secondary small" :disabled="!canBulk" @click="emit('bulkStart')">{{t('批量编辑')}}</button>
+    <template v-if="bulkMode">
+     <button class="btn primary small" :disabled="!canBulk||(!bulkCount&&!bulkInline)" @click="emit('bulkSave')">{{t('保存全部修改')}}</button>
+     <button class="btn secondary small" :disabled="busy" @click="emit('bulkDiscard')">{{t('取消全部修改')}}</button>
+     <span class="muted-text">{{t('已暂存修改')}} {{bulkCount||0}}</span>
+    </template>
     <span class="toolbar-spacer"/>
     <button class="btn secondary small" :class="{selected:colors}" :aria-pressed="colors" @click="colors=!colors">{{t('类型配色')}}</button>
-    <button class="btn secondary small" :disabled="!data?.rows.length" :title="t('复制当前记录')" @click="copy">{{t('复制')}}</button>
-    <button class="btn secondary small" :disabled="!data?.rows.length" @click="exportData('json')">{{t('导出当前页 JSON')}}</button>
-    <button class="btn secondary small" :disabled="!data?.rows.length" @click="exportData('csv')">CSV</button>
-    <button class="btn secondary small" :disabled="!result||!!pinned||pins.length>=maxPins" @click="pin">{{t('固定结果')}}</button>
+    <button class="btn secondary small" :disabled="bulkMode||!data?.rows.length" :title="t('复制当前记录')" @click="copy">{{t('复制')}}</button>
+    <button class="btn secondary small" :disabled="bulkMode||!data?.rows.length" @click="exportData('json')">{{t('导出当前页 JSON')}}</button>
+    <button class="btn secondary small" :disabled="bulkMode||!data?.rows.length" @click="exportData('csv')">CSV</button>
+    <button class="btn secondary small" :disabled="bulkMode||!result||!!pinned||pins.length>=maxPins" @click="pin">{{t('固定结果')}}</button>
    </div>
+   <div v-if="bulkMode&&bulkError" role="alert" class="inline-message error">{{localize(bulkError)}}<template v-if="bulkBlocked"> · {{t('请取消修改并刷新结果后重试。')}}</template></div>
    <div v-if="localError" class="inline-message error">{{localize(localError)}}</div>
    <template v-if="data">
-    <ResultGrid v-if="view==='grid'" :columns="data.columns" :rows="data.rows" :documents="data.documents" :bson-types="data.bsonTypes" :column-types="data.columnTypes" :sqlite-types="data.sqliteTypes" :null-cells="data.nullCells" :relational-kind="kind==='clickhouse'?'clickhouse':kind==='mariadb'?'mariadb':'mysql'" :offset="currentOffset" :active="active" :selected="selected" :show-colors="colors" :resize-all="true" workspace-tools export-selection @export-rows="exportRows" :document-menu="!!data.documents?.length" :can-edit-document="canEdit" :can-add-document="canAdd" @select="selected=$event" @cell-view="viewRow" @open="viewRow($event)" @document-view="viewRow($event)" @document-edit="edit($event)" @document-action="documentAction"/>
+    <ResultGrid v-if="view==='grid'" :columns="data.columns" :rows="data.rows" :documents="data.documents" :bson-types="data.bsonTypes" :column-types="data.columnTypes" :sqlite-types="data.sqliteTypes" :null-cells="data.nullCells" :relational-kind="kind==='clickhouse'?'clickhouse':kind==='mariadb'?'mariadb':'mysql'" :offset="currentOffset" :active="active" :selected="selected" :show-colors="colors" :resize-all="true" workspace-tools :export-selection="!bulkMode" :inline-cell="bulkMode?bulkInline:undefined" :inline-drafts="bulkMode?bulkDrafts:undefined" :editable-cell-text="bulkMode&&canBulk?bulkCellText:undefined" :can-inline-edit="bulkMode&&canBulk?(row,field)=>bulkCellText?.(row,field)!==undefined:undefined" @stage-cells="cells=>{if(bulkMode&&canBulk)emit('bulkStage',cells)}" @inline-begin="(row,field)=>emit('bulkInlineBegin',row,field)" @inline-input="value=>emit('bulkInlineInput',value)" @inline-finish="cancel=>emit('bulkInlineFinish',cancel)" @export-rows="exportRows" :document-menu="!!data.documents?.length" :can-edit-document="canEdit" :can-add-document="canAdd" @select="selected=$event" @cell-view="viewRow" @open="viewRow($event)" @document-view="viewRow($event)" @document-edit="edit($event)" @document-action="documentAction"/>
     <div v-else-if="view==='tree'" class="query-result-tree">
      <div class="result-document-list"><button v-for="(row,i) in data.rows" :key="i" :class="{active:i===selected}" @click="selected=i">{{currentOffset+i+1}} · {{row._id||t('文档')}}</button></div>
      <BsonDocumentTree v-if="document" :document="document" :metadata="data.bsonTypes?.[selected]"/>
@@ -118,15 +128,15 @@ function edit(index:number){if(!pinned.value&&props.editable?.(index))emit('edit
    <footer class="result-footer query-result-footer">
     <span>{{data?.rows.length||0}} {{t('条记录')}}<template v-if="data?.rows.length"> · {{currentOffset+1}}–{{currentOffset+data.rows.length}}</template><template v-if="pinned"> · {{t('固定快照')}}</template><template v-else-if="data?.nextOffset!==undefined"> · {{t('还有更多记录')}}</template><template v-else-if="data?.truncated"> · {{t('结果已截断')}}</template></span>
     <div>
-     <button class="btn secondary small" :aria-label="t('第一页')" :title="t('第一页')" :disabled="busy||!!pinned||!canFirst" @click="emit('page','first')">|‹</button>
-     <button class="btn secondary small" :disabled="busy||!!pinned||!canBack" @click="emit('page','prev')">{{t('上一页')}}</button>
-     <button class="btn secondary small" :disabled="busy||!!pinned||!canNext" @click="emit('page','next')">{{t('下一页')}}</button>
-     <button class="btn secondary small" :disabled="busy||!!pinned||!canRefresh" @click="emit('page','refresh')">{{t('刷新')}}</button>
+     <button class="btn secondary small" :aria-label="t('第一页')" :title="t('第一页')" :disabled="bulkMode||busy||!!pinned||!canFirst" @click="emit('page','first')">|‹</button>
+     <button class="btn secondary small" :disabled="bulkMode||busy||!!pinned||!canBack" @click="emit('page','prev')">{{t('上一页')}}</button>
+     <button class="btn secondary small" :disabled="bulkMode||busy||!!pinned||!canNext" @click="emit('page','next')">{{t('下一页')}}</button>
+     <button class="btn secondary small" :disabled="bulkMode||busy||!!pinned||!canRefresh" @click="emit('page','refresh')">{{t('刷新')}}</button>
     </div>
     <div class="result-view-buttons">
      <button :class="{active:view==='grid'}" @click="view='grid'">{{t('表格')}}</button>
-     <button :class="{active:view==='tree'}" :disabled="!data?.documents?.length" @click="view='tree'">{{t('文档树')}}</button>
-     <button :class="{active:view==='json'}" @click="view='json'">JSON</button>
+     <button :class="{active:view==='tree'}" :disabled="bulkMode||!data?.documents?.length" @click="view='tree'">{{t('文档树')}}</button>
+     <button :class="{active:view==='json'}" :disabled="bulkMode" @click="view='json'">JSON</button>
     </div>
    </footer>
   </template>

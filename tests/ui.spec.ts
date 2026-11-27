@@ -115,6 +115,7 @@ async function installBridge(page: Page) {
         if (op.action === 'mysql.structure' && (window as any).__dbexQueryEditFixture) return {...grid([{name:'id',type:'BIGINT',key:'PRI',extra:''},{name:'name',type:'VARCHAR(50)',key:'',extra:''},{name:'email',type:'VARCHAR(100)',key:'',extra:''}]),primaryKeys:['id'],objectCapabilities:{insert:true,update:true,delete:true,import:true,transactional:true}}
         if (op.action === 'mysql.query' && (window as any).__dbexQueryEditFixture) {
           const values=id==='sql2'?[{id:'2',name:'Grace',email:'grace@example.test'}]:rows
+          if(id==='sql'&&(window as any).__dbexBulkFixture&&values.length===1)values.push({id:'2',name:'Grace',email:'grace@example.test'})
           return {...grid(values),rawRows:values,queryReadOnly:true,columnTypes:['BIGINT','VARCHAR','VARCHAR'],durationMs:4}
         }
         if (op.action === 'mysql.structure' && (window as any).__dbexTemporalFixture) return { ...grid([{name:'id',type:'bigint',key:'PRI'},{name:'name',type:'varchar(255)',key:''},{name:'stamp',type:'DATETIME(6)',key:''}]),primaryKeys:['id']}
@@ -130,8 +131,8 @@ async function installBridge(page: Page) {
           return { ...grid(values), rawRows: values, columnTypes: ['BIGINT','VARCHAR','VARCHAR'], nullCells: values.map(() => []), durationMs: 4, transaction: false, nextOffset: op.action === 'mysql.browse' && (op.offset || 0) < 500 ? (op.offset || 0) + op.limit : undefined }
         }
         if(op.action==='mysql.updateBatch'&&op.queryResult&&(window as any).__dbexQueryEditFixture){
-          const edit=op.edits[0];if((window as any).__dbexQueryEditConflict)throw Error('EDIT_CONFLICT: fixture conflict')
-          if(id==='sql')Object.assign(rows[0],edit.changes)
+          if((window as any).__dbexQueryEditConflict)throw Error('EDIT_CONFLICT: fixture conflict')
+          if(id==='sql')for(const edit of op.edits){const row=rows.find(r=>r.id===edit.key.id);if(row)Object.assign(row,edit.changes)}
         }
         if(op.action==='mysql.updateBatch'||op.action==='mongo.replaceBatch')return {columns:[],rows:[],affectedRows:op.edits.length,gridBatch:{total:op.edits.length,completed:op.edits.length,atomic:op.action==='mysql.updateBatch'}}
         if (op.action === 'mysql.begin') return { columns: [], rows: [], transaction: true }
@@ -147,6 +148,11 @@ async function installBridge(page: Page) {
         return { columns: [], rows: [], affectedRows: 1, message: '操作已完成' }
       },
       async clickhouseTransfer(id:string,input:any){calls.push({sessionId:id,action:'clickhouseTransfer',...input});return {bytes:1024}},
+      async executeScriptBatch(id:string,request:any){
+        calls.push({action:'executeScriptBatch',id,request})
+        await new Promise(resolve=>setTimeout(resolve,350))
+        return {script:true,total:3,items:[{sql:'INSERT INTO users VALUES (1)',write:true,result:{columns:[],rows:[],affectedRows:1,message:'操作已完成'}},{sql:'SELECT * FROM users',write:false,result:{...grid([{id:'1',name:'Ada'}]),queryReadOnly:true}}],failedAt:3,error:'DATABASE_ERROR: fixture duplicate',writeFailure:true}
+      },
       async executeReadBatch(id:string,request:any){calls.push({action:'executeReadBatch',id,request});return {total:2,items:[{sql:'SELECT 1',result:grid([{n:'1'}])},{sql:'SELECT 2',result:grid([{n:'2'}])}]}},
       async listFilePresets(id:string,database:string,entity:string,direction:string){return JSON.parse(localStorage.getItem('mock.file-presets')||'[]').filter((p:any)=>p.connectionId===id&&p.database===database&&p.entity===entity&&p.direction===direction)},
       async saveFilePreset(id:string,database:string,entity:string,direction:string,draft:any,presetId?:string){const all=JSON.parse(localStorage.getItem('mock.file-presets')||'[]');const item={...draft,id:presetId||crypto.randomUUID(),connectionId:id,database,entity,direction,kind:sessions[id].kind,updatedAt:new Date().toISOString()};localStorage.setItem('mock.file-presets',JSON.stringify([item,...all.filter((x:any)=>x.id!==item.id)]));return item},
@@ -2039,4 +2045,92 @@ test('Q query target switch: explicit same-engine target, no auto-run, original 
  await run.click()
  await expect(panel.locator('.data-table')).toContainText('Ada')
  expect(await page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.query').at(-1))).toMatchObject({sessionId:'sql',database:'app'})
+})
+
+
+test('Q mixed script: explicit write mode, individual results and partial failure remain visible',async({page})=>{
+ await connect(page,'MySQL Local')
+ await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ await page.locator('[data-object-kind="query-folder"]').click()
+ await page.locator('.object-list-panel:visible').getByRole('button',{name:/新建查询/}).click()
+ const editor=page.locator('.saved-query-editor:visible')
+ const run=editor.getByRole('button',{name:'执行读写脚本',exact:true})
+ await replaceEditor(page,'.saved-query-editor:visible .query-editor .monaco-editor','INSERT INTO users VALUES (1); SELECT * FROM users; INSERT INTO users VALUES (1)')
+ await expect(run).toBeDisabled()
+ await editor.getByRole('button',{name:'只读 · 启用写入',exact:true}).click()
+ await run.click()
+ await expect(editor.getByRole('button',{name:'停止后续语句',exact:true})).toBeVisible()
+ await expect(editor.locator('.batch-results-strip')).toContainText('2 / 3')
+ await expect(editor.locator('.batch-results-strip')).toContainText('停止于语句 3')
+ await expect(editor.locator('.inline-message.error').first()).toContainText('失败的写入可能部分完成')
+ await expect(editor.locator('.batch-results-strip')).toContainText('写入 1')
+ await editor.locator('.batch-results-strip').getByRole('button',{name:/语句结果 2/}).click()
+ const panel=editor.locator('.query-result-panel')
+ await panel.getByRole('button',{name:'结果 1',exact:true}).click()
+ await expect(panel.locator('.data-table')).toContainText('Ada')
+ await expect(panel.getByRole('button',{name:'编辑',exact:true})).toBeDisabled()
+ expect(await page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='executeScriptBatch').at(-1))).toMatchObject({id:'sql',request:{database:'app',text:'INSERT INTO users VALUES (1); SELECT * FROM users; INSERT INTO users VALUES (1)',parameters:[]}})
+})
+
+
+test('Q SQL bulk edit: inline edits and clipboard paste stage atomically; conflicts require refresh',async({page})=>{
+ await page.evaluate(()=>{(window as any).__dbexQueryEditFixture=true;(window as any).__dbexBulkFixture=true})
+ await connect(page,'MySQL Local')
+ await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ await page.locator('[data-object-kind="query-folder"]').click()
+ await page.locator('.object-list-panel:visible').getByRole('button',{name:/新建查询/}).click()
+ const editor=page.locator('.saved-query-editor:visible'),panel=editor.locator('.query-result-panel')
+ const run=editor.getByRole('button',{name:'运行选中 / 全部',exact:true}),input='.saved-query-editor:visible .query-editor .monaco-editor'
+ await replaceEditor(page,input,'SELECT * FROM users ORDER BY id')
+ await run.click()
+ await expect(panel.locator('.data-table')).toContainText('Grace')
+ await editor.getByRole('button',{name:'只读 · 启用写入',exact:true}).click()
+ await panel.getByRole('button',{name:'批量编辑',exact:true}).click()
+ const cell=(row:number,field:string)=>panel.locator('tr[data-row-index="'+row+'"] [data-grid-field="'+field+'"]')
+ await cell(0,'name').dblclick()
+ const inline=panel.locator('.inline-grid-input')
+ await inline.fill('Alicia');await inline.press('Enter')
+ await expect(cell(0,'name')).toContainText('Alicia')
+ await cell(0,'name').click()
+ await page.evaluate(()=>{
+  const host=document.activeElement!,dt=new DataTransfer();dt.setData('text/plain','Alice\nGrace II')
+  host.dispatchEvent(new ClipboardEvent('paste',{clipboardData:dt,bubbles:true,cancelable:true}))
+ })
+ await expect(cell(0,'name')).toContainText('Alice')
+ await expect(cell(1,'name')).toContainText('Grace II')
+ await cell(0,'id').click()
+ await page.evaluate(()=>{
+  const dt=new DataTransfer();dt.setData('text/plain','999\tWrong')
+  document.activeElement!.dispatchEvent(new ClipboardEvent('paste',{clipboardData:dt,bubbles:true,cancelable:true}))
+ })
+ await expect(panel.locator('[role="alert"]')).toContainText('未暂存任何修改')
+ await expect(cell(0,'name')).toContainText('Alice')
+ await expect(run).toBeDisabled()
+ await expect(editor.getByRole('button',{name:'切换执行目标',exact:true})).toBeDisabled()
+ expect(await page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.updateBatch').length)).toBe(0)
+ await panel.getByRole('button',{name:'保存全部修改',exact:true}).click()
+ await expect(panel.getByRole('button',{name:'批量编辑',exact:true})).toBeVisible()
+ expect(await page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.updateBatch').at(-1))).toMatchObject({sessionId:'sql',database:'app',entity:'users',queryResult:true,edits:[{key:{id:'1'},changes:{name:'Alice'}},{key:{id:'2'},changes:{name:'Grace II'}}]})
+ await panel.getByRole('button',{name:'批量编辑',exact:true}).click()
+ await cell(0,'name').dblclick();await inline.fill('Conflict');await inline.press('Enter')
+ await page.evaluate(()=>{(window as any).__dbexQueryEditConflict=true})
+ await panel.getByRole('button',{name:'保存全部修改',exact:true}).click()
+ await expect(panel.locator('[role="alert"]')).toContainText('EDIT_CONFLICT')
+ await expect(panel.getByRole('button',{name:'保存全部修改',exact:true})).toBeDisabled()
+ await panel.getByRole('button',{name:'取消全部修改',exact:true}).click()
+ await expect(cell(0,'name')).toContainText('Alice')
+})
+
+
+test('Q SQL CTE: qualified output aliases are suggested without executing the query',async({page})=>{
+ await connect(page,'MySQL Local')
+ await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ await page.locator('[data-object-kind="query-folder"]').click()
+ await page.locator('.object-list-panel:visible').getByRole('button',{name:/新建查询/}).click()
+ const input='.saved-query-editor:visible .query-editor .monaco-editor'
+ await replaceEditor(page,input,'WITH sample(output_value) AS (SELECT 1) SELECT * FROM sample s WHERE s.')
+ await page.keyboard.press('Escape')
+ await page.keyboard.press('Control+Space')
+ await expect(page.locator('.suggest-widget.visible')).toContainText('output_value')
+ expect(await page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.query'))).toEqual([])
 })

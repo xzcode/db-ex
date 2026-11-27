@@ -285,6 +285,7 @@ export interface DbExAPI {
   preview(sessionId: string, database: string, entity: string, offset?: number): Promise<DataPreview>
   redisKeys(sessionId: string, cursor?: string, pattern?: string): Promise<DataPreview>
   redisValue(sessionId: string, key: string): Promise<DataPreview>
+  executeScriptBatch(id:string,request:import('./query-batch').QueryBatchRequest):Promise<import('./query-batch').QueryBatchResult>
   executeReadBatch(id:string,request:import('./query-batch').QueryBatchRequest):Promise<import('./query-batch').QueryBatchResult>
   executeQuery(id:string,operation:DatabaseOperation):Promise<OperationResult>
   cancelQuery(id:string):Promise<boolean>

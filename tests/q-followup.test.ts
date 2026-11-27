@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {editBsonTree,treeNodes} from '../src/shared/bson-tree-edit'
 import {recordLocator,appendBrowsePage} from '../src/shared/browse-navigation'
-import {planReadBatch} from '../src/main/operations/query-batch'
+import {planReadBatch,planScriptBatch} from '../src/main/operations/query-batch'
 import {FilePresetStore} from '../src/main/storage/file-presets'
 import type {FileTransferPreset} from '../src/shared/file-transfer'
 import {mkdtemp,writeFile,rm} from 'node:fs/promises'
@@ -56,4 +56,19 @@ test('streaming file preview decodes UTF-16 and GB18030 without changing content
   assert.equal((await inspectFile(a,'csv',',','utf-16le')).sample[0]?.name,'中文')
   assert.equal((await inspectFile(b,'csv',',','gb18030')).sample[0]?.name,'中文')
  }finally{await rm(dir,{recursive:true,force:true})}
+})
+
+
+test('mixed script preflights every statement and preserves ordered positional parameters',()=>{
+ const request={database:'app',text:'INSERT INTO users(id,name) VALUES (?,?); SELECT * FROM users WHERE id=?; UPDATE users SET name=? WHERE id=?',parameters:[1,'Ada',1,'Grace',1],limit:20}
+ const plan=planScriptBatch('mysql',request,true)
+ assert.deepEqual(plan.map(item=>item.write),[true,false,true])
+ assert.deepEqual(plan.map(item=>item.operation.parameters),[[1,'Ada'],[1],['Grace',1]])
+ assert.deepEqual(plan.map(item=>item.operation.confirmed),[true,undefined,true])
+ assert.throws(()=>planScriptBatch('mysql',request,false),/READ_ONLY/)
+ assert.throws(()=>planScriptBatch('sqlite',{...request,database:'main',text:'INSERT INTO users VALUES(1); BEGIN',parameters:[]},true),/SQL_POLICY/)
+ assert.throws(()=>planScriptBatch('mysql',{...request,text:'INSERT INTO users VALUES(1); SELECT @session',parameters:[]},true),/SQL_POLICY/)
+ assert.throws(()=>planScriptBatch('mysql',{...request,text:'SELECT 1; SELECT 2',parameters:[]},true),/SQL_POLICY/)
+ assert.throws(()=>planScriptBatch('clickhouse',request,true),/SQL_POLICY/)
+ assert.throws(()=>planScriptBatch('mysql',{...request,parameters:[1]},true),/SQL_POLICY/)
 })

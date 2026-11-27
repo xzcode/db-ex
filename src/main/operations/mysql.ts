@@ -372,17 +372,17 @@ export class MysqlOperations {
     requireWrite(context)
     if(!Array.isArray(operation.edits)||!operation.edits.length||operation.edits.length>MAX_ROWS||Buffer.byteLength(JSON.stringify(operation.edits))>MAX_BYTES)throw new Error('LIMIT_EXCEEDED: 单批编辑最多 500 行和 2 MiB')
     const structure=await this.structure(operation.database,operation.entity,signal)
-    this.assertRecordWrite(structure,'update')
-    if(!mysqlObjectCapabilities(structure.tableType,structure.engine,structure.primaryKeys.length>0).update)throw new Error('READ_ONLY: 只读对象')
     const atomic=structure.engine.toUpperCase()==='INNODB',existing=this.transaction
     if(operation.queryResult===true){
-      if(existing||!atomic||protectedDatabase(this.kind,operation.database))throw new Error('QUERY_EDIT: 查询结果无法安全编辑')
-      // An isolated query must never be written to a temporary table that
-      // shadows the same qualified permanent name on the explorer session.
+      if(existing||!atomic||protectedDatabase(this.kind,operation.database)||!mysqlObjectCapabilities(structure.tableType,structure.engine,structure.primaryKeys.length>0).update)throw new Error('QUERY_EDIT: 查询结果无法安全编辑')
+      // MySQL may report the permanent table in information_schema while
+      // SHOW CREATE TABLE resolves a temporary table on this connection.
       const ddl=await this.query('SHOW CREATE TABLE '+quoteIdentifier(operation.database)+'.'+quoteIdentifier(operation.entity),[],signal,1)
       const definition=String(ddl.values[0]?.[1]??'')
       if(ddl.truncated||!/^CREATE\s+TABLE\b/i.test(definition))throw new Error('QUERY_EDIT: 查询结果无法安全编辑')
     }
+    this.assertRecordWrite(structure,'update')
+    if(!mysqlObjectCapabilities(structure.tableType,structure.engine,structure.primaryKeys.length>0).update)throw new Error('READ_ONLY: 只读对象')
     if(existing&&!atomic)throw new Error('TRANSACTION_REQUIRED: 非事务表不能参与批量事务编辑')
     const identities=new Set<string>()
     const edits=operation.edits.map(item=>{

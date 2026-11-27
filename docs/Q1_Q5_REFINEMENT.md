@@ -125,3 +125,44 @@ connection, plus existing history and single-table edit cases. Added a
 real isolated SQL-family fixture to the existing M12 workflow for exact
 UInt64/DECIMAL query editing, stale row rejection and temporary-table
 shadow protection; results are pending CI.
+
+## Mixed SQL scripts, bulk query-result edits and completion refinement
+
+- Added a separate explicitly confirmed read/write script action for
+  MySQL, MariaDB and SQLite. Preflight every statement's lexical boundaries,
+  supported policy and positional parameters before starting. A fresh
+  authenticated connection runs statements sequentially, preserving their
+  individual read results, affected rows and partial completion. No implicit
+  outer transaction; earlier writes may already be committed. Existing
+  explicit transactions, session-variable scripts and unsupported statements
+  are rejected. Stop requests take effect at statement boundaries; uncertain
+  write failures are reported, not retried. The existing 32 MiB preview
+  budget remains; an executed statement's outcome is not misrepresented as
+  an unexecuted statement when its preview must be omitted.
+- Added explicit bulk editing for eligible complete single-table SQL results:
+  inline cell editing, range paste/replace, draft indicators, save-all and
+  discard. Each paste is validated as a whole. Save reuses the native
+  confirmation and atomic full-original-row concurrency guard. No key
+  mutations, lossy rows, pinned results, joins or batch results are editable.
+  While editing, target switching and query execution are blocked; a failed
+  write requires discard and refresh before another attempt.
+- CTE output-list and simple projected-field/AS-alias completion, including
+  recursive CTE names and qualified aliases. Physical metadata is not fetched
+  for a recognized unqualified CTE. Wildcards, ambiguous expressions and
+  complex nested/multi-statement scopes are not fully inferred. The completion
+  provider uses the current editor buffer so same-keystroke suggestions work.
+  Reported server versions filter selected MySQL/MariaDB/SQLite function
+  vocabulary; suggestions remain reference guidance, not a policy bypass.
+- Fixed the previous exact candidate's MariaDB temporary-table acceptance:
+  it correctly rejected writes as read-only but the fixture expected the
+  query-edit-specific error. Query-result safety checks now precede generic
+  record capability errors; both MySQL and MariaDB retain the shadow guard.
+
+Local evidence: 16 focused policy/metadata/real SQLite cases passed; the
+SQLite isolated worker fixture validated ordered mixed scripts, confirmation
+and preflight, partial commit, stop at a statement boundary, and original
+connection reuse. Targeted browser regressions passed for SQL bulk edits,
+mixed scripts, CTE completion, read batches, saved query scope, single row
+edits and execution history. Added a real mixed-script fixture to the
+existing MySQL/MariaDB TLS/SOCKS matrix. Remote acceptance must run on this
+exact candidate before merge/release.
