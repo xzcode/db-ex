@@ -1,5 +1,5 @@
 import {parse} from 'acorn'
-import type {MongoOperation} from './types'
+import type {MongoOperation,MongoFindSettings,MongoScriptWriteMethod} from './types'
 import {parseMongoDocumentEditor} from './bson-editor'
 
 /** Parse one native-shell-style expression. Never evaluate JavaScript.
@@ -30,8 +30,8 @@ function integer(node:Ast|undefined,maximum:number):number{
  return node.value
 }
 export type MongoScriptPlan={operation:MongoOperation;maxRows?:number;baseOffset:number}
-export const mongoScriptMethods=['find','findOne','aggregate','countDocuments','insertOne','insertMany','createIndex','dropIndex'] as const
-export const mongoCursorMethods=['sort','skip','limit','project'] as const
+export const mongoScriptMethods=['find','findOne','aggregate','count','countDocuments','estimatedDocumentCount','getIndexes','insertOne','insertMany','updateOne','updateMany','replaceOne','deleteOne','deleteMany','findOneAndUpdate','findOneAndReplace','findOneAndDelete','createIndex','dropIndex'] as const
+export const mongoCursorMethods=['sort','skip','limit','project','hint','collation','batchSize','maxTimeMS','pretty','toArray'] as const
 export const mongoConstructors=['ObjectId','NumberInt','NumberLong','NumberDecimal','Int32','Long','Double','Decimal128','ISODate','Date','Timestamp','BinData','Regex','MinKey','MaxKey'] as const
 const ctorAliases:Record<string,string>={NumberInt:'Int32',NumberLong:'Long',NumberDecimal:'Decimal128'}
 
@@ -92,6 +92,18 @@ export function compileMongoScript(source:string,database:string,pageSize=100):M
   if(node.type!=='ObjectExpression')return invalid()
   return data(node)
  }
+ function optionsObject(node:Ast|undefined):Record<string,Ast>{
+  if(!node)return {}
+  if(node.type!=='ObjectExpression')return invalid()
+  const values:Record<string,Ast>=Object.create(null)
+  for(const p of node.properties||[]){
+   if(p.type!=='Property'||p.kind!=='init'||p.method||p.shorthand||p.computed||!p.key||!p.value)return invalid()
+   const key=nameOf(p.key)
+   if(Object.hasOwn(values,key))return invalid()
+   values[key]=p.value as Ast
+  }
+  return values
+ }
  function collection(node:Ast):string{
   if(node.type==='CallExpression'){
    const item=call(node)
@@ -107,31 +119,65 @@ export function compileMongoScript(source:string,database:string,pageSize=100):M
  while(current.type==='CallExpression'){
   const item=call(current)
   if(!mongoCursorMethods.includes(item.name as typeof mongoCursorMethods[number]))break
-  if(modifiers.some(m=>m.name===item.name)||item.args.length!==1)return invalid()
+  if(modifiers.some(m=>m.name===item.name)||item.args.length!==(['pretty','toArray'].includes(item.name)?0:1))return invalid()
   modifiers.unshift({name:item.name,args:item.args});current=item.object
  }
  const root=call(current),entity=collection(root.object),args=root.args
  if(!entity||entity.length>200||entity.includes('\0'))return invalid()
  const target={database,entity}
  if(root.name==='find'||root.name==='findOne'){
-  if(args.length>2||root.name==='findOne'&&modifiers.length)return invalid()
+  if(args.length>3||root.name==='findOne'&&modifiers.length)return invalid()
+  const settings:MongoFindSettings={}
   let filter=object(args[0]),projection=object(args[1]),sort='{}',baseOffset=0,maxRows=root.name==='findOne'?1:undefined
-  for(const modifier of modifiers){
-   if(modifier.name==='sort')sort=object(modifier.args[0])
-   else if(modifier.name==='project'){if(args.length===2)return invalid();projection=object(modifier.args[0])}
-   else if(modifier.name==='skip')baseOffset=integer(modifier.args[0],1000000)
-   else if(modifier.name==='limit'){const n=integer(modifier.args[0],1000000);maxRows=n||undefined}
+  const opts=optionsObject(args[2])
+  const supported=['sort','skip','limit','hint','collation','batchSize','maxTimeMS']
+  if(Object.keys(opts).some(k=>!supported.includes(k)||root.name==='findOne'&&k==='limit'))return invalid()
+  function option(name:string,value:Ast|undefined){
+   if(name==='sort')sort=object(value)
+   else if(name==='project'){if(args.length>=2)return invalid();projection=object(value)}
+   else if(name==='skip')baseOffset=integer(value,1000000)
+   else if(name==='limit'){const n=integer(value,1000000);maxRows=n||undefined}
+   else if(name==='hint'){settings.hint=value?.type==='Literal'&&typeof value.value==='string'?JSON.stringify(literalString(value)):object(value)}
+   else if(name==='collation')settings.collation=object(value)
+   else if(name==='batchSize'){const n=integer(value,500);if(n<1)return invalid();settings.batchSize=n}
+   else if(name==='maxTimeMS'){const n=integer(value,30000);if(n<1)return invalid();settings.maxTimeMS=n}
   }
-  return {operation:{action:'mongo.find',...target,filter,projection,sort,offset:baseOffset,limit:Math.min(pageSize,maxRows??pageSize)},maxRows,baseOffset}
+  for(const [key,value] of Object.entries(opts))option(key,value)
+  for(const modifier of modifiers){
+   if(Object.hasOwn(opts,modifier.name))return invalid()
+   option(modifier.name,modifier.args[0])
+  }
+  return {operation:{action:'mongo.find',...target,filter,projection,sort,offset:baseOffset,limit:Math.min(pageSize,maxRows??pageSize),...(Object.keys(settings).length?{settings}:{})},maxRows,baseOffset}
  }
  if(modifiers.length)return invalid()
  if(root.name==='aggregate'){
   if(args.length!==1||args[0]?.type!=='ArrayExpression')return invalid()
   return {operation:{action:'mongo.aggregate',...target,pipeline:data(args[0]),limit:pageSize},baseOffset:0}
  }
- if(root.name==='countDocuments'){
+ if(root.name==='countDocuments'||root.name==='count'){
   if(args.length>1)return invalid()
   return {operation:{action:'mongo.count',...target,filter:object(args[0])},baseOffset:0}
+ }
+ if(root.name==='estimatedDocumentCount'){
+  if(args.length)return invalid()
+  return {operation:{action:'mongo.estimateCount',...target},baseOffset:0}
+ }
+ if(root.name==='getIndexes'){
+  if(args.length)return invalid()
+  return {operation:{action:'mongo.indexes',...target},baseOffset:0}
+ }
+ const writes=['updateOne','updateMany','replaceOne','deleteOne','deleteMany','findOneAndUpdate','findOneAndReplace','findOneAndDelete']
+ if(writes.includes(root.name)){
+  const method=root.name as MongoScriptWriteMethod
+  const deleting=['deleteOne','deleteMany','findOneAndDelete'].includes(method)
+  if(args.length<(deleting?1:2)||args.length>(deleting?2:3))return invalid()
+  const filter=object(args[0])
+  if(!Object.keys(JSON.parse(filter)).length)return invalid() // no implicit unfiltered mutation
+  const opts=optionsObject(args[deleting?1:2])
+  const find=method.startsWith('findOneAnd')
+  const allowed=deleting?(find?['sort']:[]):find?['upsert','returnDocument','sort']:['upsert']
+  if(Object.keys(opts).some(k=>!allowed.includes(k)))return invalid()
+  return {operation:{action:'mongo.scriptWrite',...target,method,filter,...(!deleting?{value:object(args[1])}:{}),options:object(args[deleting?1:2]),confirmed:true},baseOffset:0}
  }
  if(root.name==='insertOne'||root.name==='insertMany'){
   if(args.length!==1)return invalid()

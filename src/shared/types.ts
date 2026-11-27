@@ -135,6 +135,8 @@ export interface OperationResult extends DataPreview {
   backupId?:string
   durationMs?: number
   truncated?: boolean
+  truncationReason?: 'page'|'bytes'|'document'
+  queryReadOnly?:boolean
   message?: string
   transaction?: boolean
   disconnected?: boolean
@@ -158,13 +160,17 @@ export type MysqlOperation =
   | ({ action: 'mysql.delete'; key: SqlRow; original: SqlRow } & Entity & Confirmed)
   | ({ action: 'mysql.import'; rows: SqlRow[] } & Entity & Confirmed)
   | ({ action: 'mysql.begin' | 'mysql.commit' | 'mysql.rollback' } & Confirmed)
+export interface MongoFindSettings {hint?:string;collation?:string;batchSize?:number;maxTimeMS?:number}
+export type MongoScriptWriteMethod='updateOne'|'updateMany'|'replaceOne'|'deleteOne'|'deleteMany'|'findOneAndUpdate'|'findOneAndReplace'|'findOneAndDelete'
 export type MongoOperation =
   | ({ action: 'mongo.createDatabase'; database: string; initialCollection: string } & Confirmed)
   | ({ action: 'mongo.dropDatabase'; database: string } & Confirmed)
   | ({ action: 'mongo.createCollection' | 'mongo.dropCollection' | 'mongo.clearCollection' } & Entity & Confirmed)
   | ({ action: 'mongo.renameCollection'; newName:string } & Entity & Confirmed)
-  | ({ action: 'mongo.find'; filter?: string; projection?: string; sort?: string; offset?: number; limit?: number } & Entity)
+  | ({ action: 'mongo.find'; filter?: string; projection?: string; sort?: string; offset?: number; limit?: number; settings?:MongoFindSettings } & Entity)
   | ({ action: 'mongo.count'; filter?: string } & Entity)
+  | ({ action: 'mongo.estimateCount' } & Entity)
+  | ({action:'mongo.scriptWrite';method:MongoScriptWriteMethod;filter:string;value?:string;options?:string} & Entity & Confirmed)
   | ({ action: 'mongo.aggregate'; pipeline: string; limit?: number } & Entity)
   | ({ action: 'mongo.insert'; documents: string[] } & Entity & Confirmed)
   | ({ action: 'mongo.replace'; original: string; document: string } & Entity & Confirmed)

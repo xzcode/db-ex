@@ -6,10 +6,10 @@ import { MongoOperations } from '../../operations/mongodb'
 import { describeMongoConnectionError } from '../mongo-diagnostics'
 import type { DatabaseAdapter,OperationAction } from './types'
 
-const actions=['mongo.find','mongo.createDatabase','mongo.dropDatabase','mongo.createCollection','mongo.renameCollection','mongo.dropCollection','mongo.clearCollection','mongo.count','mongo.aggregate','mongo.insert','mongo.replace','mongo.replaceBatch','mongo.delete','mongo.indexes','mongo.inspect','mongo.createIndex','mongo.dropIndex'] as const satisfies readonly OperationAction[]
+const actions=['mongo.find','mongo.createDatabase','mongo.dropDatabase','mongo.createCollection','mongo.renameCollection','mongo.dropCollection','mongo.clearCollection','mongo.count','mongo.estimateCount','mongo.scriptWrite','mongo.aggregate','mongo.insert','mongo.replace','mongo.replaceBatch','mongo.delete','mongo.indexes','mongo.inspect','mongo.createIndex','mongo.dropIndex'] as const satisfies readonly OperationAction[]
 export const mongoAdapter:DatabaseAdapter={
   kind:'mongodb',actions,connectionError:describeMongoConnectionError,
-  writes(input){return ['mongo.createDatabase','mongo.dropDatabase','mongo.createCollection','mongo.renameCollection','mongo.dropCollection','mongo.clearCollection','mongo.insert','mongo.replace','mongo.replaceBatch','mongo.delete','mongo.createIndex','mongo.dropIndex'].includes(input.action)},
+  writes(input){return ['mongo.createDatabase','mongo.dropDatabase','mongo.createCollection','mongo.renameCollection','mongo.dropCollection','mongo.clearCollection','mongo.scriptWrite','mongo.insert','mongo.replace','mongo.replaceBatch','mongo.delete','mongo.createIndex','mongo.dropIndex'].includes(input.action)},
   async connect({config,transport,tls}){
     const client=await openMongoClient(config,transport,tls)
     try{

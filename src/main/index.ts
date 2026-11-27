@@ -115,7 +115,7 @@ function operationDetail(id: string, op: DatabaseOperation): string {
   const info = sessions.info(id)
   const target = op.action==='mongo.renameCollection' ? `${op.database}.${op.entity} → ${op.database}.${op.newName}` : 'entity' in op ? `${op.database}.${op.entity}` : 'initialCollection' in op ? `${op.database}.${op.initialCollection}` : 'database' in op ? op.database || '' : 'key' in op ? op.key : 'keys' in op ? tr('{0} 个已选择的Key', [op.keys.length]) : ''
   const count = 'edits' in op ? '\n' + tr('修改 {0} 条选中记录', [op.edits.length]) : 'rows' in op ? '\n' + tr('导入 {0} 行', [op.rows.length]) : 'documents' in op ? '\n' + tr('写入 {0} 个文档', [op.documents.length]) : ''
-  const sql = (op.action === 'mysql.query'||op.action==='clickhouse.query') ? `\n\n${op.sql.slice(0, 1500)}` : op.action==='mariadb.sequenceRestart' ? '\nRESTART WITH '+op.value : op.action==='clickhouse.change' ? '\n\n'+JSON.stringify(op.change,null,2).slice(0,8192) : op.action === 'redis.command' ? '\n' + tr('命令：') + ' ' + op.args[0] : ''
+  const sql = (op.action === 'mysql.query'||op.action==='clickhouse.query') ? `\n\n${op.sql.slice(0, 1500)}` : op.action==='mongo.scriptWrite' ? '\n\n'+op.method+'\nFilter: '+op.filter.slice(0,3000)+'\nUpdate / replacement: '+(op.value||'').slice(0,3000)+'\nOptions: '+(op.options||'{}').slice(0,1000) : op.action==='mariadb.sequenceRestart' ? '\nRESTART WITH '+op.value : op.action==='clickhouse.change' ? '\n\n'+JSON.stringify(op.change,null,2).slice(0,8192) : op.action === 'redis.command' ? '\n' + tr('命令：') + ' ' + op.args[0] : ''
   return `${tr('连接：')} ${info.name}\n${tr('地址：')} ${info.displayHost}\n${tr('操作：')} ${op.action}${target ? '\n' + tr('目标：') + ' ' + target : ''}${count}\n${tr(info.transaction ? '当前有未提交事务。' : '本操作可能立即持久化。')}${sql}`
 }
 async function openText(win: BrowserWindow, title: string, limit = 4 * 1024 * 1024): Promise<FileImport | null> {
@@ -250,7 +250,7 @@ function registerIpc(): void {
     const info = sessions.info(id)
     if (writes(operation, info.writable, info.kind)) {
       if (!info.writable || !('confirmed' in operation) || operation.confirmed !== true) throw new Error('WRITE_CONFIRMATION_REQUIRED: 请先解锁会话，并主动确认写入')
-      await confirm(win, operation.action === 'mongo.dropDatabase' || operation.action === 'mysql.dropDatabase' ? '确认永久删除整个数据库？' : operation.action==='mongo.dropCollection'?'确认永久删除集合？':operation.action==='mongo.clearCollection'?'确认清空集合全部文档？':'确认执行数据库写操作？', operationDetail(id, operation))
+      await confirm(win, operation.action === 'mongo.dropDatabase' || operation.action === 'mysql.dropDatabase' ? '确认永久删除整个数据库？' : operation.action==='mongo.dropCollection'?'确认永久删除集合？':operation.action==='mongo.clearCollection'?'确认清空集合全部文档？':operation.action==='mongo.scriptWrite'&&['deleteOne','deleteMany','findOneAndDelete'].includes(operation.method)?'确认删除符合筛选条件的文档？':'确认执行数据库写操作？', operationDetail(id, operation))
     }
     const start=Date.now()
     try { const result=await sessions.execute(id,operation);diagnostic(operation.action,'ok',Date.now()-start);return result }

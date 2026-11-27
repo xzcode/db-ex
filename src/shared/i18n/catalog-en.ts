@@ -1,3 +1,4 @@
+import {queryRefinementCatalogs} from './catalog-query-refinement'
 import { migrationCatalogs } from './catalog-migration'
 import {uiRefinementCatalogs} from './catalog-ui-refinement'
 import { clickHouseManagementCatalogs } from './catalog-clickhouse-management'
@@ -1070,4 +1071,5 @@ export const en: Readonly<Record<string, string>> = {
   ...clickHouseManagementCatalogs.en,
   ...migrationCatalogs.en,
   ...uiRefinementCatalogs.en,
+  ...queryRefinementCatalogs.en,
 }

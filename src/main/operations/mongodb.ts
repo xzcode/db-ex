@@ -1,5 +1,5 @@
-import { BSON, MongoBulkWriteError, type AbstractCursor, type CreateIndexesOptions, type Document, type IndexDirection, type MongoClient, type Sort } from 'mongodb'
-import type { MongoOperation, OperationResult } from '../../shared/types'
+import { BSON, MongoBulkWriteError, type AbstractCursor, type CreateIndexesOptions, type Document, type FindOptions, type UpdateFilter, type IndexDirection, type MongoClient, type Sort } from 'mongodb'
+import type { MongoOperation, OperationResult,MongoFindSettings } from '../../shared/types'
 import type { BsonTypeBranch } from '../../shared/bson-types'
 import { describeBsonDocument, newTypeBudget } from './bson-metadata'
 import { metric, metrics, type ObjectInspection } from '../../shared/object-inspection'
@@ -77,6 +77,61 @@ function sortEjson(text?: string): Sort {
     result[key] = number
   }
   return result as Sort
+}
+
+export function mongoFindSettings(value:MongoFindSettings|undefined):FindOptions{
+ if(value===undefined)return {}
+ if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(k=>!['hint','collation','batchSize','maxTimeMS'].includes(k)))throw new Error('MONGO_POLICY: 不支持的查询选项')
+ const out:FindOptions={}
+ if(value.hint!==undefined){
+  const hint=parseEjson(value.hint,'Hint')
+  if(typeof hint==='string')out.hint=resourceName(hint,'索引名称')
+  else{
+   const pattern=plainObject(hint,'Hint')
+   validateReadDocument(pattern)
+   if(!Object.keys(pattern).length||Object.keys(pattern).length>32)throw new Error('MONGO_POLICY: 不支持的查询选项')
+   out.hint=Object.fromEntries(Object.entries(pattern).map(([k,v])=>{const n=scalarNumber(v);if(n!==1&&n!==-1)throw new Error('MONGO_POLICY: 不支持的查询选项');return [resourceName(k,'索引字段'),n]}))
+  }
+ }
+ if(value.collation!==undefined){
+  const c=objectEjson(value.collation,'Collation')
+  const allowed=['locale','strength','caseLevel','caseFirst','numericOrdering','alternate','maxVariable','backwards','normalization']
+  if(typeof c.locale!=='string'||!c.locale||c.locale.length>80||Object.keys(c).some(k=>!allowed.includes(k)))throw new Error('MONGO_POLICY: 不支持的查询选项')
+  const normalized:Record<string,unknown>={}
+  for(const [k,v] of Object.entries(c)){
+   if(k==='strength'){const n=scalarNumber(v);if(!Number.isInteger(n)||n!<1||n!>5)throw new Error('MONGO_POLICY: 不支持的查询选项');normalized[k]=n}
+   else if(['caseLevel','numericOrdering','backwards','normalization'].includes(k)){if(typeof v!=='boolean')throw new Error('MONGO_POLICY: 不支持的查询选项');normalized[k]=v}
+   else {if(typeof v!=='string'||v.length>80)throw new Error('MONGO_POLICY: 不支持的查询选项');normalized[k]=v}
+  }
+  out.collation=normalized as unknown as NonNullable<FindOptions['collation']>
+ }
+ for(const key of ['batchSize','maxTimeMS'] as const){
+  if(value[key]===undefined)continue
+  if(!Number.isSafeInteger(value[key])||value[key]!<1||value[key]!>(key==='batchSize'?500:TIMEOUT_MS))throw new Error('MONGO_POLICY: 不支持的查询选项')
+  out[key]=value[key]
+ }
+ return out
+}
+const scriptUpdates=new Set(['$set','$unset','$inc','$mul','$min','$max','$rename','$setOnInsert','$push','$addToSet','$pull','$pullAll','$pop','$currentDate','$bit'])
+export function validateMongoScriptWrite(operation:Extract<MongoOperation,{action:'mongo.scriptWrite'}>){
+ const methods=['updateOne','updateMany','replaceOne','deleteOne','deleteMany','findOneAndUpdate','findOneAndReplace','findOneAndDelete']
+ if(!methods.includes(operation.method))throw new Error('MONGO_POLICY: 不支持的查询写入方法')
+ const filter=objectEjson(operation.filter,'Filter')
+ if(!Object.keys(filter).length)throw new Error('MONGO_POLICY: 查询写入需要非空筛选条件')
+ const deleting=['deleteOne','deleteMany','findOneAndDelete'].includes(operation.method),replacing=['replaceOne','findOneAndReplace'].includes(operation.method),find=operation.method.startsWith('findOneAnd')
+ const input=objectEjson(operation.options,'Options')
+ const allowed=deleting?(find?['sort']:[]):find?['upsert','returnDocument','sort']:['upsert']
+ if(Object.keys(input).some(k=>!allowed.includes(k))||input.upsert!==undefined&&typeof input.upsert!=='boolean'||input.returnDocument!==undefined&&!['before','after'].includes(input.returnDocument))throw new Error('MONGO_POLICY: 不支持的查询写入选项')
+ const opts={...(input.upsert!==undefined?{upsert:input.upsert as boolean}:{}),...(input.returnDocument!==undefined?{returnDocument:input.returnDocument as 'before'|'after'}:{}),...(input.sort!==undefined?{sort:sortEjson(BSON.EJSON.stringify(input.sort,{relaxed:false}))}:{})}
+ let value:Document|undefined
+ if(deleting){if(operation.value!==undefined)throw new Error('MONGO_POLICY: 不支持的查询写入选项')}
+ else if(replacing){value=documentEjson(operation.value!,'替换文档');validateReadDocument(value);if(Object.keys(value).some(k=>k.startsWith('$')))throw new Error('MONGO_POLICY: 不支持的查询写入选项')}
+ else{
+  value=objectEjson(operation.value,'Update')
+  if(!Object.keys(value).length||Object.keys(value).some(k=>!scriptUpdates.has(k)))throw new Error('MONGO_POLICY: 更新仅支持明确列出的更新运算符')
+  for(const op of Object.values(value))plainObject(op,'Update')
+ }
+ return {filter,value,opts}
 }
 
 function documentEjson(text: string, label: string): Document {
@@ -233,19 +288,24 @@ export class MongoOperations {
         }
         return { columns: [], rows: [], inspection }
       }
+      case 'mongo.estimateCount': {
+        const count=await collection.estimatedDocumentCount(options)
+        return {columns:['count'],rows:[{count:String(count)}],totalRows:String(count),queryReadOnly:true}
+      }
       case 'mongo.count': {
         const count = await collection.countDocuments(objectEjson(operation.filter, 'Filter'), { ...options, limit: 1000001 })
-        return { columns: [], rows: [], totalRows: String(count), countLimited: count >= 1000001 }
+        return { columns: [], rows: [], totalRows: String(count), countLimited: count >= 1000001,queryReadOnly:true }
       }
       case 'mongo.find': {
         const { limit, offset } = page(operation)
+        const settings=mongoFindSettings(operation.settings)
         const cursor = collection.find(objectEjson(operation.filter, 'Filter'), {
-          ...options, projection: projectionEjson(operation.projection), sort: sortEjson(operation.sort),
-          skip: offset, limit: limit + 1, batchSize: Math.min(limit + 1, 50), raw: true,
+          ...options, ...settings, projection: projectionEjson(operation.projection), sort: sortEjson(operation.sort),
+          skip: offset, limit: limit + 1, batchSize: Math.min(limit + 1, settings.batchSize||50), raw: true,
         })
         const result = await this.readCursor(cursor, limit, signal)
-        if (result.truncated && result.documents?.length === limit) result.nextOffset = offset + limit
-        return result
+        if (result.truncated && result.documents?.length && result.truncationReason!=='document') result.nextOffset = offset + result.documents.length
+        return {...result,queryReadOnly:true}
       }
       case 'mongo.aggregate': {
         const { limit } = page(operation)
@@ -253,7 +313,23 @@ export class MongoOperations {
         const cursor = collection.aggregate([...pipeline, { $limit: limit + 1 }], {
           ...options, batchSize: Math.min(limit + 1, 50), allowDiskUse: false, raw: true,
         })
-        return this.readCursor(cursor, limit, signal)
+        return {...await this.readCursor(cursor, limit, signal),queryReadOnly:true}
+      }
+      case 'mongo.scriptWrite': {
+        requireWrite(context)
+        validateDatabaseName('mongodb',database)
+        validateManagedCollection(entity)
+        const {filter,value,opts}=validateMongoScriptWrite(operation)
+        const method=operation.method
+        if(method==='deleteOne'||method==='deleteMany'){const r=method==='deleteOne'?await collection.deleteOne(filter,options):await collection.deleteMany(filter,options);return emptyResult('操作已完成',r.deletedCount)}
+        if(method==='updateOne'||method==='updateMany'){const r=method==='updateOne'?await collection.updateOne(filter,value as UpdateFilter<Document>,{...options,...opts}):await collection.updateMany(filter,value as UpdateFilter<Document>,{...options,...opts});return emptyResult('操作已完成',r.modifiedCount+r.upsertedCount)}
+        if(method==='replaceOne'){const r=await collection.replaceOne(filter,value!,{...options,...opts});return emptyResult('操作已完成',r.modifiedCount+r.upsertedCount)}
+        // Find-and-write results are never editable snapshots. Use raw BSON
+        // output so Int64, Decimal128 and all other native types retain their identity.
+        const findOpts={...options,...opts,raw:true as const,includeResultMetadata:false as const}
+        const doc=method==='findOneAndDelete'?await collection.findOneAndDelete(filter,findOpts):method==='findOneAndUpdate'?await collection.findOneAndUpdate(filter,value as UpdateFilter<Document>,findOpts):await collection.findOneAndReplace(filter,value!,findOpts)
+        if(!doc)return emptyResult('操作已完成')
+        return this.singleDocument(doc)
       }
       case 'mongo.insert': {
         requireWrite(context)
@@ -311,7 +387,7 @@ export class MongoOperations {
       }
       case 'mongo.indexes': {
         const cursor = collection.listIndexes({ ...options, batchSize: 50, raw: true })
-        return this.readCursor(cursor, MAX_ROWS, signal)
+        return {...await this.readCursor(cursor, MAX_ROWS, signal),queryReadOnly:true}
       }
       case 'mongo.createIndex': {
         requireWrite(context)
@@ -353,6 +429,18 @@ export class MongoOperations {
     }
   }
 
+  private singleDocument(raw:Document|Uint8Array):OperationResult{
+    if(raw instanceof Uint8Array&&raw.byteLength>MAX_VALUE_BYTES)return {...emptyResult('操作已完成'),truncated:true,truncationReason:'document'}
+    // Require raw data for a typed BSON result. Do not reconstruct a
+    // potentially promoted numeric document returned by an older driver.
+    if(!(raw instanceof Uint8Array))return emptyResult('操作已完成；返回文档无法无损显示，请重新查询')
+    const doc=BSON.deserialize(raw,{promoteValues:false,promoteLongs:false,bsonRegExp:true})
+    const canonical=BSON.EJSON.stringify(doc,{relaxed:false})
+    if(Buffer.byteLength(canonical)>MAX_VALUE_BYTES)return {...emptyResult('操作已完成'),truncated:true,truncationReason:'document'}
+    const columns=Object.keys(doc).slice(0,100)
+    const row=Object.fromEntries(columns.map(k=>[k,displayCell(doc[k]&&typeof doc[k]==='object'?BSON.EJSON.serialize(doc[k],{relaxed:false}):doc[k])]))
+    return {columns,rows:[row],documents:[canonical],bsonTypes:[describeBsonDocument(doc,columns,newTypeBudget())],message:'操作已完成'}
+  }
   private async readCursor(cursor: AbstractCursor<Document>, limit: number, signal: AbortSignal): Promise<OperationResult> {
     this.cursor = cursor
     const documents: string[] = []
@@ -362,17 +450,18 @@ export class MongoOperations {
     const typeBudget = newTypeBudget()
     let bytes = 0
     let truncated = false
+    let truncationReason:OperationResult['truncationReason']
     try {
       for await (const rawDocument of cursor) {
         checkAborted(signal)
-        if (documents.length >= limit) { truncated = true; break }
-        if (rawDocument instanceof Uint8Array && rawDocument.byteLength > MAX_VALUE_BYTES) { truncated = true; break }
+        if (documents.length >= limit) { truncated = true; truncationReason='page'; break }
+        if (rawDocument instanceof Uint8Array && rawDocument.byteLength > MAX_VALUE_BYTES) { truncated = true; truncationReason='document'; break }
         const document: Document = rawDocument instanceof Uint8Array
           ? BSON.deserialize(rawDocument, { promoteValues: false, promoteLongs: false, bsonRegExp: true })
           : rawDocument
         const canonical = BSON.EJSON.stringify(document, { relaxed: false })
         const size = Buffer.byteLength(canonical, 'utf8')
-        if (size > MAX_VALUE_BYTES || bytes + size > MAX_BYTES) { truncated = true; break }
+        if (size > MAX_VALUE_BYTES || bytes + size > MAX_BYTES) { truncated = true; truncationReason=size>MAX_VALUE_BYTES?'document':'bytes'; break }
         const row: Record<string, string> = Object.create(null) as Record<string, string>
         for (const [key, value] of Object.entries(document)) {
           // Keep a stable 100-column window. Fields already displayed in the
@@ -392,7 +481,8 @@ export class MongoOperations {
     }
     return {
       columns: [...columns], rows, documents, bsonTypes, truncated,
-      message: truncated ? '已达到行数或 2 MiB 返回上限（单文档最大 512 KiB），请缩小筛选范围' : undefined,
+      ...(truncationReason?{truncationReason}:{}),
+      message: truncated && truncationReason!=='page' ? '已达到行数或 2 MiB 返回上限（单文档最大 512 KiB），请缩小筛选范围' : undefined,
     }
   }
 }

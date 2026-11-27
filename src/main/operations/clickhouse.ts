@@ -130,7 +130,7 @@ export class ClickHouseOperations{
    }
    // Query editor displays a bounded result. It does not rewrite arbitrary SQL
    // or pretend that the first 500 rows represent the complete result set.
-   return this.select(query.sql,params,context,page(op).limit,db)
+   return {...await this.select(query.sql,params,context,page(op).limit,db),queryReadOnly:true}
   }
   const database=resourceName(op.database,'数据库'),entity=resourceName(op.entity,'表')
   const qualified=clickHouseIdentifier(database)+'.'+clickHouseIdentifier(entity)

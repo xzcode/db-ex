@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { t } from '../i18n'
 import { sqlContext,sqlKeywords,sqlFunctions,clickHouseFunctions,sqliteFunctions,mongoSuggestions,redisSuggestions } from '../../shared/editor-completion'
-import {mongoScriptMethods,mongoCursorMethods,mongoConstructors} from '../../shared/mongo-query-script'
+import {mongoConstructors} from '../../shared/mongo-query-script'
+import {mongoCollectionSignatures,mongoCursorSignatures,type MongoSignature} from '../../shared/mongo-completion'
 import { preferences } from '../preferences'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as monaco from 'monaco-editor/editor/editor.api'
@@ -9,6 +10,8 @@ import 'monaco-editor/editor/browser/coreCommands'
 import 'monaco-editor/editor/contrib/dropOrPasteInto/browser/copyPasteContribution'
 import 'monaco-editor/editor/contrib/find/browser/findController'
 import 'monaco-editor/editor/contrib/suggest/browser/suggestController'
+import 'monaco-editor/editor/contrib/snippet/browser/snippetController2'
+import 'monaco-editor/editor/contrib/parameterHints/browser/parameterHints'
 import 'monaco-editor/editor/contrib/folding/browser/folding'
 import 'monaco-editor/editor/contrib/bracketMatching/browser/bracketMatching'
 import 'monaco-editor/languages/definitions/sql/register'
@@ -133,6 +136,14 @@ onMounted(() => {
         function add(labels:readonly string[],kind:monaco.languages.CompletionItemKind,priority:string,format:(s:string)=>string=(s=>s)){
           for(const label of [...new Set(labels)].filter(Boolean).slice(0,500))entries.push({label,insertText:format(label),kind,range,sortText:priority+label})
         }
+        function addSignatures(signatures:MongoSignature[]){
+          for(const [index,sig] of signatures.entries()){
+            const detail='('+sig.parameters.join(', ')+')'
+            entries.push({label:{label:sig.name,detail:' '+detail,description:sig.reference?t('仅供参考，暂不支持执行'):undefined},kind:kinds.Method,
+              filterText:sig.name,sortText:(sig.reference?'2':'0')+sig.name+String(index).padStart(3,'0'),
+              detail:sig.name+detail,documentation:sig.note,insertText:sig.snippet,insertTextRules:monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,range})
+          }
+        }
         if(language==='sql'){
           const context=sqlContext(prefix)
           const quote=(name:string)=>props.sqlDialect==='clickhouse'?'"'+name.replaceAll('\\','\\\\').replaceAll('"','\\"')+'"':props.sqlDialect==='sqlite'?'"'+name.replaceAll('"','""')+'"':'\x60'+name.replaceAll('\x60','\x60\x60')+'\x60'
@@ -151,9 +162,9 @@ onMounted(() => {
           }else if(quotedCollection){
            for(const label of [...new Set(props.tableSuggestions||[])].slice(0,500))entries.push({label,kind:kinds.Class,range:new monaco.Range(position.lineNumber,position.column-quotedCollection[1]!.length,position.lineNumber,position.column),insertText:JSON.stringify(label).slice(1,-1).replaceAll("'","\\'"),sortText:'0'+label})
           }else if(methodPrefix){
-           add(mongoScriptMethods,kinds.Method,'0',name=>name+'()')
+           addSignatures(mongoCollectionSignatures)
           }else if(/\)\s*\.\w*$/.test(fullPrefix)){
-           add(mongoCursorMethods,kinds.Method,'0',name=>name+'()')
+           addSignatures(mongoCursorSignatures)
           }else{
            add(mongoSuggestions,kinds.Keyword,'1')
            add(props.suggestions||[],kinds.Field,'0',name=>/^[A-Za-z_$][\w$]*$/.test(name)?name:JSON.stringify(name))
@@ -167,7 +178,33 @@ onMounted(() => {
       }
     })
   }
-  completion=[provider('sql'),provider('json'),provider('dbex-mongo-script')]
+  const hints=monaco.languages.registerSignatureHelpProvider('dbex-mongo-script',{
+   signatureHelpTriggerCharacters:['(',','],
+   signatureHelpRetriggerCharacters:[','],
+   provideSignatureHelp(model,position){
+    if(model!==editor?.getModel()||props.readonly||!preferences.value.completion)return null
+    const text=model.getValueInRange(new monaco.Range(1,1,position.lineNumber,position.column))
+    // Walk the prefix; keep unclosed call frames and count top-level commas.
+    const stack:{kind:string;name?:string;commas:number}[]=[]
+    let quote='',escaped=false
+    for(let i=0;i<text.length;i++){
+      const c=text[i]!
+      if(quote){if(escaped){escaped=false;continue}if(c==='\\'){escaped=true;continue}if(c===quote)quote='';continue}
+      if(c==='"'||c==="'"){quote=c;continue}
+      if(c==='('){const name=/([A-Za-z_$][\w$]*)\s*$/.exec(text.slice(0,i))?.[1];stack.push({kind:c,name,commas:0})}
+      else if(c==='{'||c==='[')stack.push({kind:c,commas:0})
+      else if(c===')'||c==='}'||c===']')stack.pop()
+      else if(c===','&&stack.at(-1)?.kind==='(')stack.at(-1)!.commas++
+    }
+    const call=[...stack].reverse().find(x=>x.kind==='('&&x.name)
+    if(!call)return null
+    const signatures=[...mongoCollectionSignatures,...mongoCursorSignatures].filter(s=>s.name===call.name&&!s.reference)
+    if(!signatures.length)return null
+    const index=Math.max(0,signatures.findIndex(s=>s.parameters.length>call.commas))
+    return {value:{signatures:signatures.map(s=>({label:s.name+'('+s.parameters.join(', ')+')',documentation:s.note,parameters:s.parameters.map(label=>({label}))})),activeSignature:index,activeParameter:Math.min(call.commas,Math.max(0,signatures[index]!.parameters.length-1))},dispose(){}}
+   }
+  })
+  completion=[provider('sql'),provider('json'),provider('dbex-mongo-script'),hints]
   observer = new MutationObserver(applyTheme)
   observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
 })

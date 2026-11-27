@@ -223,9 +223,9 @@ export class MysqlOperations {
       const hasNext = policy.select && data.values.length > limit
       if (hasNext) data.values.pop()
       const result = this.result(data)
-      result.nextOffset = hasNext ? offset + limit : undefined
+      result.nextOffset = hasNext && result.rows.length ? offset + result.rows.length : undefined
       result.truncated = result.truncated || hasNext
-      return result
+      return {...result,queryReadOnly:policy.mode==='read'}
     } finally {
       if (temporaryReadTransaction && !this.closed) await this.query('ROLLBACK', [], signal, 1, false)
     }

@@ -1,12 +1,18 @@
 <script setup lang="ts">
-import {computed,onMounted,onBeforeUnmount,ref,watch} from 'vue'
+import {computed,onMounted,onBeforeUnmount,ref,watch,shallowRef} from 'vue'
 import {t,localize} from '../i18n'
 import {preferences} from '../preferences'
 import {pageSizeFor} from '../../shared/preferences'
 import {querySummary,type QueryMode,type QueryDraft,type SavedQuery,type QuerySummary} from '../../shared/saved-query'
 import type {SessionInfo,ExplorerNode,QuerySnippet,DatabaseOperation,OperationResult,SqlValue} from '../../shared/types'
 import CodeEditor from './CodeEditor.vue'
-import ResultGrid from './ResultGrid.vue'
+import QuerySplit,{type QueryLayout} from './QuerySplit.vue'
+import QueryResultPanel from './QueryResultPanel.vue'
+import {editableMongoResult} from '../../shared/query-results'
+import {ordinaryMongoCollection} from '../../shared/object-menu'
+import {protectedDatabase} from '../../shared/database-admin'
+import {formatMongoDocument,parseMongoDocumentEditor,mongoDocumentDraft} from '../../shared/bson-editor'
+import {parseBsonDocument} from '../../shared/bson-display'
 import {compileMongoScript,mongoPageOperation,legacyMongoScript,type MongoScriptPlan} from '../../shared/mongo-query-script'
 import {formatQuery} from '../../shared/query-format'
 import {useQueryRecovery} from '../composables/useQueryRecovery'
@@ -18,6 +24,9 @@ const mode:QueryMode=props.node.queryMode||'sql'
 const clickhouse=props.session.kind==='clickhouse'
 const currentId=ref(props.node.queryId),revision=ref('')
 const name=ref(''),sql=ref(''),parameters=ref(clickhouse?'{}':'[]'),script=ref('')
+const layout=ref<QueryLayout>('bottom')
+const executedQuery=ref(''),runId=ref(0),visited=ref<number[]>([])
+const resultEdit=ref<{mode:'insert'|'update';original?:string;index:number;entity:string;text:string;syntax:'typed'|'ejson';error:string}>()
 const result=ref<OperationResult>(),offset=ref(0),limit=ref<number>(pageSizeFor(preferences.value,props.session.kind))
 const busy=ref(false),running=ref(false),loaded=ref(false),error=ref(''),notice=ref('')
 const targets=ref<ExplorerNode[]>([]),legacy=ref<QuerySnippet[]>([]),legacySelected=ref('')
@@ -25,8 +34,8 @@ const baseline=ref('')
 const editor=ref<InstanceType<typeof CodeEditor>>()
 const saveAsOpen=ref(false),copyName=ref('')
 let disposed=false
-let applied:DatabaseOperation|undefined
-let appliedMongoPlan:MongoScriptPlan|undefined
+const applied=shallowRef<DatabaseOperation>()
+const appliedMongoPlan=shallowRef<MongoScriptPlan>()
 const appliedPageSize=ref(100)
 const metadataColumns=ref<string[]>([]),metadataTables=ref<string[]>([])
 const sqlTables=computed(()=>[...new Set([...metadataTables.value,...(props.tableSuggestions||[])])])
@@ -64,8 +73,84 @@ const fieldSuggestions=computed(()=>{
  try{const plan=compileMongoScript(script.value,database);return 'entity'in plan.operation&&plan.operation.entity===mongoCollection.value?mongoFields.value:[]}
  catch{return mongoFields.value}
 })
-const previousOffset=computed(()=>Math.max(appliedMongoPlan?.baseOffset||0,offset.value-appliedPageSize.value))
-const canPageBack=computed(()=>offset.value>(appliedMongoPlan?.baseOffset||0))
+const previousOffset=computed(()=>visited.value.filter(v=>v<offset.value).at(-1)??(appliedMongoPlan.value?.baseOffset||0))
+const canPageBack=computed(()=>offset.value>(appliedMongoPlan.value?.baseOffset||0))
+const sourceLabel=computed(()=>props.session.name+' / '+database)
+const safeMongoCollection=computed(()=>applied.value?.action==='mongo.find'&&!protectedDatabase('mongodb',database)&&ordinaryMongoCollection(applied.value.entity)&&targets.value.some(n=>n.kind==='collection'&&!n.readOnly&&!n.maintenanceRestricted&&(n.entity||n.label)===(applied.value as {entity:string}).entity))
+function canEditResult(index:number){
+ if(!props.session.writable||busy.value||!safeMongoCollection.value||!editableMongoResult(applied.value,result.value,index))return false
+ const doc=parseBsonDocument(result.value!.documents![index]!)
+ return !!doc&&Object.hasOwn(doc,'_id')
+}
+const canAddResult=computed(()=>!!props.session.writable&&!busy.value&&safeMongoCollection.value&&applied.value?.action==='mongo.find'&&(()=>{try{return !Object.keys(JSON.parse(applied.value.projection||'{}')).length}catch{return false}})())
+function setLayout(value:QueryLayout){layout.value=value;try{if(value==='bottom'||value==='right')localStorage.setItem('dbex.query-layout',value)}catch{}}
+try{if(localStorage.getItem('dbex.query-layout')==='right')layout.value='right'}catch{}
+function showResults(){if(layout.value==='editor'){let next:QueryLayout='bottom';try{if(localStorage.getItem('dbex.query-layout')==='right')next='right'}catch{}setLayout(next)}}
+function editResult(index:number){
+ if(!canEditResult(index)||applied.value?.action!=='mongo.find')return
+ const original=result.value!.documents![index]!
+ resultEdit.value={mode:'update',index,original,entity:applied.value.entity,...formatMongoDocument(original,result.value?.bsonTypes?.[index]),error:''}
+}
+function draftResult(index:number,action:'duplicate'|'null'|'empty',field?:string){
+ if(!canEditResult(index)||applied.value?.action!=='mongo.find')return
+ const original=result.value!.documents![index]!
+ try{
+  const formatted=mongoDocumentDraft(original,result.value?.bsonTypes?.[index],action,field)
+  resultEdit.value={mode:action==='duplicate'?'insert':'update',index,entity:applied.value.entity,...formatted,...(action!=='duplicate'?{original}:{}),error:''}
+ }catch(e){fail(e)}
+}
+function addResult(){
+ if(!canAddResult.value||applied.value?.action!=='mongo.find')return
+ resultEdit.value={mode:'insert',index:-1,entity:applied.value.entity,text:'{\n  "name": ""\n}',syntax:'typed',error:''}
+}
+async function refreshMongoResult(){
+ if(applied.value?.action!=='mongo.find')return
+ const next=await window.dbex.execute(props.session.id,applied.value)
+ if(next.disconnected){emit('disconnect');return}
+ result.value=capMongoPage(next,appliedMongoPlan.value,applied.value);runId.value++;notice.value=next.message||'操作已完成'
+}
+async function saveResultEdit(){
+ const d=resultEdit.value
+ if(!d||busy.value||!props.session.writable||applied.value?.action!=='mongo.find'||applied.value.entity!==d.entity)return
+ if(d.mode==='update'&&(!canEditResult(d.index)||result.value?.documents?.[d.index]!==d.original)||d.mode==='insert'&&!canAddResult.value)return
+ await task(async()=>{
+  try{
+   const document=d.syntax==='typed'?parseMongoDocumentEditor(d.text):JSON.stringify(JSON.parse(d.text))
+   await window.dbex.validateMongoDocument(document,d.original)
+   const op:DatabaseOperation=d.mode==='update'?{action:'mongo.replace',database,entity:d.entity,original:d.original!,document,confirmed:true}:{action:'mongo.insert',database,entity:d.entity,documents:[document],confirmed:true}
+   const response=await window.dbex.execute(props.session.id,op)
+   if(response.disconnected){emit('disconnect');return}
+   resultEdit.value=undefined;result.value=undefined;notice.value='操作已完成';try{await refreshMongoResult()}catch(e){fail(e)}
+  }catch(e){d.error=e instanceof Error?e.message:String(e)}
+ })
+}
+async function removeResult(index:number){
+ if(!canEditResult(index)||applied.value?.action!=='mongo.find')return
+ const entity=applied.value.entity,original=result.value!.documents![index]!
+ await task(async()=>{const next=await window.dbex.execute(props.session.id,{action:'mongo.delete',database,entity,original,confirmed:true});if(next.disconnected){emit('disconnect');return}result.value=undefined;await refreshMongoResult()})
+}
+function capMongoPage(next:OperationResult,plan:MongoScriptPlan|undefined,op:DatabaseOperation){
+ if(op.action==='mongo.count'&&next.totalRows!==undefined)return {...next,columns:['count'],rows:[{count:(next.countLimited?'≥ ':'')+next.totalRows}]}
+ if(op.action==='mongo.find'&&plan?.maxRows!==undefined&&next.nextOffset!==undefined&&next.nextOffset>=plan.baseOffset+plan.maxRows)return {...next,nextOffset:undefined,truncated:next.truncationReason!=='page'}
+ return next
+}
+const canRefresh=computed(()=>!!applied.value&&result.value?.queryReadOnly===true)
+function page(direction:'first'|'prev'|'next'|'refresh'){
+ if(busy.value||resultEdit.value)return
+ if(direction==='first')void execute(appliedMongoPlan.value?.baseOffset||0)
+ else if(direction==='prev')void execute(previousOffset.value)
+ else if(direction==='next'&&result.value?.nextOffset!==undefined)void execute(result.value.nextOffset)
+ else if(direction==='refresh'&&canRefresh.value){
+  const op=applied.value!
+  void task(async()=>{
+   const response=await window.dbex.execute(props.session.id,op)
+   if(response.disconnected){emit('disconnect');return}
+   result.value=capMongoPage(response,appliedMongoPlan.value,op);runId.value++;notice.value=response.message||''
+  })
+ }
+}
+
+
 const draft=computed<QueryDraft>(()=>({name:name.value.trim(),mode,text:mode==='sql'?sql.value:script.value,...(mode==='sql'?{parameters:parameters.value}:{syntax:'mongo-shell' as const})}))
 const fingerprint=computed(()=>JSON.stringify(draft.value))
 const dirty=computed(()=>loaded.value&&fingerprint.value!==baseline.value)
@@ -121,26 +206,28 @@ async function save(asCopy=false){
 }
 function openSaveAs(){if(canPersist.value&&!busy.value){copyName.value=name.value?name.value.slice(0,91)+' (2)':'';saveAsOpen.value=true}}
 function shortcut(event:KeyboardEvent){
- if(!props.active||!(event.metaKey||event.ctrlKey)||event.key.toLowerCase()!=='s')return
+ if(!props.active||resultEdit.value||!(event.metaKey||event.ctrlKey)||event.key.toLowerCase()!=='s')return
  event.preventDefault();event.stopPropagation()
  if(event.shiftKey)openSaveAs();else if(!saveAsOpen.value)void save()
 }
 onMounted(()=>window.addEventListener('keydown',shortcut,true))
 onBeforeUnmount(()=>{disposed=true;if(metadataTimer)clearTimeout(metadataTimer);window.removeEventListener('keydown',shortcut,true)})
 async function execute(paging?:number,selection=false){
- if(!loaded.value||busy.value)return
+ if(!loaded.value||busy.value||resultEdit.value)return
+ showResults()
  await task(async()=>{
   let op:DatabaseOperation
-  let nextPlan=appliedMongoPlan
+  let nextPlan=appliedMongoPlan.value
   let executedText=''
   if(paging!==undefined){
-   if(appliedMongoPlan){const next=mongoPageOperation(appliedMongoPlan,paging,appliedPageSize.value);if(!next)return;op=next}
-   else{if(!applied||!('offset'in applied))return;op={...applied,offset:paging}}
+   if(appliedMongoPlan.value){const next=mongoPageOperation(appliedMongoPlan.value,paging,appliedPageSize.value);if(!next)return;op=next}
+   else{if(!applied.value||!('offset'in applied.value))return;op={...applied.value,offset:paging}}
   }else if(mode==='sql'){
    const params:unknown=JSON.parse(parameters.value)
    if(!clickhouse&&(!Array.isArray(params)||params.length>1000||params.some(v=>v!==null&&!['string','number','boolean'].includes(typeof v)||typeof v==='number'&&!Number.isFinite(v))))throw new Error('SQL 参数需要 JSON 数组，仅支持字符串、数字、布尔或 null')
    if(clickhouse&&(!params||typeof params!=='object'||Array.isArray(params)))throw new Error('ClickHouse 参数需要 JSON 对象')
    const text=selection?editor.value?.selection()||sql.value:sql.value
+   executedText=text
    if(!text.trim())throw new Error('SQL_POLICY: SQL 不能为空')
    op=clickhouse?{action:'clickhouse.query',database,sql:text,parameters:params as Record<string,SqlValue>,limit:limit.value,confirmed:props.session.writable}:{action:'mysql.query',database,sql:text,parameters:params as SqlValue[],limit:limit.value,offset:0,confirmed:props.session.writable}
   }else{
@@ -153,12 +240,14 @@ async function execute(paging?:number,selection=false){
   let next:OperationResult
   try{next=await window.dbex.execute(props.session.id,op)}finally{running.value=false}
   if(disposed)return
-  appliedMongoPlan=nextPlan
+  appliedMongoPlan.value=nextPlan
   if(paging===undefined)appliedPageSize.value=limit.value
-  if(op.action==='mongo.count'&&next.totalRows!==undefined)next={...next,columns:['count'],rows:[{count:(next.countLimited?'≥ ':'')+next.totalRows}]}
-  if(op.action==='mongo.find'&&appliedMongoPlan?.maxRows!==undefined&&next.nextOffset!==undefined&&next.nextOffset>=appliedMongoPlan.baseOffset+appliedMongoPlan.maxRows)next={...next,nextOffset:undefined}
+  next=capMongoPage(next,appliedMongoPlan.value,op)
   if(op.action==='mongo.find'||op.action==='mongo.aggregate'){mongoFields.value=next.columns;mongoCollection.value=op.entity}
-  result.value=next;offset.value='offset'in op?op.offset||0:0;applied=op
+  const nextOffset='offset'in op?op.offset||0:0
+  if(paging===undefined){visited.value=[nextOffset];executedQuery.value=executedText}
+  else visited.value=[...new Set([...visited.value,nextOffset])].sort((a,b)=>a-b)
+  result.value=next;offset.value=nextOffset;applied.value=op;runId.value++
   if(next.transaction!==undefined)emit('updateSession',{...props.session,transaction:next.transaction})
   if(next.disconnected){emit('disconnect');return}
   if(next.message)notice.value=next.message
@@ -179,7 +268,7 @@ async function exportQuery(format:'json'|'sql'){if(!currentId.value)return;await
 </script>
 <template>
  <section :class="['workbench','saved-query-editor',{'mongo-library':mode!=='sql'}]">
-  <header class="workbench-header"><div><h2>{{ name||t('未命名查询') }}</h2><span class="muted-text">{{ database }}</span></div><div class="header-tools"><span v-if="session.transaction" class="transaction-badge">{{ t('事务进行中') }}</span><button :class="['btn',session.writable?'warning':'secondary']" :disabled="busy" @click="toggleWrite">{{ session.writable?t('写入已启用 · 锁定'):t('只读 · 启用写入') }}</button></div></header>
+  <header class="workbench-header query-context-header"><div class="query-context-label"><strong>{{session.name}}</strong><span> / </span><strong>{{database}}</strong></div><div class="header-tools"><span v-if="session.transaction" class="transaction-badge">{{ t('事务进行中') }}</span><button :class="['btn',session.writable?'warning':'secondary']" :disabled="busy" @click="toggleWrite">{{ session.writable?t('写入已启用 · 锁定'):t('只读 · 启用写入') }}</button></div></header>
   <div class="editor-toolbar query-object-toolbar">
    <button class="btn primary small" :disabled="busy||!loaded||!canPersist" :title="'Ctrl / ⌘ + S'" @click="save()"><span aria-hidden="true">▣</span> {{ t('保存') }}</button>
    <button class="btn secondary small" :disabled="busy||!loaded" @click="beautify">{{ t('美化语句') }}</button>
@@ -201,19 +290,32 @@ async function exportQuery(format:'json'|'sql'){if(!currentId.value)return;await
    <button v-if="running" class="btn secondary small" @click="cancel">{{ t('取消并断开') }}</button>
    <span class="toolbar-spacer"></span>
    <template v-if="mode==='sql'&&!clickhouse"><button class="btn secondary small" :disabled="busy||!session.writable||session.transaction" @click="transaction('mysql.begin')">{{ t('开始事务') }}</button><button class="btn secondary small" :disabled="busy||!session.transaction" @click="transaction('mysql.commit')">{{ t('提交') }}</button><button class="btn secondary small" :disabled="busy||!session.transaction" @click="transaction('mysql.rollback')">{{ t('回滚') }}</button></template>
+   <span class="query-layout-buttons">
+   <span v-if="mode==='sql'&&selectedMetadataTable" class="muted-text">{{t('字段补全来源')}}: {{selectedMetadataTable}}</span>
+   <button v-if="mode==='sql'" class="btn secondary small" :disabled="busy||!selectedMetadataTable" @click="loadMetadata(true)">{{t('刷新补全')}}</button>
+
+   <button v-for="item in [{id:'bottom',label:'结果在下方',symbol:'⊟'},{id:'right',label:'结果在右侧',symbol:'◧'},{id:'editor',label:'仅编辑器',symbol:'□'},{id:'result',label:'仅结果集',symbol:'▣'}]" :key="item.id" type="button" :class="['btn','secondary','small',{selected:layout===item.id}]" :aria-label="t(item.label)" :title="t(item.label)" @click="setLayout(item.id as QueryLayout)">{{item.symbol}}</button></span>
   </div>
-  <template v-if="mode==='sql'">
-   <div class="editor-toolbar"><span v-if="selectedMetadataTable" class="muted-text">{{t('字段补全来源')}}: {{selectedMetadataTable}}</span><button class="btn secondary small" :disabled="busy||!selectedMetadataTable" @click="loadMetadata(true)">{{t('刷新')}}</button></div>
-   <div class="query-editor"><CodeEditor ref="editor" v-model="sql" language="sql" :sql-dialect="session.kind==='mongodb'||session.kind==='redis'?undefined:session.kind" :readonly="running||!loaded" :suggestions="sqlFields" :table-suggestions="sqlTables" @execute="execute(undefined,true)" /></div>
-   <label class="parameter-line">{{ t('参数') }}<input v-model="parameters" :aria-label="clickhouse?t('ClickHouse 参数 JSON 对象'):t('SQL 参数 JSON 数组')" spellcheck="false" :disabled="busy||!loaded" /></label>
-  </template>
-  <div v-else class="query-editor native-mongo-editor"><CodeEditor ref="editor" v-model="script" language="dbex-mongo-script" completion-kind="mongodb" :readonly="busy||!loaded" :table-suggestions="targets.map(item=>item.entity||item.label)" :suggestions="fieldSuggestions" @execute="execute(undefined,true)" /></div>
-  <ResultGrid v-if="result" :columns="result.columns" :rows="result.rows" :documents="result.documents" :bson-types="result.bsonTypes" :column-types="result.columnTypes" :sqlite-types="result.sqliteTypes" :null-cells="result.nullCells" :relational-kind="clickhouse?'clickhouse':session.kind==='mariadb'?'mariadb':'mysql'" :offset="offset" :active="active" />
-  <div v-else class="empty-state"><strong>{{ t('运行查询查看结果') }}</strong></div>
-  <footer class="result-footer"><span>{{ result?.rows.length||0 }} {{ t('条记录') }}<template v-if="result?.truncated"> · {{ t('结果已截断') }}</template><template v-if="result?.queryId"> · {{ result.queryId }}</template></span><div v-if="!clickhouse"><button class="btn secondary small" :disabled="busy||!canPageBack||!applied" @click="execute(previousOffset)">{{ t('上一页') }}</button><button class="btn secondary small" :disabled="busy||result?.nextOffset===undefined" @click="execute(result?.nextOffset)">{{ t('下一页') }}</button></div></footer>
+
+  <QuerySplit v-model:layout="layout" :active="active">
+   <template #editor>
+    <template v-if="mode==='sql'">
+     <div class="query-editor"><CodeEditor ref="editor" v-model="sql" language="sql" :sql-dialect="session.kind==='mongodb'||session.kind==='redis'?undefined:session.kind" :readonly="running||!loaded" :suggestions="sqlFields" :table-suggestions="sqlTables" @execute="execute(undefined,true)" /></div>
+     <label class="parameter-line">{{ t('参数') }}<input v-model="parameters" :aria-label="clickhouse?t('ClickHouse 参数 JSON 对象'):t('SQL 参数 JSON 数组')" spellcheck="false" :disabled="busy||!loaded" /></label>
+    </template>
+    <div v-else class="query-editor native-mongo-editor"><CodeEditor ref="editor" v-model="script" language="dbex-mongo-script" completion-kind="mongodb" :readonly="busy||!loaded" :table-suggestions="targets.map(item=>item.entity||item.label)" :suggestions="fieldSuggestions" @execute="execute(undefined,true)" /></div>
+   </template>
+   <template #result><QueryResultPanel :result="result" :kind="session.kind" :offset="offset" :query-text="executedQuery" :busy="busy" :active="active" :error="error" :notice="notice" :can-back="!clickhouse&&canPageBack" :can-first="!clickhouse&&canPageBack" :can-next="!clickhouse&&result?.nextOffset!==undefined" :can-refresh="canRefresh" :editable="canEditResult" :can-add="canAddResult" :run-id="runId" :source-label="sourceLabel" @page="page" @edit="editResult" @add="addResult" @remove="removeResult" @draft="draftResult" @collapse="setLayout('editor')"/></template>
+  </QuerySplit>
+  <Teleport to="body"><div v-if="resultEdit&&active" class="modal-backdrop"><section class="dialog query-result-edit" role="dialog" :aria-label="t(resultEdit.mode==='insert'?'新增文档':'编辑文档')">
+   <header class="dialog-header"><div><span class="eyebrow">{{sourceLabel}} / {{resultEdit.entity}}</span><h2>{{t(resultEdit.mode==='insert'?'新增文档':'编辑文档')}}</h2></div><button class="icon-button" :disabled="busy" @click="resultEdit=undefined">×</button></header>
+   <p v-if="resultEdit.error" class="inline-message error">{{localize(resultEdit.error)}}</p>
+   <div class="query-result-edit-code"><CodeEditor v-model="resultEdit.text" :language="resultEdit.syntax==='typed'?'dbex-bson-document':'json'" :readonly="busy"/></div>
+   <footer class="dialog-footer"><button class="btn secondary" :disabled="busy" @click="resultEdit=undefined">{{t('取消')}}</button><button class="btn primary" :disabled="busy||!session.writable" @click="saveResultEdit">{{t('保存修改')}}</button></footer>
+  </section></div></Teleport>
   <div v-if="saveAsOpen" class="modal-backdrop"><section class="dialog" role="dialog" :aria-label="t('另存为')"><header class="dialog-header"><h2>{{ t('另存为') }}</h2></header><div class="dialog-body"><label class="field field-wide">{{ t('名称') }}<input v-model="copyName" :aria-label="t('名称')" maxlength="100" /></label><p v-if="error" role="alert">{{ localize(error) }}</p></div><footer class="dialog-footer"><button class="btn secondary" :disabled="busy" @click="saveAsOpen=false">{{ t('取消') }}</button><button class="btn primary" :disabled="busy||!copyName.trim()" @click="save(true)">{{ t('保存') }}</button></footer></section></div>
  </section>
 </template>
 <style scoped>
-.query-object-fields{display:flex;gap:12px;align-items:end;padding:8px 12px;border-bottom:1px solid var(--border-soft);flex:none}.query-object-fields .field{flex:1;min-width:0}.query-object-fields .field:last-child{flex:0 0 86px}.query-object-toolbar{gap:6px}.saved-query-editor .workbench-header h2{margin:0}.native-mongo-editor{min-height:200px}
+.query-object-fields{display:flex;gap:12px;align-items:end;padding:8px 12px;border-bottom:1px solid var(--border-soft);flex:none}.query-object-fields .field{flex:1;min-width:0}.query-object-fields .field:last-child{flex:0 0 86px}.query-object-toolbar{gap:6px}.saved-query-editor .workbench-header h2{margin:0} .query-context-header{padding:5px 10px;min-height:34px;border-bottom:1px solid var(--border-soft)}.query-context-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--text)}.query-context-label span{color:var(--muted)}.query-layout-buttons{display:flex;align-items:center;gap:4px;padding:3px 8px;background:var(--toolbar-bg);border-bottom:1px solid var(--border);flex:none}.query-layout-buttons .selected{background:var(--selected)}.query-result-edit{width:min(900px,90vw);height:min(620px,85vh);display:flex;flex-direction:column}.query-result-edit-code{flex:1;min-height:0}.query-object-fields{padding:5px 10px}.query-object-fields .field{display:flex;flex-direction:row;align-items:center;gap:6px}.query-object-fields .field span{flex:none}.query-object-fields .field:last-child{flex:0 0 120px}
 </style>

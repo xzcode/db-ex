@@ -256,3 +256,30 @@ test('MongoDB real collection maintenance: explicit create, rename, empty and dr
   assert.equal((await db.listCollections({name:'existing'}).toArray()).length,1)
  }finally{await ops.close();await db.dropDatabase();await client.close()}
 })
+
+test('MongoDB real database: native query signatures and typed guarded writes', {skip: !enabled,timeout:90_000},async()=>{
+ const client=new MongoClient(localUrl('MONGODB_URL','mongodb://127.0.0.1:27017'))
+ const database=name()
+ const operations=new MongoOperations(client)
+ try{
+  await client.connect()
+  const collection=client.db(database).collection('records')
+  const id=new BSON.ObjectId()
+  await collection.insertOne({_id:id,score:1,wide:BSON.Long.fromString('9223372036854775807')})
+  const run=(script:string,context=read)=>operations.execute(compileMongoScript(script,database).operation,context)
+  const found=await run('db.records.find({score:1},{},{hint:"_id_",collation:{locale:"simple"},batchSize:10,maxTimeMS:3000})')
+  assert.equal(found.documents?.length,1)
+  assert.equal(found.queryReadOnly,true)
+  const command='db.records.findOneAndUpdate({_id:ObjectId("'+id.toHexString()+'")},{$set:{score:2}},{returnDocument:"after"})'
+  await assert.rejects(run(command,read),/READ_ONLY/)
+  const updated=await run(command,write)
+  assert.equal(updated.documents?.length,1)
+  assert.equal(JSON.parse(updated.documents![0]).wide.$numberLong,'9223372036854775807')
+  assert.equal((await collection.findOne({_id:id}))?.score,2)
+  await run('db.records.updateMany({score:2},{$set:{score:3}})',write)
+  assert.equal((await collection.findOne({_id:id}))?.score,3)
+  assert.equal((await run('db.records.getIndexes()')).rows.length,1)
+  await run('db.records.deleteOne({score:3})',write)
+  assert.equal(await collection.countDocuments(),0)
+ }finally{await client.db(database).dropDatabase().catch(()=>{});await operations.close().catch(()=>{});await client.close()}
+})

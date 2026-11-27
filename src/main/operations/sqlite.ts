@@ -129,8 +129,8 @@ export class SqliteOperations {
           const params=args.map(v=>bind(sqlRow({v},'SQL').v!))
           if(policy!.mode==='write'){const r=this.statement(policy!.sql).run(...params);return {...emptyResult('语句已执行',Number(r.changes)),transaction:this.transaction}}
           const {limit,offset}=page(op)
-          if(/^EXPLAIN\b/i.test(policy!.sql))return this.result(policy!.sql,params,limit)
-          return this.result('SELECT * FROM ('+policy!.sql+'\n) AS dbex_result LIMIT '+(limit+1)+' OFFSET '+offset,params,limit,offset)
+          if(/^EXPLAIN\b/i.test(policy!.sql))return {...this.result(policy!.sql,params,limit),queryReadOnly:true,nextOffset:undefined}
+          return {...this.result('SELECT * FROM ('+policy!.sql+'\n) AS dbex_result LIMIT '+(limit+1)+' OFFSET '+offset,params,limit,offset),queryReadOnly:true}
         }
         case 'mysql.browse':{
           target(op.database,op.entity)

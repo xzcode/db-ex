@@ -33,6 +33,8 @@ const props = withDefaults(defineProps<{
   canAddDocument?: boolean
   canFilterDocument?: boolean
   active?:boolean
+  showColors?:boolean
+  resizeAll?:boolean
   actionColumns?: string[]
   columnSort?: SortRule[]
   inlineCell?:CellDraft
@@ -40,11 +42,11 @@ const props = withDefaults(defineProps<{
   canInlineEdit?:(row:number,field:string)=>boolean
   canEditColumn?:(field:string)=>boolean
 }>(), { selected: -1, selectable: false, checked: () => [], offset: 0 })
-const emit = defineEmits<{ inlineBegin:[row:number,field:string];inlineInput:[text:string];inlineFinish:[cancel:boolean];columnSelected:[field:string];columnEdit:[field:string]; columnAction:[action:ColumnAction,field:string]; select: [index: number]; open: [index: number]; check: [index: number]; checkAll: []; documentEdit: [index: number]; documentView: [index: number]; documentAction: [action: 'add' | 'copy-value' | 'copy-document' | 'duplicate' | 'delete' | 'null' | 'empty' | 'filter', index: number, field?: string] }>()
+const emit = defineEmits<{ cellView:[row:number,field:string];inlineBegin:[row:number,field:string];inlineInput:[text:string];inlineFinish:[cancel:boolean];columnSelected:[field:string];columnEdit:[field:string]; columnAction:[action:ColumnAction,field:string]; select: [index: number]; open: [index: number]; check: [index: number]; checkAll: []; documentEdit: [index: number]; documentView: [index: number]; documentAction: [action: 'add' | 'copy-value' | 'copy-document' | 'duplicate' | 'delete' | 'null' | 'empty' | 'filter', index: number, field?: string] }>()
 const mongo = computed(() => props.bsonTypes !== undefined)
 const rowHeight = computed(() => gridRowHeight(preferences.value,mongo.value))
 const headerHeight = computed(() => Math.max(mongo.value?28:34,preferences.value.records.fontSize+12))
-const gridStyle=computed(()=>({'--record-height':rowHeight.value+'px','--record-header-height':headerHeight.value+'px','--record-font-size':preferences.value.records.fontSize+'px','--record-font':preferences.value.records.fontFamily==='default'?(mongo.value?'inherit':'"SFMono-Regular", Consolas, monospace'):'"'+preferences.value.records.fontFamily+'", sans-serif',...(mongo.value?{width:tableWidth.value+'px'}:{})}))
+const gridStyle=computed(()=>({'--record-height':rowHeight.value+'px','--record-header-height':headerHeight.value+'px','--record-font-size':preferences.value.records.fontSize+'px','--record-font':preferences.value.records.fontFamily==='default'?(mongo.value?'inherit':'"SFMono-Regular", Consolas, monospace'):'"'+preferences.value.records.fontFamily+'", sans-serif',...((mongo.value||props.resizeAll)?{width:tableWidth.value+'px'}:{})}))
 const OVERSCAN = 6
 const scrollHost = ref<HTMLElement>()
 const scrollTop = ref(0)
@@ -165,6 +167,7 @@ const autoWidths = computed(() => {
       const valueWidth = Math.min(310, [...cell.text.slice(0, 90)].reduce((sum, char) => sum + (char.charCodeAt(0) > 255 ? 13 : 7.4), 0) + 20)
       width = Math.max(width, valueWidth + (bsonPalette.value.showLabels ? 74 : 0))
     }
+    if(!mongo.value)for(const row of props.rows.slice(0,60))width=Math.max(width,Math.min(310,display(row[column]).length*7.5+20))
     out[column] = Math.max(66, Math.min(400, Math.ceil(width)))
   }
   return out
@@ -231,6 +234,7 @@ function genericType(index: number, column: number): string | undefined {
 }
 function gridType(row: Record<string, unknown>, index: number, key: string, column: number): string | undefined { return cellType(row, index, key) || genericType(index, column) }
 function gridColor(row: Record<string, unknown>, index: number, key: string, column: number): string | undefined {
+  if(props.showColors===false)return undefined
   const bson = cellType(row, index, key)
   if (bson) return activeTypeColor(bsonPalette.value, bson)
   const kind = props.sqliteTypes?'sqlite':props.columnTypes ? (props.relationalKind||'mysql') : props.redisRowTypes ? 'redis' : undefined
@@ -254,12 +258,12 @@ function display(value: unknown): string {
 
 <template>
   <div ref="scrollHost" class="grid-scroll" tabindex="0" :aria-label="t('结果表格')" @scroll.passive="onScroll">
-    <table :class="['data-table', 'configured-grid', { 'virtual-grid': virtual, 'mongo-grid': mongo, 'typed-grid': !!columnTypes || !!redisRowTypes || !!sqliteTypes }]" :style="gridStyle" :aria-rowcount="rows.length + 1" :dir="mongo ? 'ltr' : undefined">
-      <colgroup v-if="mongo"><col style="width: 38px" /><col v-for="column in columns" :key="column" :style="{ width: columnWidth(column) + 'px' }" /></colgroup>
+    <table :class="['data-table', 'configured-grid', { 'virtual-grid': virtual, 'mongo-grid': mongo||resizeAll, 'typed-grid': !!columnTypes || !!redisRowTypes || !!sqliteTypes }]" :style="gridStyle" :aria-rowcount="rows.length + 1" :dir="mongo ? 'ltr' : undefined">
+      <colgroup v-if="mongo||resizeAll"><col style="width: 38px" /><col v-for="column in columns" :key="column" :style="{ width: columnWidth(column) + 'px' }" /></colgroup>
       <thead><tr>
         <th v-if="selectable" class="number-cell"><input type="checkbox" :aria-label="t('选择当前页')" :checked="rows.length > 0 && checked.length === rows.length" @change="emit('checkAll')" /></th>
         <th class="number-cell">#</th><th v-for="column in columns" :key="column" :title="column" :class="{'column-active':selectedColumn===column,'column-actionable':canUseColumn(column)}" :aria-sort="columnSort?.[0]?.field===column?(directionFor(column)===1?'ascending':'descending'):undefined" @click="selectColumn(column)" @dblclick="canEditColumn?.(column)&&emit('columnEdit',column)" @contextmenu="openColumnMenu($event,column)">
-          <div class="grid-heading-content"><span class="grid-column-title">{{ column }}</span><span v-if="directionFor(column)" class="column-sort-indicator" aria-hidden="true">{{ directionFor(column)===1?'↑':'↓' }}<small v-if="(columnSort?.length||0)>1">{{ (columnSort?.findIndex(rule=>rule.field===column)??0)+1 }}</small></span><button v-if="canUseColumn(column)" type="button" class="column-menu-trigger" :title="t('列操作')+': '+column" :aria-label="t('列操作')+': '+column" aria-haspopup="menu" :aria-expanded="columnMenu?.field===column" @click.stop="openColumnMenu($event,column)" @keydown.shift.f10.stop="openColumnMenu($event,column)">···</button></div><span v-if="mongo" class="grid-column-resize" role="separator" aria-orientation="vertical" :aria-label="t('调整列宽') + ': ' + column" :aria-valuemin="52" :aria-valuemax="1000" :aria-valuenow="columnWidth(column)" tabindex="0" @pointerdown.stop="resizeColumn($event, column)" @keydown.stop="resizeColumnKey($event, column)" @dblclick.stop="delete widths[column]"></span></th>
+          <div class="grid-heading-content"><span class="grid-column-title">{{ column }}</span><span v-if="directionFor(column)" class="column-sort-indicator" aria-hidden="true">{{ directionFor(column)===1?'↑':'↓' }}<small v-if="(columnSort?.length||0)>1">{{ (columnSort?.findIndex(rule=>rule.field===column)??0)+1 }}</small></span><button v-if="canUseColumn(column)" type="button" class="column-menu-trigger" :title="t('列操作')+': '+column" :aria-label="t('列操作')+': '+column" aria-haspopup="menu" :aria-expanded="columnMenu?.field===column" @click.stop="openColumnMenu($event,column)" @keydown.shift.f10.stop="openColumnMenu($event,column)">···</button></div><span v-if="mongo||resizeAll" class="grid-column-resize" role="separator" aria-orientation="vertical" :aria-label="t('调整列宽') + ': ' + column" :aria-valuemin="52" :aria-valuemax="1000" :aria-valuenow="columnWidth(column)" tabindex="0" @pointerdown.stop="resizeColumn($event, column)" @keydown.stop="resizeColumnKey($event, column)" @dblclick.stop="delete widths[column]"></span></th>
       </tr></thead>
       <tbody>
         <tr v-if="topSpace" class="virtual-spacer" aria-hidden="true"><td :colspan="columnCount" :style="{ height: topSpace + 'px' }"></td></tr>

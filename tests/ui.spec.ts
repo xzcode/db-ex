@@ -113,7 +113,7 @@ async function installBridge(page: Page) {
         if(op.action==='mongo.dropDatabase'||op.action==='mysql.dropDatabase'){additionalDbs[id]=(additionalDbs[id]||[]).filter(name=>name!==op.database);return {columns:[],rows:[],message:'数据库已删除'}}
         if (op.action === 'mysql.structure') return { ...grid([{ name: 'id', type: 'int', key: 'PRI' }, { name: 'name', type: 'varchar', key: '' }]), primaryKeys: ['id'] }
         if (op.action === 'mysql.browse' && op.countOnly) return { columns: [], rows: [], totalRows: '501', countLimited: false }
-        if (op.action === 'mongo.count') return { columns: [], rows: [], totalRows: '401', countLimited: false }
+        if (op.action === 'mongo.count') return { columns: [], rows: [], totalRows: '401', countLimited: false,queryReadOnly:true }
         if (op.action === 'mysql.query' || op.action === 'mysql.browse') {
           if (op.sql?.includes('slow_query')) await new Promise(resolve => setTimeout(resolve, 400))
           const values = (window as any).__dbexLargeGrid ? Array.from({ length: 500 }, (_, index) => ({ id: String(index + 1), name: 'User ' + (index + 1), email: 'user' + (index + 1) + '@example.test' })) : id === 'sql2' ? [{ id: '2', name: 'Grace', email: 'grace@example.test' }] : rows
@@ -122,7 +122,7 @@ async function installBridge(page: Page) {
         if(op.action==='mysql.updateBatch'||op.action==='mongo.replaceBatch')return {columns:[],rows:[],affectedRows:op.edits.length,gridBatch:{total:op.edits.length,completed:op.edits.length,atomic:op.action==='mysql.updateBatch'}}
         if (op.action === 'mysql.begin') return { columns: [], rows: [], transaction: true }
         if (op.action === 'mysql.commit' || op.action === 'mysql.rollback') return { columns: [], rows: [], transaction: false }
-        if (op.action === 'mongo.find' || op.action === 'mongo.aggregate') return { columns: ['_id', 'name', 'createdAt', 'score', 'nullable', 'nested'], rows: [{ _id: '64b000000000000000000001', name: 'Ada', createdAt: 'date', score: '7', nullable: 'NULL', nested: '{...}' }, { _id: '64b000000000000000000002', name: 'Grace', score: '7', nullable: 'NULL' }, { _id: '64b000000000000000000003', name: 'Lin', score: '7' }], documents: [document, secondDocument, thirdDocument], bsonTypes: mongoMetadata, durationMs: 3, nextOffset: op.action === 'mongo.find' && (op.offset || 0) < 400 ? (op.offset || 0) + op.limit : undefined }
+        if (op.action === 'mongo.find' || op.action === 'mongo.aggregate') return { columns: ['_id', 'name', 'createdAt', 'score', 'nullable', 'nested'], rows: [{ _id: '64b000000000000000000001', name: 'Ada', createdAt: 'date', score: '7', nullable: 'NULL', nested: '{...}' }, { _id: '64b000000000000000000002', name: 'Grace', score: '7', nullable: 'NULL' }, { _id: '64b000000000000000000003', name: 'Lin', score: '7' }], documents: [document, secondDocument, thirdDocument], bsonTypes: mongoMetadata, queryReadOnly:true, durationMs: 3, nextOffset: op.action === 'mongo.find' && (op.offset || 0) < 400 ? (op.offset || 0) + op.limit : undefined }
         if (op.action === 'mysql.inspect') return { columns: [], rows: [], inspection: { kind: 'table', metrics: [{ label: '存储引擎', value: 'InnoDB' }, { label: '记录数（估算）', value: '1234', format: 'estimate' }, { label: '数据大小', value: '32768', format: 'bytes' }], definition: 'CREATE TABLE users (id BIGINT PRIMARY KEY, name VARCHAR(255));' } }
         if (op.action === 'mongo.inspect') return { columns: [], rows: [], inspection: { kind: 'collection', metrics: [{ label: '文档数', value: '3' }, { label: '已固定', value: 'false', format: 'boolean' }, { label: '存储大小', value: '32768', format: 'bytes' }], definition: 'db.getSiblingDB("app").createCollection('+JSON.stringify(op.entity)+');\n\ndb.getSiblingDB("app").getCollection('+JSON.stringify(op.entity)+').createIndex({ "score": Int32("1") }, { "name": "score_1" });' } }
         if (op.action === 'redis.inspect') return { columns: [], rows: [], inspection: { kind: 'key', metrics: [{ label: '类型', value: 'string' }, { label: 'TTL（秒）', value: '-1' }, { label: '内存占用', value: '72', format: 'bytes' }], definition: JSON.stringify(['TYPE', op.key]) + '\n' + JSON.stringify(['TTL', op.key]), definitionNote: 'Redis 没有 DDL；以下是只读 Key 检查命令，不是数据备份。' } }
@@ -1613,4 +1613,76 @@ test('M12 object context menu opens migration with the selected collection prefi
  await expect(dialog.locator('.migration-endpoint').first().locator('select').first()).toHaveValue('mongo')
  await expect(dialog.locator('.migration-endpoint').first().locator('select').nth(1)).toHaveValue('app')
  await expect(dialog.locator('.migration-object-list label').filter({hasText:'users'}).getByRole('checkbox')).toBeChecked()
+})
+
+test('query refinement: real split dragging, layouts, function signatures and pinned result views',async({page})=>{
+ await connect(page,'Mongo Local')
+ await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ await page.locator('[data-object-category="queries"]').click()
+ await page.locator('.object-list-panel:visible').getByRole('button',{name:/新建查询/}).click()
+ const editor=page.locator('.saved-query-editor:visible')
+ const input='.saved-query-editor:visible .native-mongo-editor .monaco-editor'
+ await replaceEditor(page,input,'db.users.find')
+ await page.keyboard.press('Control+Space')
+ await expect(page.locator('.suggest-widget.visible')).toContainText('findOneAndUpdate')
+ await expect(page.locator('.suggest-widget.visible')).toContainText('filter, projection, options')
+ await page.keyboard.press('Escape')
+ await replaceEditor(page,input,'db.users.find()')
+ await editor.getByRole('button',{name:'运行选中 / 全部',exact:true}).click()
+ await expect(editor.locator('.data-table')).toContainText('Ada')
+ const handle=editor.getByRole('separator',{name:'调整查询与结果区域大小'})
+ const before=Number(await handle.getAttribute('aria-valuenow'))
+ const bounds=await handle.boundingBox()
+ expect(bounds).toBeTruthy()
+ await page.mouse.move(bounds!.x+bounds!.width/2,bounds!.y+bounds!.height/2)
+ await page.mouse.down();await page.mouse.move(bounds!.x+bounds!.width/2,bounds!.y+bounds!.height/2+45,{steps:5});await page.mouse.up()
+ await expect.poll(async()=>Number(await handle.getAttribute('aria-valuenow'))).toBeGreaterThan(before)
+ await editor.getByRole('button',{name:'结果在右侧',exact:true}).click()
+ await expect(handle).toHaveAttribute('aria-orientation','vertical')
+ await editor.getByRole('button',{name:'仅结果集',exact:true}).click()
+ await expect(handle).toHaveCount(0)
+ await expect(editor.locator('.data-table')).toBeVisible()
+ await editor.getByRole('button',{name:'结果在下方',exact:true}).click()
+ const panel=editor.locator('.query-result-panel')
+ await panel.getByRole('button',{name:'固定结果',exact:true}).click()
+ await panel.getByRole('button',{name:'JSON',exact:true}).click()
+ await expect(panel.locator('.query-result-json')).toContainText('"$oid"')
+ await panel.getByRole('button',{name:'表格',exact:true}).click()
+ await replaceEditor(page,input,'db.users.countDocuments({})')
+ await editor.getByRole('button',{name:'运行选中 / 全部',exact:true}).click()
+ await expect(panel.locator('.data-table')).toContainText('401')
+ await panel.locator('.result-tab button').first().click()
+ await expect(panel.locator('.data-table')).toContainText('Ada')
+ await expect(panel.getByRole('button',{name:'编辑',exact:true})).toBeDisabled()
+ await expect(panel.getByRole('button',{name:'下一页',exact:true})).toBeDisabled()
+ await panel.getByRole('button',{name:'导出当前页 JSON',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((c:any)=>c.action==='export').at(-1)?.content)).toContain('"$oid"')
+ await panel.getByRole('button',{name:'文档树',exact:true}).click()
+ await expect(panel.locator('.result-document-list')).toBeVisible()
+})
+test('query refinement: immutable pagination and guarded document editing',async({page})=>{
+ await connect(page,'Mongo Local')
+ await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ await page.locator('[data-object-category="queries"]').click()
+ await page.locator('.object-list-panel:visible').getByRole('button',{name:/新建查询/}).click()
+ const editor=page.locator('.saved-query-editor:visible'),panel=editor.locator('.query-result-panel')
+ const input='.saved-query-editor:visible .native-mongo-editor .monaco-editor'
+ const run=editor.getByRole('button',{name:'运行选中 / 全部',exact:true})
+ await replaceEditor(page,input,'db.users.find({score:7},{},{sort:{score:-1},batchSize:10})')
+ await run.click()
+ await expect(panel.locator('.data-table')).toContainText('Ada')
+ await replaceEditor(page,input,'db.users.find({score:99})')
+ await panel.getByRole('button',{name:'下一页',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((c:any)=>c.action==='mongo.find').at(-1))).toMatchObject({filter:'{"score":7}',settings:{batchSize:10}})
+ await editor.getByRole('button',{name:'只读 · 启用写入',exact:true}).click()
+ await expect(panel.getByRole('button',{name:'编辑',exact:true})).toBeEnabled()
+ await panel.getByRole('button',{name:'编辑',exact:true}).click()
+ await expect(page.locator('.query-result-edit')).toBeVisible()
+ await page.locator('.query-result-edit').getByRole('button',{name:'取消',exact:true}).click()
+ await replaceEditor(page,input,'db.users.find({},{name:1})')
+ await run.click()
+ await expect(panel.getByRole('button',{name:'编辑',exact:true})).toBeDisabled()
+ await replaceEditor(page,input,'db.users.aggregate([])')
+ await run.click()
+ await expect(panel.getByRole('button',{name:'编辑',exact:true})).toBeDisabled()
 })

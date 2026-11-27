@@ -309,3 +309,8 @@ global inspector state, catalog preview/resize, shared object and category
 context menus, MongoDB ordinary collection maintenance and three distinct
 new themes. See [UI refinement](UI_REFINEMENT.md) for implementation,
 real test evidence and remaining scope. Await exact CI before merge/release.
+
+### Query workspace refinement (M12 candidate, 2026-11-27)
+
+- Shared resizable saved-query editor/result workspace with bottom/right layouts, persisted divider, maximize/collapse, messages/summary, pinned snapshots, result inspection, grid/tree/JSON and current-page export.
+- MongoDB function overloads and parameter hints; typed query options and guarded native-style mutations; complete-find-only result editing. See [query refinement scope and verification](QUERY_REFINEMENT.md).
