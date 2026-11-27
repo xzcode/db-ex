@@ -14,6 +14,7 @@ import CodeEditor from './components/CodeEditor.vue'
 import MariaObjectDialog from './components/MariaObjectDialog.vue'
 import ResultGrid from './components/ResultGrid.vue'
 import ObjectInspector from './components/ObjectInspector.vue'
+import {globalInspectorTab,openGlobalInspector,closeGlobalInspector} from './inspector-preferences'
 import MongoSavedObjects from './components/MongoSavedObjects.vue'
 import MongoIndexHelp from './components/MongoIndexHelp.vue'
 import VisualQueryBuilder from './components/VisualQueryBuilder.vue'
@@ -26,7 +27,7 @@ import { canSafelyEditMongoDocument, formatMongoDocument, mongoDocumentDraft, mo
 import type { BsonTypeBranch } from '../shared/bson-types'
 import { csvFromRows, sqlRowsFromFile, validateSqlRow } from './data-format'
 
-const props = defineProps<{ session: SessionInfo; node?: ExplorerNode; tableSuggestions?:string[]; initialTab?:WorkbenchTab; active?:boolean }>()
+const props = defineProps<{ session: SessionInfo; node?: ExplorerNode; tableSuggestions?:string[]; initialTab?:WorkbenchTab; requestedTab?:WorkbenchTab; tabRequest?:number; active?:boolean }>()
 const emit = defineEmits<{ updateSession: [session: SessionInfo]; disconnect: []; refreshTree: []; tabChange:[tab:WorkbenchTab];busyChange:[busy:boolean];dirtyChange:[dirty:boolean] }>()
 const mariaObjectOpen=ref(false)
 const tab = ref<WorkbenchTab>(validWorkbenchTab(props.session.kind,props.initialTab,props.node?.readOnly))
@@ -82,7 +83,7 @@ const indexDialog = ref(false)
 const indexHelpOpen=ref(false)
 watch(indexDialog,open=>{if(!open)indexHelpOpen.value=false})
 function applyIndexExample(example:{keys:string;options:string}){indexKeys.value=example.keys;indexOptions.value=example.options;indexHelpOpen.value=false}
-const inspectorTab = ref<'info' | 'ddl' | 'colors' | null>(null)
+const inspectorTab = globalInspectorTab
 const inspection = ref<ObjectInspection>()
 const inspectionError = ref('')
 const inspectionLoading = ref(false)
@@ -283,7 +284,7 @@ async function execute(operation: DatabaseOperation, showResult = true): Promise
     }
   }
 }
-function openInspector(next: 'info' | 'ddl' | 'colors') { inspectorTab.value = next }
+function openInspector(next: 'info' | 'ddl' | 'colors') { openGlobalInspector(next) }
 async function refreshInspection() {
   if (busy.value || disposed || inspectionLoading.value || !inspectorName.value || (!isRedis.value && !hasEntity.value)) return
   const key = inspectionKey.value
@@ -306,7 +307,7 @@ watch([inspectorTab, inspectionKey, busy, inspectionLoading,()=>props.active], (
   if (props.active!==false&&inspectorTab.value && inspectorTab.value !== 'colors' && !busy.value && !inspectionLoading.value && inspectorName.value && inspectionLoadedKey !== inspectionKey.value) {
     inspectionTimer = setTimeout(() => { if (props.active!==false&&inspectorTab.value && inspectorTab.value !== 'colors') void refreshInspection() }, 0)
   }
-}, { flush: 'post' })
+}, { flush: 'post', immediate:true })
 async function confirmWrite(_title: string, _details: string): Promise<boolean> {
   if (!canWrite.value) { error.value = '当前会话只读，请先点击右上角“启用写入”。'; return false }
   // A native main-process dialog confirms each database write immediately before execution.
@@ -805,7 +806,7 @@ watch(()=>props.node?.id,()=>{
   sql.value=remembered?.sql??(hasEntity.value&&isMysql.value?'SELECT * FROM '+quote(entity.value.database)+'.'+quote(entity.value.entity)+';':'SELECT 1 AS result;')
   parameters.value=remembered?.parameters??'[]';lastQuery=undefined;pipeline.value=remembered?.pipeline??'[\n  { "$limit": 100 }\n]'
   browsePageSize.value=pageSizeFor(preferences.value,props.session.kind)
-  inspectorTab.value=null;redisScanCursors.value=['0'];redisScanIndex.value=0
+  redisScanCursors.value=['0'];redisScanIndex.value=0
   visualFilter.value=newBrowseFilter();appliedMysql.value=newBrowseFilter();appliedMongo.value={filter:'{}',projection:'{}',sort:'{}'}
   filter.value=remembered?.filter??'{}';projection.value=remembered?.projection??'{}';sort.value=remembered?.sort??'{}';filterMode.value=remembered&&(remembered.filter!=='{}'||remembered.projection!=='{}'||remembered.sort!=='{}')?'text':'builder';filterError.value=''
   totalRows.value=undefined;countLimited.value=false;pageInput.value=1;sqlQuerySummary.value='';sqlQueryParameters.value=[]
@@ -815,6 +816,7 @@ watch(()=>props.node?.id,()=>{
   void refreshSelection(generation)
 },{immediate:true})
 watch(tab,value=>emit('tabChange',value),{immediate:true})
+watch(()=>props.tabRequest,()=>{if(props.requestedTab)void changeTab(validWorkbenchTab(props.session.kind,props.requestedTab,props.node?.readOnly))})
 const savedScope=()=>props.session.connectionId?{connectionId:props.session.connectionId,database:entity.value.database,entity:entity.value.entity}:undefined
 const recovery=useQueryRecovery(()=>{
   const scope=savedScope();return scope&&isMysql.value?{...scope,kind:props.session.kind==='sqlite'?'sqlite-query':props.session.kind==='mariadb'?'mariadb-query':'mysql-query'}:undefined
@@ -965,5 +967,5 @@ onBeforeUnmount(() => { disposed = true; generation++; if (inspectionTimer) clea
       </section>
     </div>
     <div v-if="historyOpen" class="modal-backdrop"><section class="dialog history-dialog" role="dialog" aria-modal="true" aria-labelledby="history-title"><header class="dialog-header"><h2 id="history-title">{{ t('查询历史与收藏') }}</h2><button class="icon-button" @click="historyOpen = false">×</button></header><div v-if="historyError" class="inline-message error">{{ localize(historyError) }}</div><div class="editor-toolbar"><input v-model="snippetName" :placeholder="t('当前编辑器内容的收藏名称')" /><button class="btn primary" @click="favorite()">{{ t('收藏当前内容') }}</button><label class="checkbox-row"><input v-model="historyOnlyFavorites" type="checkbox" /> {{ t('仅收藏') }}</label></div><div class="history-list"><article v-for="item in visibleSnippets" :key="item.id"><div><strong>{{ item.name }}</strong><small>{{ item.database || t('未指定数据库') }} · {{ new Date(item.updatedAt).toLocaleString(locale) }}</small><pre>{{ item.text.slice(0, 600) }}</pre></div><div class="history-actions"><button class="btn secondary small" @click="useSnippet(item)">{{ t('打开') }}</button><button class="btn secondary small" @click="favorite(item)">{{ item.favorite ? t('★ 已收藏') : t('☆ 收藏') }}</button><button class="btn danger-text small" @click="removeSnippet(item)">{{ t('删除') }}</button></div></article><div v-if="!visibleSnippets.length" class="empty-state">{{ t('暂无保存的查询') }}</div></div></section></div>
-  </div><ObjectInspector v-if="inspectorTab && !libraryKind" :kind="session.kind" :name="inspectorName || ''" :database="node?.database" :connection="session.name" :tab="inspectorTab" :loading="inspectionLoading" :busy="busy" :inspection="inspection" :error="inspectionError" @change="openInspector" @close="inspectorTab = null" @refresh="refreshInspection" /></div>
+  </div><ObjectInspector v-if="props.active!==false && inspectorTab && !libraryKind && (hasEntity || isRedis && !!node || inspectorTab==='colors')" :kind="session.kind" :name="inspectorName || ''" :database="node?.database" :connection="session.name" :tab="inspectorTab" :loading="inspectionLoading" :busy="busy" :inspection="inspection" :error="inspectionError" @change="openInspector" @close="closeGlobalInspector" @refresh="refreshInspection" /></div>
 </template>

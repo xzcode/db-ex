@@ -19,7 +19,7 @@ const keyPrefix=new RegExp('^(?:UNIQUE )?KEY ('+identifier+')\\s*\\(','i')
 const tailOption=new RegExp('^(ENGINE='+word+'|AUTO_INCREMENT=[0-9]+|(?:DEFAULT )?CHARSET='+word+'|COLLATE='+word+'|ROW_FORMAT=(?:DYNAMIC|COMPACT|REDUNDANT|COMPRESSED|DEFAULT)|COMMENT='+quoted+')(?=\\s|$)','i')
 function unquote(id:string){return id.slice(1,-1).replaceAll('``','`')}
 export interface TableShape {columns:{name:string;definition:string;semantic?:string}[];indexes:{name:string;definition:string}[];other:string[];options:string;safe:boolean}
-export interface SchemaObject {name:string;type:string;engine?:string;definition:string;triggerNames:string[];shape?:TableShape}
+export interface SchemaObject {name:string;type:string;engine?:string;definition:string;triggerNames:string[];shape?:TableShape;details?:unknown}
 export interface SchemaSnapshot {objects:SchemaObject[]}
 function splitBody(ddl:string,start:number){
  let depth=1,quote='',partStart=start+1;const parts:string[]=[]
@@ -137,4 +137,17 @@ export function planMysqlMigration(source:SchemaSnapshot,target:SchemaSnapshot,m
   if(!actions.length)return {...step,changes:diff.changes}
   return {...step,action:'alter',changes:diff.changes,sql:['ALTER TABLE '+tableTarget(targetDb,name)+'\n  '+actions.join(',\n  ')],executable:true}
  })
+}
+
+
+// Ordinary PRIMARY KEY declarations only. Do not allow MySQL's duplicate-key
+// update to match a different row through an alternate unique constraint.
+export function mysqlUpsertKeys(shape?:TableShape):string[]|undefined{
+ if(!shape?.safe||shape.indexes.some(i=>i.name!=='PRIMARY'&&/^UNIQUE KEY/i.test(i.definition)))return
+ const definition=shape.indexes.find(i=>i.name==='PRIMARY')?.definition
+ const match=definition&&/^PRIMARY KEY\s*\(((?:`[A-Za-z_0-9]+`)(?:,\s*`[A-Za-z_0-9]+`)*)\)(?: USING BTREE)?$/i.exec(definition)
+ if(!match)return
+ const keys=match[1]!.split(',').map(s=>s.trim().slice(1,-1))
+ if(keys.some(k=>!shape.columns.some(c=>c.name===k)))return
+ return keys
 }

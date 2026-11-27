@@ -80,9 +80,17 @@ if (!monaco.languages.getLanguages().some(language=>language.id==='dbex-mongo-sc
  monaco.languages.setLanguageConfiguration('dbex-mongo-script',{comments:{lineComment:'//',blockComment:['/*','*/']},brackets:[['{','}'],['[',']'],['(',')']],autoClosingPairs:[{open:'{',close:'}'},{open:'[',close:']'},{open:'(',close:')'},{open:'"',close:'"'},{open:"'",close:"'"}]})
 }
 function applyTheme() {
-  const light=document.documentElement.dataset.theme==='light'
+  const theme=document.documentElement.dataset.theme||'dark'
+  const light=theme==='light'||theme==='soft-light'
   const p=preferences.value.editor
-  if(!p.customColors){monaco.editor.setTheme(light?'vs':'vs-dark');return}
+  if(!p.customColors){
+    if(theme==='gray'||theme==='black'||theme==='soft-light'){
+      const color=(key:string)=>getComputedStyle(document.documentElement).getPropertyValue(key).trim()
+      monaco.editor.defineTheme('dbex-interface',{base:light?'vs':'vs-dark',inherit:true,rules:[],colors:{'editor.background':color('--editor-bg'),'editor.foreground':color('--text'),'editorGutter.background':color('--editor-bg'),'editorLineNumber.foreground':color('--muted'),'editor.selectionBackground':color('--selected'),'editor.lineHighlightBackground':color('--toolbar-bg')}})
+      monaco.editor.setTheme('dbex-interface')
+    }else monaco.editor.setTheme(light?'vs':'vs-dark')
+    return
+  }
   const colors=p.colors
   monaco.editor.defineTheme('dbex-custom',{base:light?'vs':'vs-dark',inherit:true,rules:[
     {token:'',foreground:colors.foreground.slice(1)},{token:'keyword',foreground:colors.keyword.slice(1)},{token:'comment',foreground:colors.comment.slice(1)},{token:'string',foreground:colors.string.slice(1)},{token:'number',foreground:colors.number.slice(1)}

@@ -9,6 +9,7 @@ const api: DbExAPI = {
   previewMigration:request=>ipcRenderer.invoke('migration:preview',request),
   runMigration:(id,steps)=>ipcRenderer.invoke('migration:run',id,steps),
   listMigrationJobs:()=>ipcRenderer.invoke('migration:jobs'),
+  removeMigrationHistory:id=>ipcRenderer.invoke('migration:remove-history',id),
   cancelMigration:id=>ipcRenderer.invoke('migration:cancel',id),
   newWorkspaceWindow:()=>ipcRenderer.invoke('workspace:new-window'),
   restoreWorkspaceWindows:restore=>ipcRenderer.invoke('workspace:restore-windows',restore),

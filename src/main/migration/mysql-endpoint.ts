@@ -3,15 +3,17 @@ import type {QueryOptions} from 'mysql2'
 import {createHash} from 'node:crypto'
 import {addAbortSignal} from 'node:stream'
 import type {ConnectionConfig,DatabaseKind} from '../../shared/types'
-import type {MigrationCatalog,MigrationObject} from '../../shared/migration'
+import type {MigrationEndpoint} from './endpoint'
+import type {MigrationCatalog,MigrationObject,MigrationStep,MigrationCopyOptions} from '../../shared/migration'
 import {migrationName,migrationSupported} from '../../shared/migration'
 import {protectedDatabase} from '../../shared/database-admin'
 import {validateConnection} from '../connections/validation'
 import {createTransport,type ConnectionTransport} from '../connections/transport'
 import {loadConnectionTls} from '../connections/tls-material'
 import {openMysqlClient} from '../connections/mysql-client'
+import {sqlMigrationCondition} from './condition'
 import {quoteIdentifier as q} from '../operations/sql-policy'
-import {makeSchemaObject,tableTarget,dataShape,type SchemaObject,type SchemaSnapshot} from './mysql-schema'
+import {makeSchemaObject,tableTarget,dataShape,mysqlUpsertKeys,type SchemaObject,type SchemaSnapshot} from './mysql-schema'
 
 const MAX_OBJECTS=500,MAX_DEFINITION=128*1024,MAX_SNAPSHOT=4*1024*1024
 const BATCH_BYTES=4*1024*1024,BATCH_ROWS=500
@@ -47,18 +49,18 @@ function cellBytes(value:unknown){
  if(typeof value==='number'&&Number.isFinite(value)&&(!Number.isInteger(value)||Number.isSafeInteger(value)))return 16
  throw new Error('MIGRATION_TYPE: 无法无损传输该字段值')
 }
-export class MysqlMigrationEndpoint{
+export class MysqlMigrationEndpoint implements MigrationEndpoint{
  private closed=false
  readonly kind:DatabaseKind
  readonly identity:string
- private constructor(private readonly client:Connection,private readonly transport:ConnectionTransport,private readonly signal:AbortSignal,kind:DatabaseKind,identity:string){
+ private constructor(private readonly client:Connection,private readonly transport:ConnectionTransport,private readonly signal:AbortSignal,kind:DatabaseKind,identity:string,private readonly version:string){
   this.kind=kind;this.identity=identity
   signal.addEventListener('abort',this.stop,{once:true})
  }
  private stop=()=>{this.client.destroy();void this.transport.close().catch(()=>{})}
  static async open(value:ConnectionConfig,signal:AbortSignal){
   const config=validateConnection(value)
-  if(!migrationSupported(config.kind))throw new Error('MIGRATION_UNSUPPORTED: 当前数据库类型尚不支持此操作')
+  if(config.kind!=='mysql'&&config.kind!=='mariadb')throw new Error('MIGRATION_UNSUPPORTED: 当前数据库类型尚不支持此操作')
   abort(signal)
   const transport=await createTransport({ssh:config.ssh,proxy:config.proxy,timeoutMs:config.connectTimeoutMs})
   let client:Connection|undefined
@@ -75,7 +77,7 @@ export class MysqlMigrationEndpoint{
    if((config.kind==='mariadb')!==row.version.toLowerCase().includes('mariadb'))throw new Error('MIGRATION_UNSUPPORTED: 连接类型与实际服务器不一致')
    const [vars]=await bounded(signal,stop,()=>client!.query<RowDataPacket[]>({sql:"SHOW VARIABLES LIKE 'server_uuid'",timeout:15000}),15000)
    const identity=createHash('sha256').update(vars[0]?.Value?String(vars[0].Value):JSON.stringify(row)).digest('hex')
-   const endpoint=new MysqlMigrationEndpoint(client,transport,signal,config.kind,identity)
+   const endpoint=new MysqlMigrationEndpoint(client,transport,signal,config.kind,identity,String(row.version))
    abort(signal)
    return endpoint
   }catch(error){client?.destroy();await transport.close().catch(()=>{});throw error}
@@ -123,8 +125,8 @@ export class MysqlMigrationEndpoint{
    const triggers=await this.query('SELECT TRIGGER_NAME AS name FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=? AND EVENT_OBJECT_TABLE=? ORDER BY TRIGGER_NAME LIMIT 501',[database,o.name])
    if(triggers.length>MAX_OBJECTS)throw new Error('MIGRATION_LIMIT: 数据库对象数量超出本阶段上限')
    const item=makeSchemaObject(o.name,o.type,o.engine,ddl,triggers.map(r=>String(r.name)))
-   // SHOW CREATE can spell inherited character set/collation differently
-   // after ALTER. Compare actual column metadata, not that spelling.
+   // SHOW CREATE may spell inherited character set/collation or defaults
+   // differently after ALTER. Compare actual column metadata, not that spelling.
    if(item.shape?.safe){
     const columns=await this.query('SELECT COLUMN_NAME,COLUMN_TYPE,IS_NULLABLE,COLUMN_DEFAULT,EXTRA,CHARACTER_SET_NAME,COLLATION_NAME,COLUMN_COMMENT,GENERATION_EXPRESSION FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? ORDER BY ORDINAL_POSITION LIMIT 501',[database,o.name])
     if(columns.length!==item.shape.columns.length||columns.some((c,i)=>String(c.COLUMN_NAME)!==item.shape!.columns[i]?.name))throw new Error('MIGRATION_STALE: 结构已变化，请重新比较')
@@ -144,6 +146,8 @@ export class MysqlMigrationEndpoint{
  }
  async prepareTarget(){
   await this.statement("SET SESSION time_zone = '+00:00'")
+  await this.statement('SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ')
+  await this.statement('SET SESSION FOREIGN_KEY_CHECKS = 1')
   const mode=(await this.query('SELECT @@SESSION.sql_mode AS mode'))[0]?.mode
   const values=String(mode||'').split(',').filter(Boolean)
   if(values.some(x=>!/^[A-Z0-9_]+$/.test(x)))throw new Error('MIGRATION_TYPE: 不支持当前 SQL 模式')
@@ -153,9 +157,20 @@ export class MysqlMigrationEndpoint{
  }
  /** Generated SQL is accepted only by the main-process job plan.
   * Not exposed through IPC or through the regular query console. */
- async apply(sql:string){await this.statement(sql)}
- async copyFrom(source:MysqlMigrationEndpoint,sourceDb:string,targetDb:string,object:SchemaObject,
+ async applyStep(step:MigrationStep){for(const sql of step.sql)await this.statement(sql)}
+ private async checkAdvancedTarget(database:string,name:string){
+  // Require direct, unrestricted metadata visibility for destructive or
+  // updating modes. A restricted account can hide incoming FKs/triggers.
+  const grants=(await this.query('SHOW GRANTS FOR CURRENT_USER()')).flatMap(row=>Object.values(row).map(String))
+  const global=grants.filter(g=>/^GRANT .* ON \*\.\* TO /i.test(g))
+  const privileges=global.flatMap(g=>g.slice(6,g.toUpperCase().indexOf(' ON *.* TO ')).split(',').map(x=>x.trim().toUpperCase()))
+  if(grants.some(g=>/^REVOKE /i.test(g))||!privileges.includes('ALL PRIVILEGES')&&!(privileges.includes('SELECT')&&privileges.includes('TRIGGER')))throw new Error('MIGRATION_DEPENDENCY: 高级写入需要完整元数据权限')
+  const inbound=await this.query('SELECT TABLE_NAME FROM information_schema.KEY_COLUMN_USAGE WHERE REFERENCED_TABLE_SCHEMA=? AND REFERENCED_TABLE_NAME=? LIMIT 1',[database,name])
+  if(inbound.length)throw new Error('MIGRATION_DEPENDENCY: 目标表存在外部外键引用')
+ }
+ async copyFrom(source:MigrationEndpoint,sourceDb:string,targetDb:string,object:SchemaObject,options:MigrationCopyOptions,
   onRead:(rows:number,bytes:number)=>void,onPending:(rows:number)=>void,onCommitStart:()=>void,onCommit:(rows:number)=>void){
+  if(!(source instanceof MysqlMigrationEndpoint))throw new Error('MIGRATION_UNSUPPORTED: 当前数据库类型尚不支持此操作')
   const shape=object.shape
   if(!shape?.safe||object.triggerNames.length)throw new Error('MIGRATION_UNSUPPORTED: 当前对象需要人工迁移')
   const columns=shape.columns.map(c=>q(c.name)).join(',')
@@ -165,13 +180,16 @@ export class MysqlMigrationEndpoint{
   const maxRows=Math.min(BATCH_ROWS,Math.floor(60000/shape.columns.length))
   if(maxRows<1)throw new Error('MIGRATION_LIMIT: 数据库对象数量超出本阶段上限')
   let stream:import('node:stream').Readable|undefined,committing=false,pending=0,batch:Cell[][]=[],bytes=0
+  let upsertClause='',upsertAlias=''
+  const filter=sqlMigrationCondition(options.condition,shape.columns.map(c=>c.name),'mysql')
+  const upsert=options.policy==='upsert'
   await this.statement('START TRANSACTION READ WRITE')
   const flush=async()=>{
    if(!batch.length)return
    abort(this.signal)
-   const sql='INSERT INTO '+tableTarget(targetDb,object.name)+' ('+columns+') VALUES '+batch.map(row=>'('+row.map(()=>'?').join(',')+')').join(',')
+   const sql='INSERT INTO '+tableTarget(targetDb,object.name)+' ('+columns+') VALUES '+batch.map(row=>'('+row.map(()=>'?').join(',')+')').join(',')+upsertAlias+upsertClause
    const [result]=await bounded(this.signal,this.stop,()=>this.client.execute<ResultSetHeader>({sql,timeout:30000},batch.flat()))
-   if(result.affectedRows!==batch.length||result.warningStatus!==0)throw new Error('MIGRATION_WRITE: 写入结果与预期不一致，已停止')
+   if((upsert?result.affectedRows<0||result.affectedRows>2*batch.length:result.affectedRows!==batch.length)||result.warningStatus!==0)throw new Error('MIGRATION_WRITE: 写入结果与预期不一致，已停止')
    pending+=batch.length;onPending(pending);batch=[];bytes=0
   }
   try{
@@ -184,12 +202,37 @@ export class MysqlMigrationEndpoint{
    if(!actualSource?.shape?.safe||!actualTarget?.shape?.safe||actualSource.triggerNames.length||actualTarget.triggerNames.length||
       !dataShape(shape,actualSource.shape,false)||!dataShape(shape,actualTarget.shape,source.kind!==this.kind))
      throw new Error('MIGRATION_STALE: 结构已变化，请重新比较')
+   if(options.policy!=='append'){
+    await this.checkAdvancedTarget(targetDb,object.name)
+    if(upsert){
+     const keys=mysqlUpsertKeys(actualSource.shape),targetKeys=mysqlUpsertKeys(actualTarget.shape)
+     if(!keys||JSON.stringify(keys)!==JSON.stringify(targetKeys))throw new Error('MIGRATION_DEPENDENCY: 插入更新需要相同的主键')
+     const fields=shape.columns.filter(c=>!keys.includes(c.name)).map(c=>c.name)
+     // A primary-key-only table can use a self assignment on its key.
+     const updates=fields.length?fields:[keys[0]!]
+     if(this.kind==='mariadb')upsertClause=' ON DUPLICATE KEY UPDATE '+updates.map(n=>q(n)+'=VALUES('+q(n)+')').join(',')
+     else{
+      const version=/^(\d+)\.(\d+)\.(\d+)/.exec(this.version)
+      if(!version||Number(version[1])<8||Number(version[1])===8&&Number(version[2])===0&&Number(version[3])<19)throw new Error('MIGRATION_UNSUPPORTED: 当前数据库类型尚不支持此操作')
+      // The new row alias is a fixed identifier distinct from the table.
+      const alias=object.name==='dbex_incoming'?'dbex_incoming_2':'dbex_incoming'
+      upsertAlias=' AS '+q(alias)
+      upsertClause=' ON DUPLICATE KEY UPDATE '+updates.map(n=>q(n)+'='+q(alias)+'.'+q(n)).join(',')
+     }
+    }else if(options.policy==='replace'){
+     if(options.condition)throw new Error('MIGRATION_INPUT: 迁移参数无效')
+     // DELETE and all inserts share one transaction, not implicit-commit
+     // TRUNCATE. All target rows are locked by the delete until commit.
+     await this.statement('DELETE FROM '+tableTarget(targetDb,object.name))
+    }
+   }
    // mysql2 PromiseConnection exposes its underlying callback connection at
    // runtime. Only this main-process adapter uses it for streaming/backpressure.
    const raw=(source.client as unknown as {connection:import('mysql2').Connection}).connection
    if(!raw)throw new Error('MIGRATION_UNSUPPORTED: 当前数据库类型尚不支持此操作')
-   const query:QueryOptions={sql:'SELECT '+columns+' FROM '+tableTarget(sourceDb,object.name),rowsAsArray:true}
-   stream=addAbortSignal(this.signal,raw.query(query).stream({highWaterMark:8}))
+   const query:QueryOptions={sql:'SELECT '+columns+' FROM '+tableTarget(sourceDb,object.name)+filter.where,rowsAsArray:true}
+   const command=options.condition?raw.execute(query,filter.parameters):raw.query(query)
+   stream=addAbortSignal(this.signal,command.stream({highWaterMark:8}))
    for await(const value of stream){
     abort(this.signal)
     if(!Array.isArray(value)||value.length!==shape.columns.length)throw new Error('MIGRATION_TYPE: 无法无损传输该字段值')

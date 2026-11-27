@@ -50,3 +50,76 @@ Implemented in the current development branch:
 | M12.8 | Six-engine real integration, million-row benchmark, native platform and release gates pending. |
 
 Do not release v1.1.0 or merge an unfinished M12 candidate into stable master.
+
+## Second implementation batch — 2026-11-27
+
+The previous MySQL 8.0/8.4 and MariaDB 11.8 candidate at `17528ba`
+passed the complete SQL-family M12 CI matrix, integrated CI, and macOS
+packaged smoke. The recovered local work adds four more native endpoints:
+
+| Engine | Schema scope | Transfer scope |
+|---|---|---|
+| MySQL/MariaDB | Ordinary InnoDB, additive columns/indexes | Append, matching primary-key upsert, transactional full-table replacement, typed single-table condition |
+| SQLite | Ordinary tables, indexes and additive columns | Isolated worker streaming, typed storage classes, upsert, transactional replacement, typed single-table condition |
+| MongoDB | Ordinary standalone collections and simple indexes | Raw BSON round-trip verification, ordered acknowledged batches, explicit _id-based replacement/upsert and typed condition |
+| Redis | No SQL schema | Standalone DBs, selected UTF-8 keys, binary DUMP/RESTORE, TTL, explicit optional matching-key overwrite |
+| ClickHouse | Ordinary MergeTree, simple scalar types/keys, nullable appended columns | Server-native binary stream; bytes progress; nontransactional outcome, no invented row count |
+
+All endpoints use existing verified connection routing. Plans stay immutable
+and revalidate endpoint identity and schemas. Advanced update/replace modes
+default to no selected steps, require explicit selection and native
+confirmation. MySQL-family advanced writes require direct global metadata
+visibility (SELECT and TRIGGER or ALL PRIVILEGES, no partial revokes), no
+alternate unique key for upsert, matching primary keys, and no incoming
+foreign-key references. SQLite scans incoming FK definitions before updating
+or emptying a table. Full replacement never combines with a source filter.
+MongoDB and Redis acknowledge each batch/key separately, and ClickHouse
+has no global rollback. Do not auto-retry uncertain writes. Complex objects
+remain review-only.
+
+A main-process migration journal persists up to 100 encrypted metadata-only
+task records using existing local storage/cipher infrastructure. It saves a
+running marker before opening database connections and checkpoints object
+boundaries. An interrupted running record becomes uncertain on startup;
+completed objects and committed counts are last confirmed checkpoints.
+History can be selected and removed, and is visible across windows for
+terminal jobs. No credentials, records, executable plans, or filter values
+are stored in the journal. If storage initialization fails, ordinary
+browsing remains available but new migrations fail before writes. This is
+not automatic resume or a guarantee against physical disk failure.
+
+### Actual evidence in the development environment
+
+- SQLite ordinary schema and 12,001-row native storage fidelity,
+  duplicate rollback, alias guard and combined copy passed.
+- MongoDB 8.0.12 standalone mTLS: collection/index creation, 1,001
+  documents byte-exact, duplicate stop and combined copy passed.
+- Redis 7.0.15: all six ordinary types, binary values and TTL retained,
+  existing target key unchanged in default append mode.
+- ClickHouse 25.8.33.6 mTLS/SOCKS: create/add nullable field, 12,001-row
+  Native stream and UInt64/decimal/binary/NULL aggregate comparison,
+  combined structure+data passed using bounded thread settings.
+- MariaDB 10.11.14 and SQLite: filtered copy, upsert and transactional
+  replacement passed; incoming FK cascade protection verified.
+- SQLite one million rows copied in 8,195 ms in the isolated environment
+  (estimated wire payload 79,777,792 bytes). Counts, sum of IDs, labels
+  and payload checks agree; encrypted task metadata reopened successfully.
+  This is a fixture measurement, not a guaranteed production throughput.
+- 23 focused schema/history/i18n tests, three M12 browser tests, script
+  and application typechecks, and production build passed.
+- Additional MongoDB upsert/typed condition, Redis overwrite, exact MySQL
+  8.0/8.4 advanced mode and other-engine CI jobs require the new candidate
+  matrix. The local NoSQL advanced fixture launch was not authorized by
+  the execution environment; do not claim these new modes passed locally.
+
+### Remaining work
+
+M12.1–M12.5 foundation is now implemented, including safe default copy on
+all six engines. M12.7 has the initial migration window, one reusable
+template, persistent job metadata and advanced settings. Still outstanding:
+broader schema grammar and dependency ordering, arbitrary cross-engine
+field/type maps and renames, richer filters, named templates, advanced
+parallelism and resumable checkpoints, exact cross-server/version matrix
+and release upgrade acceptance. There is no automatic restart/resume.
+The stable release remains v1.0.0; the combined M12/UI candidate must pass
+its full CI, and remaining scope must be reviewed before v1.1.0 release.

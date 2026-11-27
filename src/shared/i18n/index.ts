@@ -1,4 +1,5 @@
 import { migrationCatalogs } from './catalog-migration'
+import {uiRefinementCatalogs} from './catalog-ui-refinement'
 import { clickHouseManagementCatalogs } from './catalog-clickhouse-management'
 import { gridEditCatalogs } from './catalog-grid-edit'
 import { queryEditorCatalogs } from './catalog-query-editor'
@@ -115,18 +116,18 @@ export function resolveLocale(preference: LanguagePreference, systemLanguage: st
 }
 export const catalogs: Readonly<Record<Locale, Readonly<Record<string, string>>>> = {
   'zh-CN': {}, en,
-  'zh-TW': { ...zh_TW, ...connectionCatalogs['zh-TW'], ...indexHelpCatalogs['zh-TW'], ...navigationCatalogs['zh-TW'], ...queryEditorCatalogs['zh-TW'], ...gridEditCatalogs['zh-TW'], ...clickHouseManagementCatalogs['zh-TW'], ...migrationCatalogs['zh-TW'] },
-  'ja': { ...ja, ...connectionCatalogs['ja'], ...indexHelpCatalogs['ja'], ...navigationCatalogs['ja'], ...queryEditorCatalogs['ja'], ...gridEditCatalogs['ja'], ...clickHouseManagementCatalogs['ja'], ...migrationCatalogs['ja'] },
-  'ko': { ...ko, ...connectionCatalogs['ko'], ...indexHelpCatalogs['ko'], ...navigationCatalogs['ko'], ...queryEditorCatalogs['ko'], ...gridEditCatalogs['ko'], ...clickHouseManagementCatalogs['ko'], ...migrationCatalogs['ko'] },
-  'de': { ...de, ...connectionCatalogs['de'], ...indexHelpCatalogs['de'], ...navigationCatalogs['de'], ...queryEditorCatalogs['de'], ...gridEditCatalogs['de'], ...clickHouseManagementCatalogs['de'], ...migrationCatalogs['de'] },
-  'fr': { ...fr, ...connectionCatalogs['fr'], ...indexHelpCatalogs['fr'], ...navigationCatalogs['fr'], ...queryEditorCatalogs['fr'], ...gridEditCatalogs['fr'], ...clickHouseManagementCatalogs['fr'], ...migrationCatalogs['fr'] },
-  'es': { ...es, ...connectionCatalogs['es'], ...indexHelpCatalogs['es'], ...navigationCatalogs['es'], ...queryEditorCatalogs['es'], ...gridEditCatalogs['es'], ...clickHouseManagementCatalogs['es'], ...migrationCatalogs['es'] },
-  'pt-BR': { ...pt_BR, ...connectionCatalogs['pt-BR'], ...indexHelpCatalogs['pt-BR'], ...navigationCatalogs['pt-BR'], ...queryEditorCatalogs['pt-BR'], ...gridEditCatalogs['pt-BR'], ...clickHouseManagementCatalogs['pt-BR'], ...migrationCatalogs['pt-BR'] },
-  'ru': { ...ru, ...connectionCatalogs['ru'], ...indexHelpCatalogs['ru'], ...navigationCatalogs['ru'], ...queryEditorCatalogs['ru'], ...gridEditCatalogs['ru'], ...clickHouseManagementCatalogs['ru'], ...migrationCatalogs['ru'] },
-  'it': { ...it, ...connectionCatalogs['it'], ...indexHelpCatalogs['it'], ...navigationCatalogs['it'], ...queryEditorCatalogs['it'], ...gridEditCatalogs['it'], ...clickHouseManagementCatalogs['it'], ...migrationCatalogs['it'] },
-  'ar': { ...ar, ...connectionCatalogs['ar'], ...indexHelpCatalogs['ar'], ...navigationCatalogs['ar'], ...queryEditorCatalogs['ar'], ...gridEditCatalogs['ar'], ...clickHouseManagementCatalogs['ar'], ...migrationCatalogs['ar'] },
-  'hi': { ...hi, ...connectionCatalogs['hi'], ...indexHelpCatalogs['hi'], ...navigationCatalogs['hi'], ...queryEditorCatalogs['hi'], ...gridEditCatalogs['hi'], ...clickHouseManagementCatalogs['hi'], ...migrationCatalogs['hi'] },
-  'id': { ...id, ...connectionCatalogs['id'], ...indexHelpCatalogs['id'], ...navigationCatalogs['id'], ...queryEditorCatalogs['id'], ...gridEditCatalogs['id'], ...clickHouseManagementCatalogs['id'], ...migrationCatalogs['id'] }
+  'zh-TW': { ...zh_TW, ...connectionCatalogs['zh-TW'], ...indexHelpCatalogs['zh-TW'], ...navigationCatalogs['zh-TW'], ...queryEditorCatalogs['zh-TW'], ...gridEditCatalogs['zh-TW'], ...clickHouseManagementCatalogs['zh-TW'], ...migrationCatalogs['zh-TW'], ...uiRefinementCatalogs['zh-TW'] },
+  'ja': { ...ja, ...connectionCatalogs['ja'], ...indexHelpCatalogs['ja'], ...navigationCatalogs['ja'], ...queryEditorCatalogs['ja'], ...gridEditCatalogs['ja'], ...clickHouseManagementCatalogs['ja'], ...migrationCatalogs['ja'], ...uiRefinementCatalogs['ja'] },
+  'ko': { ...ko, ...connectionCatalogs['ko'], ...indexHelpCatalogs['ko'], ...navigationCatalogs['ko'], ...queryEditorCatalogs['ko'], ...gridEditCatalogs['ko'], ...clickHouseManagementCatalogs['ko'], ...migrationCatalogs['ko'], ...uiRefinementCatalogs['ko'] },
+  'de': { ...de, ...connectionCatalogs['de'], ...indexHelpCatalogs['de'], ...navigationCatalogs['de'], ...queryEditorCatalogs['de'], ...gridEditCatalogs['de'], ...clickHouseManagementCatalogs['de'], ...migrationCatalogs['de'], ...uiRefinementCatalogs['de'] },
+  'fr': { ...fr, ...connectionCatalogs['fr'], ...indexHelpCatalogs['fr'], ...navigationCatalogs['fr'], ...queryEditorCatalogs['fr'], ...gridEditCatalogs['fr'], ...clickHouseManagementCatalogs['fr'], ...migrationCatalogs['fr'], ...uiRefinementCatalogs['fr'] },
+  'es': { ...es, ...connectionCatalogs['es'], ...indexHelpCatalogs['es'], ...navigationCatalogs['es'], ...queryEditorCatalogs['es'], ...gridEditCatalogs['es'], ...clickHouseManagementCatalogs['es'], ...migrationCatalogs['es'], ...uiRefinementCatalogs['es'] },
+  'pt-BR': { ...pt_BR, ...connectionCatalogs['pt-BR'], ...indexHelpCatalogs['pt-BR'], ...navigationCatalogs['pt-BR'], ...queryEditorCatalogs['pt-BR'], ...gridEditCatalogs['pt-BR'], ...clickHouseManagementCatalogs['pt-BR'], ...migrationCatalogs['pt-BR'], ...uiRefinementCatalogs['pt-BR'] },
+  'ru': { ...ru, ...connectionCatalogs['ru'], ...indexHelpCatalogs['ru'], ...navigationCatalogs['ru'], ...queryEditorCatalogs['ru'], ...gridEditCatalogs['ru'], ...clickHouseManagementCatalogs['ru'], ...migrationCatalogs['ru'], ...uiRefinementCatalogs['ru'] },
+  'it': { ...it, ...connectionCatalogs['it'], ...indexHelpCatalogs['it'], ...navigationCatalogs['it'], ...queryEditorCatalogs['it'], ...gridEditCatalogs['it'], ...clickHouseManagementCatalogs['it'], ...migrationCatalogs['it'], ...uiRefinementCatalogs['it'] },
+  'ar': { ...ar, ...connectionCatalogs['ar'], ...indexHelpCatalogs['ar'], ...navigationCatalogs['ar'], ...queryEditorCatalogs['ar'], ...gridEditCatalogs['ar'], ...clickHouseManagementCatalogs['ar'], ...migrationCatalogs['ar'], ...uiRefinementCatalogs['ar'] },
+  'hi': { ...hi, ...connectionCatalogs['hi'], ...indexHelpCatalogs['hi'], ...navigationCatalogs['hi'], ...queryEditorCatalogs['hi'], ...gridEditCatalogs['hi'], ...clickHouseManagementCatalogs['hi'], ...migrationCatalogs['hi'], ...uiRefinementCatalogs['hi'] },
+  'id': { ...id, ...connectionCatalogs['id'], ...indexHelpCatalogs['id'], ...navigationCatalogs['id'], ...queryEditorCatalogs['id'], ...gridEditCatalogs['id'], ...clickHouseManagementCatalogs['id'], ...migrationCatalogs['id'], ...uiRefinementCatalogs['id'] }
 }
 export function translate(locale: Locale, key: string, values: readonly unknown[] = []): string {
   const catalog = catalogs[locale]

@@ -286,3 +286,26 @@ MySQL/MongoDB 集成测试用 `DB_EX_INTEGRATION=1` 显式开启，连接 `MYSQL
 - Initial implementation: MySQL/MariaDB structure comparison and safe additive DDL, independent migration connections and window-owned immutable plans, streamed append copies with per-table transaction boundaries, native confirmation, stale-plan/self-copy checks, task progress/cancel, SQL preview/export and local template.
 - Local real isolated MariaDB 10.11.14 proved 12,001-row exact-value transfer, additive structure sync, duplicate rollback, stale plan rejection, structure+data and cancellation during a blocked insert. Four focused policy tests, fourteen i18n tests and two focused UI cases passed.
 - See [M12 migration scope and evidence](M12_MIGRATION.md). M12 is in progress: remaining engine adapters, richer dependency/object support, mapping, conflict modes, durable task management and final compatibility/release validation are not yet complete.
+
+### M12 second batch — six-engine migration and advanced write modes
+
+- Recovered all four additional engine adapters; ordinary six-engine real
+  baseline migration passed. SQLite million-row transfer and encrypted
+  task journal restart test passed.
+- Explicit upsert/replace modes and bound source condition for supported
+  engines; transactional replacement and incoming-FK guards validated on
+  MariaDB and SQLite. New NoSQL advanced policies require specialist CI.
+- Persistent local task metadata, uncertain-after-interruption handling,
+  safe selection and history deletion. Do not replay a failed write.
+- M12 matrix expanded to SQL-family versions, MongoDB, Redis, ClickHouse
+  and SQLite including the million-row case. Cross-engine mapping, richer
+  object support, durable resume and release gate remain outstanding.
+
+### Desktop UI refinement (2026-11-27)
+
+Independent candidate from v1.0.0, not a change to M12 migration or M13
+data-difference synchronization. Addresses reported header selection,
+global inspector state, catalog preview/resize, shared object and category
+context menus, MongoDB ordinary collection maintenance and three distinct
+new themes. See [UI refinement](UI_REFINEMENT.md) for implementation,
+real test evidence and remaining scope. Await exact CI before merge/release.

@@ -119,7 +119,8 @@ done
 TMPDIR="$fixture" DBEX_M11_ENGINE="$kind" DBEX_M11_PORT="$actual" DBEX_M11_PASSWORD="$password" \
  DBEX_M11_TLS_DIR="$fixture/tls" DBEX_M11_NATIVE_BIN="$fixture/bin" node --import tsx scripts/test-m11-engine.ts
 
-if [[ "${DBEX_M12_MIGRATION:-0}" == 1 && ( "$kind" == mysql || "$kind" == mariadb ) ]]; then
+if [[ "${DBEX_M12_MIGRATION:-0}" == 1 ]]; then
+  if [[ "$kind" == mysql || "$kind" == mariadb ]]; then script=scripts/test-m12-relational.ts; else script=scripts/test-m12-other-engines.ts; fi
   TMPDIR="$fixture" DBEX_M11_ENGINE="$kind" DBEX_M11_PORT="$actual" DBEX_M11_PASSWORD="$password" \
-   DBEX_M11_TLS_DIR="$fixture/tls" node --import tsx scripts/test-m12-relational.ts
+   DBEX_M11_TLS_DIR="$fixture/tls" node --import tsx "$script"
 fi

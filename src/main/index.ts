@@ -10,6 +10,8 @@ import { pathToFileURL } from 'node:url'
 import type { ConnectionConfig, DatabaseOperation, FileImport, QuerySnippet } from '../shared/types'
 import { ConnectionStore } from './connections/store'
 import {MigrationService} from './migration/service'
+import {MigrationHistory} from './migration/history'
+import {migrationPolicyLabel,type MigrationJob} from '../shared/migration'
 import { SessionManager } from './connections/manager'
 import { validateId } from './connections/validation'
 import { SnippetStore } from './storage/snippets'
@@ -29,7 +31,14 @@ function getSystemLanguage(): string { return app.getPreferredSystemLanguages()[
 let currentLocale: Locale = 'en'
 const tr = (key: string, values: readonly unknown[] = []) => translate(currentLocale, key, values)
 const store = new ConnectionStore()
-const migrations=new MigrationService(id=>store.get(id))
+const migrationHistory=new MigrationHistory({
+ async load(){const value=await readJson<{version:number;encrypted:string}>('migration-history.secure.json');if(!value)return [];if(value.version!==1||typeof value.encrypted!=='string')throw new Error('MIGRATION_HISTORY: 迁移历史文件无效');return decrypt<MigrationJob[]>(value.encrypted)},
+ async save(jobs){await writeJson('migration-history.secure.json',{version:1,encrypted:encrypt(jobs)})}
+})
+const migrations=new MigrationService(id=>store.get(id),modulePath=>{
+ const child=utilityProcess.fork(modulePath,[],{stdio:'ignore',serviceName:'DB EX SQLite migration'})
+ return {send:message=>child.postMessage(message),onMessage:callback=>{child.on('message',callback)},onExit:callback=>{child.once('exit',callback)},onError:callback=>{child.on('error',callback)},kill:()=>{child.kill()}}
+},app.isPackaged?join(process.resourcesPath,'app.asar.unpacked','dist-electron','sqlite-worker.cjs'):join(__dirname,'sqlite-worker.cjs'),migrationHistory)
 const sessions = new SessionManager(modulePath=>{
   const child=utilityProcess.fork(modulePath,[],{stdio:'ignore',serviceName:'DB EX SQLite'})
   return {send:message=>child.postMessage(message),onMessage:callback=>{child.on('message',callback)},onExit:callback=>{child.once('exit',callback)},onError:callback=>{child.on('error',callback)},kill:()=>{child.kill()}}
@@ -104,7 +113,7 @@ function writes(op: DatabaseOperation, writable: boolean, kind:import('../shared
 }
 function operationDetail(id: string, op: DatabaseOperation): string {
   const info = sessions.info(id)
-  const target = 'entity' in op ? `${op.database}.${op.entity}` : 'initialCollection' in op ? `${op.database}.${op.initialCollection}` : 'database' in op ? op.database || '' : 'key' in op ? op.key : 'keys' in op ? tr('{0} 个已选择的Key', [op.keys.length]) : ''
+  const target = op.action==='mongo.renameCollection' ? `${op.database}.${op.entity} → ${op.database}.${op.newName}` : 'entity' in op ? `${op.database}.${op.entity}` : 'initialCollection' in op ? `${op.database}.${op.initialCollection}` : 'database' in op ? op.database || '' : 'key' in op ? op.key : 'keys' in op ? tr('{0} 个已选择的Key', [op.keys.length]) : ''
   const count = 'edits' in op ? '\n' + tr('修改 {0} 条选中记录', [op.edits.length]) : 'rows' in op ? '\n' + tr('导入 {0} 行', [op.rows.length]) : 'documents' in op ? '\n' + tr('写入 {0} 个文档', [op.documents.length]) : ''
   const sql = (op.action === 'mysql.query'||op.action==='clickhouse.query') ? `\n\n${op.sql.slice(0, 1500)}` : op.action==='mariadb.sequenceRestart' ? '\nRESTART WITH '+op.value : op.action==='clickhouse.change' ? '\n\n'+JSON.stringify(op.change,null,2).slice(0,8192) : op.action === 'redis.command' ? '\n' + tr('命令：') + ' ' + op.args[0] : ''
   return `${tr('连接：')} ${info.name}\n${tr('地址：')} ${info.displayHost}\n${tr('操作：')} ${op.action}${target ? '\n' + tr('目标：') + ' ' + target : ''}${count}\n${tr(info.transaction ? '当前有未提交事务。' : '本操作可能立即持久化。')}${sql}`
@@ -132,11 +141,12 @@ function registerIpc(): void {
   ipcMain.handle('migration:catalog',handler((win,id:unknown,database?:unknown)=>migrations.catalog(win.webContents.id,id,database)))
   ipcMain.handle('migration:preview',handler((win,request:unknown)=>migrations.preview(win.webContents.id,request)))
   ipcMain.handle('migration:jobs',handler(win=>migrations.list(win.webContents.id)))
+  ipcMain.handle('migration:remove-history',handler((win,id:unknown)=>migrations.removeHistory(win.webContents.id,id)))
   ipcMain.handle('migration:cancel',handler((win,id:unknown)=>migrations.cancel(win.webContents.id,id)))
   ipcMain.handle('migration:run',handler(async(win,planId:unknown,steps:unknown)=>{
     const owner=win.webContents.id
     const info=migrations.confirmation(owner,planId,steps)
-    await confirm(win,'确认执行数据库迁移？',tr('源数据库')+': '+info.source+'\n'+tr('目标数据库')+': '+info.target+'\n'+tr('结构变更')+': '+info.ddl+'\n'+tr('数据传输')+': '+info.data+'\n\n'+info.names.join(', ')+'\n\n'+tr('已完成的结构变更和已提交的表不会自动回滚。源与目标结构须在执行前复核。'))
+    await confirm(win,info.policy==='replace'?'确认清空目标表并重新传输？':info.policy==='upsert'?'确认覆盖匹配的数据？':'确认执行数据库迁移？',tr('源数据库')+': '+info.source+'\n'+tr('目标数据库')+': '+info.target+'\n'+tr('结构变更')+': '+info.ddl+'\n'+tr('数据传输')+': '+info.data+'\n'+tr('写入模式')+': '+tr(migrationPolicyLabel(info.policy,info.kind))+(info.condition?'\n'+tr('源记录条件')+': '+info.condition.field+' '+info.condition.operator+' ('+info.condition.type+') '+JSON.stringify(info.condition.value):'')+'\n\n'+info.names.join(', ')+'\n\n'+tr('已完成的结构变更和已写入的数据可能无法自动回滚。源与目标结构须在执行前复核。'))
     if(!windows.has(owner)||quitting)throw new Error('SESSION_CLOSED: 会话已关闭，请重新连接')
     return migrations.start(owner,planId,steps)
   }))
@@ -240,7 +250,7 @@ function registerIpc(): void {
     const info = sessions.info(id)
     if (writes(operation, info.writable, info.kind)) {
       if (!info.writable || !('confirmed' in operation) || operation.confirmed !== true) throw new Error('WRITE_CONFIRMATION_REQUIRED: 请先解锁会话，并主动确认写入')
-      await confirm(win, operation.action === 'mongo.dropDatabase' || operation.action === 'mysql.dropDatabase' ? '确认永久删除整个数据库？' : '确认执行数据库写操作？', operationDetail(id, operation))
+      await confirm(win, operation.action === 'mongo.dropDatabase' || operation.action === 'mysql.dropDatabase' ? '确认永久删除整个数据库？' : operation.action==='mongo.dropCollection'?'确认永久删除集合？':operation.action==='mongo.clearCollection'?'确认清空集合全部文档？':'确认执行数据库写操作？', operationDetail(id, operation))
     }
     const start=Date.now()
     try { const result=await sessions.execute(id,operation);diagnostic(operation.action,'ok',Date.now()-start);return result }
@@ -396,6 +406,9 @@ app.whenReady().then(async () => {
   electronSession.defaultSession.setPermissionCheckHandler(() => false)
   electronSession.defaultSession.on('will-download', event => event.preventDefault())
   await store.init()
+  // Keep ordinary browsing available if history is damaged; migration
+  // tasks fail before writes when their journal cannot initialize.
+  await migrations.init().catch(()=>{})
   // Preferences are optional; a corrupt preferences file must not prevent opening existing connections.
   await initNativePreferences().catch(()=>{})
   savedWindows=normalizeWorkspaceWindows(await readJson('workspace-windows.json').catch(()=>undefined))

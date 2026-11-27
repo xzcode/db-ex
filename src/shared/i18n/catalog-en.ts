@@ -1,4 +1,5 @@
 import { migrationCatalogs } from './catalog-migration'
+import {uiRefinementCatalogs} from './catalog-ui-refinement'
 import { clickHouseManagementCatalogs } from './catalog-clickhouse-management'
 import { gridEditCatalogs } from './catalog-grid-edit'
 import { queryEditorCatalogs } from './catalog-query-editor'
@@ -1068,4 +1069,5 @@ export const en: Readonly<Record<string, string>> = {
   ...gridEditCatalogs.en,
   ...clickHouseManagementCatalogs.en,
   ...migrationCatalogs.en,
+  ...uiRefinementCatalogs.en,
 }

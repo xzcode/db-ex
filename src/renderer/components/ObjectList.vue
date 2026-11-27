@@ -1,13 +1,40 @@
 <script setup lang="ts">
-import {computed,ref,watch} from 'vue'
+import {computed,ref,watch,onMounted,onBeforeUnmount} from 'vue'
 import {t,locale} from '../i18n'
+import {catalogWidths,setCatalogWidth} from '../catalog-widths'
+import {catalogWidthMin,catalogWidthMax} from '../../shared/catalog-widths'
+import {globalInspectorTab,openGlobalInspector} from '../inspector-preferences'
 import type {DatabaseKind,ExplorerNode} from '../../shared/types'
 import {formatBytes} from '../../shared/object-inspection'
 import {isQueryFolder,folderQueryMode} from '../../shared/saved-query'
 import {collectionColumns,tableColumns,queryColumns,nameColumn,objectMetric,sortedObjects,type CatalogColumn} from '../../shared/object-list'
-const props=defineProps<{kind:DatabaseKind;node?:ExplorerNode;nodes:ExplorerNode[];busy?:boolean;canSaveQueries?:boolean}>()
-const emit=defineEmits<{open:[node:ExplorerNode];refresh:[];query:[];queryAction:[action:'copy'|'delete'|'export'|'export-sql'|'import'|'rename',node?:ExplorerNode,name?:string]}>()
-const query=ref(''),selected=ref(''),sortKey=ref('name'),direction=ref<1|-1>(1)
+const props=defineProps<{kind:DatabaseKind;node?:ExplorerNode;nodes:ExplorerNode[];busy?:boolean;canSaveQueries?:boolean;selectedId?:string;inspectorAvailable?:boolean}>()
+const emit=defineEmits<{select:[node?:ExplorerNode];menu:[event:MouseEvent|KeyboardEvent,node:ExplorerNode];open:[node:ExplorerNode];refresh:[];query:[];queryAction:[action:'copy'|'delete'|'export'|'export-sql'|'import'|'rename',node?:ExplorerNode,name?:string]}>()
+const query=ref(''),selected=computed(()=>props.selectedId||''),sortKey=ref('name'),direction=ref<1|-1>(1)
+const scope=computed(()=>[props.kind,props.node?.category||props.node?.kind||'root'].join(':'))
+const scrollHost=ref<HTMLElement>(),viewport=ref(0),draftWidth=ref<{key:string;width:number}>()
+let observer:ResizeObserver|undefined,stopResize:(()=>void)|undefined
+onMounted(()=>{if(scrollHost.value){viewport.value=scrollHost.value.clientWidth;observer=new ResizeObserver(()=>{viewport.value=scrollHost.value?.clientWidth||0});observer.observe(scrollHost.value)}})
+onBeforeUnmount(()=>{observer?.disconnect();stopResize?.()})
+function defaultWidth(column:CatalogColumn){return column.kind==='name'?230:column.kind==='boolean'?100:Math.max(125,Math.min(220,t(column.label).length*14+30))}
+function baseWidth(column:CatalogColumn){return draftWidth.value?.key===column.key?draftWidth.value.width:catalogWidths.value[scope.value]?.[column.key]||defaultWidth(column)}
+function columnWidth(column:CatalogColumn){const base=baseWidth(column);return column.kind==='name'&&!catalogWidths.value[scope.value]?.[column.key]&&draftWidth.value?.key!==column.key?Math.max(base,viewport.value-columns.value.filter(c=>c.key!==column.key).reduce((n,c)=>n+baseWidth(c),0)):base}
+const tableWidth=computed(()=>columns.value.reduce((n,c)=>n+columnWidth(c),0))
+function resize(event:PointerEvent,column:CatalogColumn){
+ event.preventDefault();event.stopPropagation();stopResize?.()
+ const start=(event.currentTarget as HTMLElement).parentElement!.getBoundingClientRect().width,x=event.clientX,key=column.key,rtl=document.documentElement.dir==='rtl',scopeKey=scope.value
+ document.body.classList.add('resizing')
+ const move=(e:PointerEvent)=>{draftWidth.value={key,width:Math.max(catalogWidthMin,Math.min(catalogWidthMax,start+(rtl?x-e.clientX:e.clientX-x)))}}
+ function end(){if(draftWidth.value?.key===key)setCatalogWidth(scopeKey,key,draftWidth.value.width);draftWidth.value=undefined;window.removeEventListener('pointermove',move);window.removeEventListener('pointerup',end);window.removeEventListener('pointercancel',end);document.body.classList.remove('resizing');stopResize=undefined}
+ stopResize=end;window.addEventListener('pointermove',move);window.addEventListener('pointerup',end);window.addEventListener('pointercancel',end)
+}
+function resizeKey(event:KeyboardEvent,column:CatalogColumn){if(!['ArrowLeft','ArrowRight','Home'].includes(event.key))return;event.preventDefault();event.stopPropagation();if(event.key==='Home')setCatalogWidth(scope.value,column.key);else setCatalogWidth(scope.value,column.key,columnWidth(column)+(event.key==='ArrowRight'?12:-12)*(document.documentElement.dir==='rtl'?-1:1))}
+function autoFit(column:CatalogColumn){
+ const width=Math.max(t(column.label).length*14+38,...rows.value.slice(0,500).map(n=>[...(column.kind==='name'?title(n):value(n,column)).slice(0,160)].reduce((sum,c)=>sum+(c.charCodeAt(0)>255?14:7.5),0)+32))
+ setCatalogWidth(scope.value,column.key,width)
+}
+function select(node:ExplorerNode){emit('select',node)}
+function menu(event:MouseEvent|KeyboardEvent,node:ExplorerNode){event.preventDefault();event.stopPropagation();emit('select',node);emit('menu',event,node)}
 const queryCatalog=computed(()=>isQueryFolder(props.node))
 const renameOpen=ref(false),renameValue=ref('')
 const columns=computed(()=>queryCatalog.value?queryColumns:props.node?.category==='collections'?collectionColumns:props.node?.kind==='database'&&(props.kind==='mysql'||props.kind==='mariadb'||props.kind==='clickhouse')?tableColumns:[nameColumn])
@@ -15,7 +42,7 @@ const activeColumn=computed(()=>columns.value.find(c=>c.key===sortKey.value)||na
 const rows=computed(()=>sortedObjects(props.nodes,activeColumn.value,direction.value,query.value))
 const selectedNode=computed(()=>rows.value.find(n=>n.id===selected.value))
 const incomplete=computed(()=>columns.value.length>1&&props.nodes.some(n=>!n.metrics?.length))
-watch(()=>props.node?.id,()=>{query.value='';selected.value='';sortKey.value='name';direction.value=1})
+watch(()=>props.node?.id,()=>{query.value='';sortKey.value='name';direction.value=1})
 function sortBy(column:CatalogColumn){direction.value=sortKey.value===column.key&&direction.value===1?-1:1;sortKey.value=column.key}
 function value(node:ExplorerNode,column:CatalogColumn){
  const item=objectMetric(node,column.key)
@@ -44,14 +71,15 @@ function applyRename(){if(!selectedNode.value||!renameValue.value.trim())return;
     <button v-if="node&&folderQueryMode(node)==='sql'" class="btn secondary small" type="button" :disabled="busy||!selectedNode||!canSaveQueries" @click="emit('queryAction','export-sql',selectedNode)">{{ t('导出 SQL') }}</button>
    </template>
    <button class="btn secondary small" type="button" :disabled="busy" @click="emit('refresh')"><span aria-hidden="true">↻</span>{{ t('刷新') }}</button>
-   <span class="toolbar-spacer"></span>
+   <span class="toolbar-spacer"></span><template v-if="inspectorAvailable&&!globalInspectorTab"><button class="btn secondary small" @click="openGlobalInspector('info')">{{t('对象信息')}}</button><button class="btn secondary small" @click="openGlobalInspector('ddl')">DDL</button></template>
    <label class="object-list-search"><span aria-hidden="true">⌕</span><input v-model="query" :placeholder="t('查找数据库对象')" :aria-label="t('查找数据库对象')" /></label>
   </div>
-  <div class="object-list-scroll">
-   <table class="object-list-table">
-    <thead><tr><th v-for="column in columns" :key="column.key" :aria-sort="sortKey===column.key?(direction===1?'ascending':'descending'):undefined"><button type="button" @click="sortBy(column)">{{ t(column.label) }}<span v-if="sortKey===column.key" aria-hidden="true">{{ direction===1?'↑':'↓' }}</span></button></th></tr></thead>
+  <div ref="scrollHost" class="object-list-scroll">
+   <table class="object-list-table" :style="{width:tableWidth+'px'}">
+    <colgroup><col v-for="column in columns" :key="column.key" :style="{width:columnWidth(column)+'px'}"/></colgroup>
+    <thead><tr><th v-for="column in columns" :key="column.key" :aria-sort="sortKey===column.key?(direction===1?'ascending':'descending'):undefined"><button type="button" @click="sortBy(column)">{{ t(column.label) }}<span v-if="sortKey===column.key" aria-hidden="true">{{ direction===1?'↑':'↓' }}</span></button><span class="catalog-column-resize" role="separator" aria-orientation="vertical" :aria-label="t('调整列宽')+': '+t(column.label)" :aria-valuemin="catalogWidthMin" :aria-valuemax="catalogWidthMax" :aria-valuenow="columnWidth(column)" tabindex="0" @pointerdown.stop="resize($event,column)" @keydown.stop="resizeKey($event,column)" @dblclick.stop="autoFit(column)"/></th></tr></thead>
     <tbody>
-      <tr v-for="item in rows" :key="item.id" :class="{selected:selected===item.id}" tabindex="0" @click="selected=item.id" @dblclick="open(item)" @keydown.enter.prevent="open(item)">
+      <tr v-for="item in rows" :key="item.id" :class="{selected:selected===item.id}" tabindex="0" @click="select(item)" @contextmenu="menu($event,item)" @keydown.shift.f10.prevent="menu($event,item)" @dblclick="open(item)" @keydown.enter.prevent="open(item)">
        <td v-for="column in columns" :key="column.key" :class="{'catalog-numeric':column.kind==='number'}" :title="column.kind==='name'?title(item):objectMetric(item,column.key)?.value">
         <template v-if="column.kind==='name'"><span class="catalog-object-icon" aria-hidden="true">▦</span>{{ title(item) }}</template><template v-else>{{ value(item,column) }}</template>
        </td>
@@ -70,12 +98,13 @@ function applyRename(){if(!selectedNode.value||!renameValue.value.trim())return;
 .object-list-search{display:flex;align-items:center;gap:6px;border:1px solid var(--border);border-radius:4px;padding-inline-start:8px;max-width:240px;min-width:100px}
 .object-list-search input{border:0;background:transparent;min-width:0;width:100%}
 .object-list-scroll{min-height:0;overflow:auto;flex:1}
-.object-list-table{width:100%;min-width:max-content;border-collapse:separate;border-spacing:0;font-size:12px}
-.object-list-table th{position:sticky;top:0;background:var(--panel-raised);text-align:start;z-index:1;border-bottom:1px solid var(--border);border-inline-end:1px solid var(--border-soft)}
+.object-list-table{table-layout:fixed;min-width:0;border-collapse:separate;border-spacing:0;font-size:12px}
+.object-list-table th{position:sticky;top:0;background:var(--header-bg);text-align:start;z-index:1;border-bottom:1px solid var(--border);border-inline-end:1px solid var(--border-soft)}
 .object-list-table th button{display:flex;align-items:center;gap:8px;justify-content:space-between;width:100%;background:transparent;color:var(--text);border:0;border-radius:0;padding:7px 10px;white-space:nowrap}
-.object-list-table th:first-child{min-width:210px}
+.object-list-table th button{padding-inline-end:14px;overflow:hidden;text-overflow:ellipsis}
+.catalog-column-resize{position:absolute;inset-block:0;inset-inline-end:0;width:7px;cursor:col-resize;touch-action:none;z-index:2}.catalog-column-resize:hover,.catalog-column-resize:focus-visible{background:var(--accent)}
 .object-list-table th button span{color:var(--accent)}
-.object-list-table td{height:29px;padding:4px 10px;white-space:nowrap;border-bottom:1px solid var(--border-soft);color:var(--text)}
+.object-list-table td{height:29px;padding:4px 10px;white-space:nowrap;border-bottom:1px solid var(--border-soft);color:var(--text);overflow:hidden;text-overflow:ellipsis}
 .object-list-table tbody tr:nth-child(even){background:color-mix(in srgb,var(--panel-raised) 45%,var(--panel))}
 .object-list-table tbody tr:hover,.object-list-table tbody tr.selected{background:var(--selected)}
 .catalog-numeric{font-variant-numeric:tabular-nums;text-align:end}

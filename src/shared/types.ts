@@ -101,6 +101,7 @@ export interface ExplorerNode {
   queryRevision?:string
   queryMode?:import('./saved-query').QueryMode
   readOnly?: boolean
+  maintenanceRestricted?:boolean
   objectType?: 'sequence' | 'system-versioned'
   metrics?: import('./object-inspection').ObjectMetric[]
   database?: string
@@ -160,6 +161,8 @@ export type MysqlOperation =
 export type MongoOperation =
   | ({ action: 'mongo.createDatabase'; database: string; initialCollection: string } & Confirmed)
   | ({ action: 'mongo.dropDatabase'; database: string } & Confirmed)
+  | ({ action: 'mongo.createCollection' | 'mongo.dropCollection' | 'mongo.clearCollection' } & Entity & Confirmed)
+  | ({ action: 'mongo.renameCollection'; newName:string } & Entity & Confirmed)
   | ({ action: 'mongo.find'; filter?: string; projection?: string; sort?: string; offset?: number; limit?: number } & Entity)
   | ({ action: 'mongo.count'; filter?: string } & Entity)
   | ({ action: 'mongo.aggregate'; pipeline: string; limit?: number } & Entity)
@@ -226,6 +229,7 @@ export interface DbExAPI {
   previewMigration(request:import('./migration').MigrationRequest):Promise<import('./migration').MigrationPlan>
   runMigration(planId:string,steps:string[]):Promise<import('./migration').MigrationJob>
   listMigrationJobs():Promise<import('./migration').MigrationJob[]>
+  removeMigrationHistory(id:string):Promise<void>
   cancelMigration(id:string):Promise<void>
   newWorkspaceWindow():Promise<boolean>
   restoreWorkspaceWindows(restore:boolean):Promise<void>

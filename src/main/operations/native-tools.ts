@@ -46,8 +46,16 @@ export function nativeToolCommand(task:NativeToolTask,config:ConnectionConfig,da
  const uri='mongodb://'+auth+host+':'+endpoint.port+'/?directConnection=true'+(localTls?'&tls=true':'')+(config.username?'&authSource='+encodeURIComponent(config.authSource||'admin'):'')
  const contents='uri: '+JSON.stringify(uri)+'\n'
  const args=['--config='+credentials,...(localTls?['--ssl',...(config.tls.caPath?['--sslCAFile='+config.tls.caPath]:[])]:[])]
- if(task==='mongo-backup')args.push('--db='+database,'--archive')
- else if(task==='mongo-restore')args.push('--archive='+input,'--nsInclude='+database+'.*','--stopOnError')
+ if(task==='mongo-backup'){
+   args.push('--db='+database,'--archive')
+   if(entity!==undefined)args.push('--collection='+safeName(entity,true))
+ }else if(task==='mongo-restore'){
+   // nsInclude is a namespace pattern. Reject ambiguous glob/escape
+   // characters when a single collection is explicitly selected.
+   const collection=entity===undefined?'*':safeName(entity,true)
+   if(entity!==undefined&&/[\\*?]/.test(collection))throw new Error('INVALID_DATABASE: 数据库名称无效')
+   args.push('--archive='+input,'--nsInclude='+database+'.'+collection,'--stopOnError')
+ }
  else{
    const collection=safeName(entity||'',true)
    args.push('--db='+database,'--collection='+collection)

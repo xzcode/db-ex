@@ -7,6 +7,7 @@ import {newConnectionConfig} from '../src/shared/connection-form'
 import {MigrationService} from '../src/main/migration/service'
 import {openMysqlClient} from '../src/main/connections/mysql-client'
 import {loadConnectionTls} from '../src/main/connections/tls-material'
+import type {MigrationPolicy,MigrationCondition} from '../src/shared/migration'
 import type {ConnectionConfig} from '../src/shared/types'
 
 const kind=process.env.DBEX_M11_ENGINE
@@ -23,7 +24,7 @@ const seed=await openMysqlClient(config,route,await loadConnectionTls(config))
 const q=(name:string)=>'`'+name+'`'
 const table=(db:string,name:string)=>q(db)+'.'+q(name)
 const query=(sql:string,params:unknown[]=[])=>seed.query(sql,params)
-const request=(mode:'schema'|'data'|'structure-data',objects?:string[])=>({source:{connectionId:'source',database:source},target:{connectionId:'target',database:target},mode,objects})
+const request=(mode:'schema'|'data'|'structure-data',objects?:string[],policy?:MigrationPolicy,condition?:MigrationCondition)=>({source:{connectionId:'source',database:source},target:{connectionId:'target',database:target},mode,objects,policy,condition})
 const owner=41
 async function finish(id:string){
  for(let i=0;i<1200;i++){
@@ -33,8 +34,8 @@ async function finish(id:string){
  }
  throw Error('Migration job timeout')
 }
-async function run(mode:'schema'|'data'|'structure-data',names?:string[]){
- const plan=await service.preview(owner,request(mode,names))
+async function run(mode:'schema'|'data'|'structure-data',names?:string[],policy?:MigrationPolicy,condition?:MigrationCondition){
+ const plan=await service.preview(owner,request(mode,names,policy,condition))
  const steps=plan.steps.filter(s=>s.executable).map(s=>s.id)
  assert(steps.length,'Expected executable plan')
  return finish(service.start(owner,plan.id,steps).id)
@@ -130,6 +131,29 @@ try{
  const [remaining]=await query('SELECT COUNT(*) AS n FROM '+table(target,'items')) as [mysql.RowDataPacket[],unknown]
  assert.equal(Number(remaining[0]?.n),1)
  console.log('M12 real cancellation during blocked target INSERT; current transaction rolled back, existing row preserved')
+ // Advanced modes preserve the normal append default and require an explicit
+ // immutable policy. Use a small isolated table for exact expected outcomes.
+ const adv='advanced'
+ for(const db of [source,target])await query('CREATE TABLE '+table(db,adv)+' (id BIGINT NOT NULL PRIMARY KEY, note VARCHAR(100) DEFAULT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci')
+ await seed.execute('INSERT INTO '+table(source,adv)+' VALUES (?,?),(?,?),(?,?)',['1','source-1','2','source-2','3',"literal ' OR 1=1 --"])
+ await query("INSERT INTO "+table(target,adv)+" VALUES (1,'old-1'),(9,'keep-9')")
+ const filtered=await run('data',[adv],'upsert',{field:'id',operator:'lte',type:'Long',value:'2'})
+ assert.equal(filtered.state,'completed',JSON.stringify(filtered));assert.equal(filtered.rowsCommitted,2)
+ const readTarget=async()=>{const [rows]=await query('SELECT id,note FROM '+table(target,adv)+' ORDER BY id') as [mysql.RowDataPacket[],unknown];return rows.map(r=>[String(r.id),r.note])}
+ assert.deepEqual(await readTarget(),[['1','source-1'],['2','source-2'],['9','keep-9']])
+ const literal=await run('data',[adv],'append',{field:'note',operator:'eq',type:'String',value:"literal ' OR 1=1 --"})
+ assert.equal(literal.state,'completed',literal.error);assert.equal(literal.rowsCommitted,1)
+ const replace=await run('data',[adv],'replace');assert.equal(replace.state,'completed',JSON.stringify(replace));assert.equal(replace.rowsCommitted,3)
+ assert.deepEqual(await readTarget(),[['1','source-1'],['2','source-2'],['3',"literal ' OR 1=1 --"]])
+ await query('CREATE TABLE '+table(target,'inbound')+' (id INT PRIMARY KEY, parent_id BIGINT, FOREIGN KEY(parent_id) REFERENCES '+table(target,adv)+'(id) ON DELETE CASCADE) ENGINE=InnoDB')
+ await query('INSERT INTO '+table(target,'inbound')+' VALUES (1,1)')
+ const guarded=await run('data',[adv],'replace')
+ assert.equal(guarded.state,'failed');assert.match(guarded.error||'',/MIGRATION_DEPENDENCY/)
+ const [inbound]=await query('SELECT COUNT(*) AS n FROM '+table(target,'inbound')) as [mysql.RowDataPacket[],unknown]
+ assert.equal(Number(inbound[0]?.n),1)
+ assert.equal((await readTarget()).length,3)
+ console.log('M12 real filtered prepared copy, primary-key upsert, transactional replacement, FK cascade rejection passed')
+
 
 }finally{
  await service.closeAll()

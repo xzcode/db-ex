@@ -11,9 +11,9 @@ import {pipeline} from 'node:stream/promises'
 export const MAX_TRANSFER_BYTES=256*1024*1024
 const formats={csv:'CSVWithNames',jsonl:'JSONEachRow',parquet:'Parquet'} as const
 export function transferFormat(value:unknown){if(typeof value!=='string'||!Object.hasOwn(formats,value))throw new Error('INVALID_INPUT: ClickHouse transfer format');return formats[value as keyof typeof formats]}
-export function byteBudget(limit=MAX_TRANSFER_BYTES){
+export function byteBudget(limit=MAX_TRANSFER_BYTES,onBytes?:(n:number)=>void){
  let bytes=0
- const stream=new Transform({transform(chunk:Buffer,_encoding:string,callback:TransformCallback){bytes+=chunk.length;callback(bytes>limit?new Error('LIMIT_EXCEEDED: ClickHouse transfer'):null,chunk)}})
+ const stream=new Transform({transform(chunk:Buffer,_encoding:string,callback:TransformCallback){bytes+=chunk.length;if(bytes<=limit)onBytes?.(chunk.length);callback(bytes>limit?new Error('LIMIT_EXCEEDED: ClickHouse transfer'):null,chunk)}})
  return {stream,bytes:()=>bytes}
 }
 export async function streamClickHouse(client:ClickHouseClient,input:ClickHouseTransfer,path:string,qualified:string,columns:string[],parent?:AbortSignal){
