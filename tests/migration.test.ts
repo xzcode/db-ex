@@ -55,3 +55,15 @@ test('migration requests require bounded explicit objects and reject invalid end
  assert.throws(()=>normalizeMigrationRequest({source,target,mode:'data',objects:Array.from({length:101},(_,i)=>'t'+i)}),/MIGRATION_INPUT/)
  assert.deepEqual(normalizeMigrationRequest({source,target,mode:'structure-data',objects:['a','a','b']}).objects,['a','b'])
 })
+
+
+test('same-family metadata comparison treats redundant collation spelling and index order as equivalent',()=>{
+ const a=obj(ddl('`id` bigint NOT NULL, `label` varchar(20) DEFAULT NULL, PRIMARY KEY (`id`), KEY `a_idx` (`label`), KEY `b_idx` (`id`)'))
+ const b=obj(ddl('`id` bigint NOT NULL, `label` varchar(20) COLLATE utf8mb4_general_ci DEFAULT NULL, PRIMARY KEY (`id`), KEY `b_idx` (`id`), KEY `a_idx` (`label`)'))
+ assert(a.shape?.safe&&b.shape?.safe)
+ for(const item of [a,b])for(const column of item.shape!.columns)column.semantic=column.name==='id'?'bigint:not-null':'varchar:20:utf8mb4_general_ci:nullable'
+ assert.equal(planMysqlMigration({objects:[a]},{objects:[b]},'schema','dst','mysql','mysql')[0]?.action,'same')
+ assert.equal(planMysqlMigration({objects:[a]},{objects:[b]},'data','dst','mysql','mysql')[0]?.transfer,true)
+ b.shape!.columns[1]!.semantic='varchar:20:utf8mb4_bin:nullable'
+ assert.equal(planMysqlMigration({objects:[a]},{objects:[b]},'data','dst','mysql','mysql')[0]?.executable,false)
+})

@@ -123,6 +123,14 @@ export class MysqlMigrationEndpoint{
    const triggers=await this.query('SELECT TRIGGER_NAME AS name FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=? AND EVENT_OBJECT_TABLE=? ORDER BY TRIGGER_NAME LIMIT 501',[database,o.name])
    if(triggers.length>MAX_OBJECTS)throw new Error('MIGRATION_LIMIT: 数据库对象数量超出本阶段上限')
    const item=makeSchemaObject(o.name,o.type,o.engine,ddl,triggers.map(r=>String(r.name)))
+   // SHOW CREATE can spell inherited character set/collation differently
+   // after ALTER. Compare actual column metadata, not that spelling.
+   if(item.shape?.safe){
+    const columns=await this.query('SELECT COLUMN_NAME,COLUMN_TYPE,IS_NULLABLE,COLUMN_DEFAULT,EXTRA,CHARACTER_SET_NAME,COLLATION_NAME,COLUMN_COMMENT,GENERATION_EXPRESSION FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? ORDER BY ORDINAL_POSITION LIMIT 501',[database,o.name])
+    if(columns.length!==item.shape.columns.length||columns.some((c,i)=>String(c.COLUMN_NAME)!==item.shape!.columns[i]?.name))throw new Error('MIGRATION_STALE: 结构已变化，请重新比较')
+    for(const [i,column] of columns.entries())item.shape.columns[i]!.semantic=JSON.stringify([column.COLUMN_TYPE,column.IS_NULLABLE,column.COLUMN_DEFAULT,column.EXTRA,column.CHARACTER_SET_NAME,column.COLLATION_NAME,column.COLUMN_COMMENT,column.GENERATION_EXPRESSION])
+   }
+
    size+=Buffer.byteLength(JSON.stringify(item))
    if(size>MAX_SNAPSHOT)throw new Error('MIGRATION_LIMIT: 数据库对象定义超出本阶段上限')
    result.push(item)

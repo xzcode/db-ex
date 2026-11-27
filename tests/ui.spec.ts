@@ -943,9 +943,11 @@ test('MariaDB has its own connection form, persisted settings and backup tools',
 })
 
 
-test('top toolbar contains settings only; language, theme and connection creation are centralized',async({page})=>{
+test('top toolbar exposes migration tools and settings; language, theme and connection creation stay centralized',async({page})=>{
  const toolbar=page.locator('.top-actions')
- await expect(toolbar.locator(':scope > *')).toHaveCount(1)
+ await expect(toolbar.locator(':scope > *')).toHaveCount(3)
+ await expect(toolbar.getByRole('button',{name:'结构同步',exact:true})).toBeVisible()
+ await expect(toolbar.getByRole('button',{name:'数据传输',exact:true})).toBeVisible()
  await expect(toolbar.getByRole('button',{name:'偏好设置',exact:true})).toBeVisible()
  await expect(toolbar.locator('select')).toHaveCount(0)
  await toolbar.getByRole('button',{name:'偏好设置',exact:true}).click()
@@ -1095,7 +1097,8 @@ test('macOS integrated title bar reserves native controls and keeps preferences 
    return {bar:css(el),controls:css(el,'::before'),settings:css(el.querySelector('.preferences-button')!)}
  })
  expect(regions).toEqual({bar:'drag',controls:'no-drag',settings:'no-drag'})
- await expect(bar.locator('.top-actions > *')).toHaveCount(1)
+ await expect(bar.locator('.top-actions > *')).toHaveCount(3)
+ await expect(bar.locator('.migration-toolbar-button')).toHaveCount(2)
  const layout=await bar.evaluate(el=>({brand:el.querySelector('.brand')!.getBoundingClientRect().left,bar:el.getBoundingClientRect().left}))
  expect(layout.brand-layout.bar).toBeGreaterThanOrEqual(100)
  await settings.click()

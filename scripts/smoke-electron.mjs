@@ -239,9 +239,10 @@ try {
     for (const [name, handler] of Object.entries(handlers)) { ipcMain.removeHandler(name); ipcMain.handle(name, handler) }
   })
   await page.reload()
-  // The top toolbar exposes settings only. Language changes go through the
+  // The top toolbar exposes migration tools and settings. Language changes go through the
   // real preferences dialog and must persist after reload.
-  assert.equal(await page.locator('.top-actions > *').count(), 1)
+  assert.equal(await page.locator('.top-actions > *').count(), 3)
+  assert.equal(await page.locator('.migration-toolbar-button').count(), 2)
   const settings=page.locator('.preferences-button')
   const prefs=page.locator('.preferences-dialog')
   const select=prefs.locator('[data-preference="language"]')

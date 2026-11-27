@@ -66,7 +66,8 @@ try{
  assert.equal(structure.state,'completed',structure.error)
  assert.deepEqual(structure.completed,['items','safe_append'])
  assert.throws(()=>service.start(owner,plan.id,allowed),/MIGRATION_STALE/)
- assert.equal((await service.preview(owner,request('schema',['items','safe_append']))).steps.every(s=>s.action==='same'),true)
+ const afterSchema=await service.preview(owner,request('schema',['items','safe_append']))
+ assert.equal(afterSchema.steps.every(s=>s.action==='same'),true,JSON.stringify(afterSchema.steps.map(s=>({name:s.name,action:s.action,changes:s.changes}))))
  console.log('M12 real structure compare/create/add-column/add-index; destructive and foreign-key changes manual; replay/owner guards passed')
 
  await query("SET SESSION time_zone='+00:00'")

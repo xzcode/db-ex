@@ -18,7 +18,7 @@ const idPrefix=new RegExp('^('+identifier+')\\s+')
 const keyPrefix=new RegExp('^(?:UNIQUE )?KEY ('+identifier+')\\s*\\(','i')
 const tailOption=new RegExp('^(ENGINE='+word+'|AUTO_INCREMENT=[0-9]+|(?:DEFAULT )?CHARSET='+word+'|COLLATE='+word+'|ROW_FORMAT=(?:DYNAMIC|COMPACT|REDUNDANT|COMPRESSED|DEFAULT)|COMMENT='+quoted+')(?=\\s|$)','i')
 function unquote(id:string){return id.slice(1,-1).replaceAll('``','`')}
-export interface TableShape {columns:{name:string;definition:string}[];indexes:{name:string;definition:string}[];other:string[];options:string;safe:boolean}
+export interface TableShape {columns:{name:string;definition:string;semantic?:string}[];indexes:{name:string;definition:string}[];other:string[];options:string;safe:boolean}
 export interface SchemaObject {name:string;type:string;engine?:string;definition:string;triggerNames:string[];shape?:TableShape}
 export interface SchemaSnapshot {objects:SchemaObject[]}
 function splitBody(ddl:string,start:number){
@@ -82,20 +82,21 @@ function createTable(source:SchemaObject,targetDb:string){
  if(!shape?.safe||source.triggerNames.length)return undefined
  return 'CREATE TABLE '+tableTarget(targetDb,source.name)+' (\n  '+[...shape.columns,...shape.indexes].map(p=>p.definition).join(',\n  ')+'\n) '+shape.options
 }
+function sameColumn(a:TableShape['columns'][number],b:TableShape['columns'][number]){return a.name===b.name&&(a.semantic!==undefined&&b.semantic!==undefined?a.semantic===b.semantic:a.definition===b.definition)}
 function sameShape(a:TableShape,b:TableShape){
- return JSON.stringify({columns:a.columns,indexes:a.indexes,other:a.other,options:a.options})===JSON.stringify({columns:b.columns,indexes:b.indexes,other:b.other,options:b.options})
+ return a.columns.length===b.columns.length&&a.columns.every((c,i)=>sameColumn(c,b.columns[i]!))&&JSON.stringify(a.indexes.map(i=>[i.name,i.definition]).sort())===JSON.stringify(b.indexes.map(i=>[i.name,i.definition]).sort())&&JSON.stringify(a.other)===JSON.stringify(b.other)&&a.options===b.options
 }
 export function dataShape(a:TableShape,b:TableShape,cross:boolean){
  // Cross-family integer display width is presentation metadata only when
  // ZEROFILL is absent. Every other declaration must match exactly.
  const norm=(def:string)=>cross?def.replace(/^(`(?:[^`]|\`\`)+` (?:tinyint|smallint|mediumint|int|bigint))\([0-9]+\)(?![^,]*ZEROFILL)/i,'$1'):def
- return a.columns.length===b.columns.length&&a.columns.every((c,i)=>c.name===b.columns[i]?.name&&norm(c.definition)===norm(b.columns[i]!.definition))&&a.options===b.options
+ return a.columns.length===b.columns.length&&a.columns.every((c,i)=>c.name===b.columns[i]?.name&&(cross?norm(c.definition)===norm(b.columns[i]!.definition):sameColumn(c,b.columns[i]!)))&&a.options===b.options
 }
 function changesBetween(a:TableShape,b:TableShape){
  const changes:string[]=[],missing=a.columns.filter(c=>!b.columns.some(x=>x.name===c.name)),extra=b.columns.filter(c=>!a.columns.some(x=>x.name===c.name))
  for(const c of missing)changes.push('ADD COLUMN '+c.name)
  for(const c of extra)changes.push('TARGET ONLY COLUMN '+c.name)
- const modified=a.columns.filter(c=>b.columns.some(x=>x.name===c.name&&x.definition!==c.definition))
+ const modified=a.columns.filter(c=>b.columns.some(x=>x.name===c.name&&!sameColumn(c,x)))
  for(const c of modified)changes.push('MODIFY COLUMN '+c.name)
  const indexAdd=a.indexes.filter(c=>!b.indexes.some(x=>x.name===c.name)),indexRemove=b.indexes.filter(c=>!a.indexes.some(x=>x.name===c.name)),indexChange=a.indexes.filter(c=>b.indexes.some(x=>x.name===c.name&&x.definition!==c.definition))
  for(const c of indexAdd)changes.push('ADD INDEX '+c.name)
