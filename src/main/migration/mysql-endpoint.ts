@@ -41,7 +41,7 @@ function bounded<T>(signal:AbortSignal,stop:()=>void,work:()=>Promise<T>,ms=3000
 export function migrationError(error:unknown){
  const msg=error instanceof Error?error.message:''
  // Only this module's fixed categories; do not relay driver SQL, rows, URI or credentials.
- if(/^(?:MIGRATION_[A-Z_]+|CANCELLED):/.test(msg))return msg
+ if(/^(?:MIGRATION_[A-Z_]+|CANCELLED|FILE_TRANSFER):/.test(msg))return msg
  const code=String((error as {code?:unknown})?.code||'UNKNOWN').replace(/[^a-zA-Z0-9_-]/g,'').slice(0,64)
  return 'MIGRATION_DATABASE_ERROR: '+code
 }
@@ -178,8 +178,8 @@ export class MysqlMigrationEndpoint implements MigrationEndpoint{
   return rows.map(r=>({name:String(r.name),type:String(r.type)}))
  }
  async fileFields(database:string,name:string){return (await this.fileColumnTypes(database,name)).map(r=>r.name)}
- async *fileRows(database:string,name:string,selected?:string[],filter?:BrowseFilter){
-  await this.startSourceSnapshot()
+ async *fileRows(database:string,name:string,selected?:string[],filter?:BrowseFilter,snapshotStarted=false){
+  if(!snapshotStarted)await this.startSourceSnapshot()
   const fields=await this.fileFields(database,name),columns=selected||fields
   if(!columns.length||columns.some(c=>!fields.includes(c)))throw new Error('FILE_TRANSFER: 字段映射无效')
   const compiled=compileMysqlFilter(database,name,filter||newBrowseFilter())
@@ -190,7 +190,7 @@ export class MysqlMigrationEndpoint implements MigrationEndpoint{
   try{for await(const row of stream){abort(this.signal);if(!Array.isArray(row))throw new Error('FILE_TRANSFER: 文件记录格式无效');yield sqlFileRow(columns,row)}}
   finally{stream.destroy()}
  }
- async fileWrite(database:string,name:string,columns:string[],policy:DataFilePolicy,records:AsyncIterable<Record<string,unknown>>,beforeCommit:()=>void,committed:(n:number)=>void){
+ async fileWrite(database:string,name:string,columns:string[],policy:DataFilePolicy,records:AsyncIterable<Record<string,unknown>>,beforeCommit:()=>void,committed:(n:number)=>void,allowEmpty=false){
   await this.prepareTarget()
   await this.statement('START TRANSACTION READ WRITE')
   let committing=false,total=0
@@ -241,7 +241,7 @@ export class MysqlMigrationEndpoint implements MigrationEndpoint{
     batch.push(row);bytes+=size
    }
    await flush()
-   if(!total)throw new Error('FILE_TRANSFER: 没有可导入的记录')
+   if(!total&&!allowEmpty)throw new Error('FILE_TRANSFER: 没有可导入的记录')
    abort(this.signal);committing=true;beforeCommit()
    await bounded(this.signal,this.stop,()=>this.client.query({sql:'COMMIT',timeout:30000}))
    committing=false;committed(total)

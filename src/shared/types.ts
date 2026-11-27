@@ -244,6 +244,11 @@ export interface DbExAPI {
   exportFileTransferReport(id:string):Promise<boolean>
   getFileTransferJob():Promise<import('./file-transfer').FileTransferJob|null>
   cancelFileTransfer(id:string):Promise<void>
+  migrationFields(id:string,database:string,name:string):Promise<import('./migration').MigrationField[]>
+  listMigrationTemplates():Promise<import('./migration').MigrationTemplate[]>
+  saveMigrationTemplate(input:{name:string;request:import('./migration').MigrationRequest},id?:string):Promise<import('./migration').MigrationTemplate>
+  removeMigrationTemplate(id:string):Promise<void>
+  resumeMigrationPreview(id:string,request:import('./migration').MigrationRequest):Promise<import('./migration').MigrationPlan>
   migrationCatalog(id:string,database?:string):Promise<import('./migration').MigrationCatalog>
   previewMigration(request:import('./migration').MigrationRequest):Promise<import('./migration').MigrationPlan>
   runMigration(planId:string,steps:string[]):Promise<import('./migration').MigrationJob>

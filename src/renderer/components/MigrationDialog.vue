@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import {computed,onBeforeUnmount,onMounted,ref,watch} from 'vue'
+import {computed,nextTick,onBeforeUnmount,onMounted,ref,watch} from 'vue'
 import {t,localize} from '../i18n'
-import {migrationSupported,migrationPairSupported,migrationPolicies,migrationConditions,migrationPolicyLabel,type MigrationCondition,type MigrationPolicy,type MigrationCatalog,type MigrationJob,type MigrationMode,type MigrationPlan,type MigrationRequest} from '../../shared/migration'
+import {migrationSupported,migrationPairSupported,migrationNativePair,migrationPolicies,migrationConditions,migrationRemaining,migrationPolicyLabel,type MigrationCondition,type MigrationPolicy,type MigrationCatalog,type MigrationJob,type MigrationMode,type MigrationPlan,type MigrationRequest,type MigrationObjectMap,type MigrationTemplate} from '../../shared/migration'
+import MigrationMappingPanel from './MigrationMappingPanel.vue'
 import type {SavedConnection} from '../../shared/types'
 const props=defineProps<{connections:SavedConnection[];initialMode:MigrationMode;sourceId?:string;database?:string;initialObjects?:string[]}>()
 const emit=defineEmits<{close:[]}>()
@@ -15,16 +16,25 @@ const historyId=ref('')
 const conditionOperators: {value:MigrationCondition['operator'];label:string}[]=[{value:'eq',label:'='},{value:'ne',label:'≠'},{value:'gt',label:'>'},{value:'gte',label:'≥'},{value:'lt',label:'<'},{value:'lte',label:'≤'},{value:'null',label:'IS NULL'},{value:'notNull',label:'IS NOT NULL'}]
 
 const sourceKind=computed(()=>profiles.value.find(c=>c.id===sourceId.value)?.kind)
-const targetProfiles=computed(()=>profiles.value.filter(c=>!sourceKind.value||migrationPairSupported(sourceKind.value,c.kind)))
+const targetKind=computed(()=>profiles.value.find(c=>c.id===targetId.value)?.kind)
+const targetProfiles=computed(()=>profiles.value.filter(c=>!sourceKind.value||migrationPairSupported(sourceKind.value,c.kind,mode.value)))
+const mappedEnabled=ref(false),mappingReady=ref(false),mappingBusy=ref(false),mappings=ref<MigrationObjectMap[]>([])
+const mappedRequired=computed(()=>!!sourceKind.value&&!!targetKind.value&&!migrationNativePair(sourceKind.value,targetKind.value))
+const mapped=computed(()=>mode.value==='data'&&(mappedEnabled.value||mappedRequired.value))
+const templates=ref<MigrationTemplate[]>([]),templateId=ref(''),templateName=ref('')
+const selectedTemplate=computed(()=>templates.value.find(v=>v.id===templateId.value))
+const templatesReady=ref(false)
+const includeDependencies=ref(false)
+const canDependencies=computed(()=>!!sourceKind.value&&sourceKind.value===targetKind.value&&['mysql','mariadb'].includes(sourceKind.value)&&!mapped.value&&policy.value==='append')
 const sourceProfiles=computed(()=>profiles.value.filter(c=>mode.value!=='schema'||c.kind!=='redis'))
-const policies=computed(()=>sourceKind.value?migrationPolicies(sourceKind.value):['append'] as MigrationPolicy[])
+const policies=computed(()=>targetKind.value?migrationPolicies(targetKind.value):sourceKind.value?migrationPolicies(sourceKind.value):['append'] as MigrationPolicy[])
 const conditionTypes=computed<MigrationCondition['type'][]>(()=>sourceKind.value==='mongodb'?['String','Long','Decimal128','Double','Boolean','ObjectId']:['String','Long','Decimal128','Double','Boolean'])
-const transactional=computed(()=>['mysql','mariadb','sqlite'].includes(sourceKind.value||''))
-const nonSql=computed(()=>sourceKind.value==='mongodb'||sourceKind.value==='redis')
+const transactional=computed(()=>['mysql','mariadb','sqlite'].includes(targetKind.value||sourceKind.value||''))
+const nonSql=computed(()=>mapped.value||sourceKind.value==='mongodb'||sourceKind.value==='redis')
 const sourceCatalog=ref<MigrationCatalog>(),targetCatalog=ref<MigrationCatalog>()
 if(sourceKind.value==='redis')mode.value='data'
 const allSchema=ref(mode.value==='schema'&&!props.initialObjects?.length),objects=ref<string[]>(props.initialObjects?.slice(0,100)||[])
-const conditionAllowed=computed(()=>!!sourceKind.value&&migrationConditions(sourceKind.value)&&policy.value!=='replace'&&mode.value!=='schema'&&objects.value.length===1)
+const conditionAllowed=computed(()=>!!sourceKind.value&&(migrationConditions(sourceKind.value)||mapped.value&&sourceKind.value==='clickhouse')&&policy.value!=='replace'&&mode.value!=='schema'&&objects.value.length===1)
 const plan=ref<MigrationPlan>(),selected=ref<string[]>([]),detail=ref('')
 const busy=ref(false),error=ref(''),jobs=ref<MigrationJob[]>([]),history=ref(false)
 const active=computed(()=>jobs.value.find(j=>j.state==='running'))
@@ -32,24 +42,36 @@ const displayedJob=computed(()=>active.value||jobs.value.find(j=>j.id===historyI
 const same=computed(()=>sourceId.value===targetId.value&&sourceDb.value===targetDb.value)
 const available=computed(()=>sourceCatalog.value?.objects||[])
 const eligible=computed(()=>available.value.filter(o=>mode.value==='schema'||sourceKind.value==='redis'||sourceKind.value==='mongodb'&&o.type==='collection'||sourceKind.value==='sqlite'&&o.type==='BASE TABLE'||sourceKind.value==='clickhouse'&&o.engine==='MergeTree'||o.type==='BASE TABLE'&&o.engine?.toLowerCase()==='innodb'))
+const targetObjects=computed(()=>(targetCatalog.value?.objects||[]).filter(o=>targetKind.value==='mongodb'?o.type==='collection':targetKind.value==='sqlite'?o.type==='BASE TABLE':targetKind.value==='clickhouse'?o.engine==='MergeTree':targetKind.value==='redis'||o.type==='BASE TABLE'&&o.engine?.toLowerCase()==='innodb').map(o=>o.name))
+const remaining=computed(()=>displayedJob.value?migrationRemaining(displayedJob.value):[])
 const allSteps=computed(()=>plan.value?.steps.filter(s=>s.executable)||[])
 const sqlPreview=computed(()=>plan.value?.steps.filter(s=>s.executable&&selected.value.includes(s.id)).flatMap(s=>s.sql).map(sql=>sql+';').join('\n\n')||'')
-const canCompare=computed(()=>!!sourceKind.value&&targetProfiles.value.some(p=>p.id===targetId.value)&&!busy.value&&!active.value&&!!sourceId.value&&!!targetId.value&&!!sourceDb.value&&!!targetDb.value&&!same.value&&(!conditionEnabled.value||conditionAllowed.value&&!!condition.value.field.trim())&&(mode.value==='schema'&&allSchema.value||objects.value.length>0))
+const canCompare=computed(()=>!!sourceKind.value&&targetProfiles.value.some(p=>p.id===targetId.value)&&!busy.value&&!mappingBusy.value&&!active.value&&(!mapped.value||mappingReady.value)&&!!sourceId.value&&!!targetId.value&&!!sourceDb.value&&!!targetDb.value&&!same.value&&(!conditionEnabled.value||conditionAllowed.value&&!!condition.value.field.trim())&&(mode.value==='schema'&&allSchema.value||objects.value.length>0))
 const modeLabels:Record<MigrationMode,string>={schema:'仅结构',data:'仅数据','structure-data':'结构和数据'}
 const actionLabels:Record<string,string>={create:'创建',alter:'修改',copy:'复制数据',same:'相同','target-only':'仅目标存在',review:'人工审核'}
 function changeLabel(value:string){
  const prefixes:Record<string,string>={'ADD COLUMN ':'新增字段 {0}','TARGET ONLY COLUMN ':'仅目标存在字段 {0}','MODIFY COLUMN ':'修改字段 {0}','ADD INDEX ':'新增索引 {0}','TARGET ONLY INDEX ':'仅目标存在索引 {0}','MODIFY INDEX ':'修改索引 {0}'}
  for(const [prefix,key] of Object.entries(prefixes))if(value.startsWith(prefix))return t(key,[value.slice(prefix.length)])
- const exact:Record<string,string>={'COLUMN ORDER':'字段顺序变化','TABLE OPTIONS':'表属性变化','CONSTRAINTS / SPECIAL DEFINITION':'约束或特殊定义变化','TARGET ONLY OBJECT':'仅目标存在','MISSING TARGET OBJECT':'目标对象不存在','UNSUPPORTED DEFINITION — MANUAL REVIEW':'复杂结构需要人工审核','OBJECT TYPE DIFFERS':'对象类型不同','SPECIAL OBJECT / CONSTRAINT / TRIGGER — MANUAL REVIEW':'复杂结构需要人工审核','COLUMN DEFINITION OR TABLE OPTIONS DIFFER':'字段定义或表属性不同','APPEND DATA — STOP ON CONFLICT':'追加数据，冲突时停止','MANUAL REVIEW':'人工审核','UPSERT MATCHING PRIMARY KEY':'按主键插入或更新','REPLACE TABLE DATA IN TRANSACTION':'清空目标表后传输','FILTER SOURCE RECORDS':'仅传输符合条件的源记录','UPSERT REQUIRES MATCHING PRIMARY KEY':'插入更新需要相同且受支持的主键','FILTER FIELD OR TYPE UNSUPPORTED':'筛选字段或类型不受支持','COPY KEY WITH TTL — REPLACE':'覆盖同名 Key 并保留 TTL','APPEND DATA — NONTRANSACTIONAL':'追加数据，非事务写入','TARGET KEY EXISTS — MANUAL REVIEW':'目标 Key 已存在','COPY KEY WITH TTL — NO REPLACE':'复制 Key 和 TTL，不覆盖'}
+ const exact:Record<string,string>={'COLUMN ORDER':'字段顺序变化','TABLE OPTIONS':'表属性变化','CONSTRAINTS / SPECIAL DEFINITION':'约束或特殊定义变化','TARGET ONLY OBJECT':'仅目标存在','MISSING TARGET OBJECT':'目标对象不存在','UNSUPPORTED DEFINITION — MANUAL REVIEW':'复杂结构需要人工审核','OBJECT TYPE DIFFERS':'对象类型不同','SPECIAL OBJECT / CONSTRAINT / TRIGGER — MANUAL REVIEW':'复杂结构需要人工审核','COLUMN DEFINITION OR TABLE OPTIONS DIFFER':'字段定义或表属性不同','APPEND DATA — STOP ON CONFLICT':'追加数据，冲突时停止','MANUAL REVIEW':'人工审核','UPSERT MATCHING PRIMARY KEY':'按主键插入或更新','REPLACE TABLE DATA IN TRANSACTION':'清空目标表后传输','FILTER SOURCE RECORDS':'仅传输符合条件的源记录','UPSERT REQUIRES MATCHING PRIMARY KEY':'插入更新需要相同且受支持的主键','FILTER FIELD OR TYPE UNSUPPORTED':'筛选字段或类型不受支持','COPY KEY WITH TTL — REPLACE':'覆盖同名 Key 并保留 TTL','APPEND DATA — NONTRANSACTIONAL':'追加数据，非事务写入','TARGET KEY EXISTS — MANUAL REVIEW':'目标 Key 已存在','COPY KEY WITH TTL — NO REPLACE':'复制 Key 和 TTL，不覆盖','MAPPED DATA TRANSFER':'映射数据传输','DEPENDENCY REQUIRES MANUAL REVIEW':'依赖关系需要人工审核'}
  return t(exact[value]||value)
 }
 const phaseLabels:Record<string,string>={checking:'检查结构',structure:'结构变更',copying:'正在传输',committing:'提交事务',finished:'已结束'}
 const stateLabels:Record<string,string>={running:'正在执行',completed:'操作已完成',failed:'失败',cancelled:'已取消',uncertain:'结果不确定'}
 function invalidate(){plan.value=undefined;selected.value=[];detail.value=''}
-watch([sourceId,targetId,sourceDb,targetDb,mode,allSchema,objects,policy,conditionEnabled,condition],invalidate,{deep:true})
-watch([sourceKind,mode],()=>{if(!policies.value.includes(policy.value)||mode.value==='schema')policy.value='append';if(!conditionTypes.value.includes(condition.value.type))condition.value.type='String'})
+watch([sourceId,targetId,sourceDb,targetDb,mode,allSchema,objects,policy,conditionEnabled,condition,mapped,mappings,includeDependencies],invalidate,{deep:true})
+watch([sourceKind,targetKind,mode],()=>{if(!policies.value.includes(policy.value)||mode.value==='schema')policy.value='append';if(!conditionTypes.value.includes(condition.value.type))condition.value.type='String'})
 watch(conditionAllowed,allowed=>{if(!allowed)conditionEnabled.value=false})
+watch(canDependencies,v=>{if(!v)includeDependencies.value=false})
 watch(policy,()=>{if(policy.value==='replace')conditionEnabled.value=false})
+watch([objects,mapped,targetObjects],()=>{
+ if(!mapped.value)return
+ const old=mappings.value
+ mappings.value=objects.value.map(source=>old.find(m=>m.source===source)||{source,target:sourceKind.value==='redis'||targetObjects.value.includes(source)?source:'',fields:[]})
+},{deep:true})
+watch(mode,value=>{if(value!=='data'){mappedEnabled.value=false;mappingReady.value=false;if(targetId.value&&!targetProfiles.value.some(p=>p.id===targetId.value)){targetId.value='';targetDb.value='';targetCatalog.value=undefined}}})
+watch(()=>sourceKind.value,kind=>{if(kind==='clickhouse'&&condition.value.operator!=='eq')condition.value.operator='eq'})
+watch(templateId,()=>{if(selectedTemplate.value)templateName.value=selectedTemplate.value.name})
+
 
 async function act(fn:()=>Promise<void>){
  if(busy.value||active.value)return
@@ -66,22 +88,34 @@ async function catalog(which:'source'|'target',database?:string){
   else{sourceDb.value=result.databases.includes(sourceDb.value)?sourceDb.value:'';if(sourceDb.value)await catalog('source',sourceDb.value)}
  }else{
   targetCatalog.value=result;targetDb.value=result.databases.includes(targetDb.value)?targetDb.value:''
+  if(!database&&targetDb.value)await catalog('target',targetDb.value)
  }
 }
 function changeProfile(which:'source'|'target'){
+ mappings.value=[];mappingReady.value=false
  if(which==='source'){sourceDb.value='';sourceCatalog.value=undefined;objects.value=[];if(sourceKind.value==='redis')mode.value='data';if(!targetProfiles.value.some(p=>p.id===targetId.value)){targetId.value='';targetDb.value='';targetCatalog.value=undefined}}
  else{targetDb.value='';targetCatalog.value=undefined}
  invalidate();void act(()=>catalog(which))
 }
-function changeSourceDatabase(){objects.value=[];invalidate();void act(()=>catalog('source',sourceDb.value))}
+function changeSourceDatabase(){objects.value=[];mappings.value=[];invalidate();void act(()=>catalog('source',sourceDb.value))}
+function changeTargetDatabase(){mappings.value=[];mappingReady.value=false;invalidate();void act(()=>catalog('target',targetDb.value))}
 function toggleObjects(all:boolean){objects.value=all?eligible.value.slice(0,100).map(o=>o.name):[]}
 function toggleSteps(all:boolean){selected.value=all?allSteps.value.map(s=>s.id):[]}
+function selectStep(id:string,checked:boolean){
+ const steps=plan.value?.steps||[],ids=new Set(selected.value)
+ if(checked){const visit=(key:string)=>{if(ids.has(key))return;const step=steps.find(s=>s.id===key&&s.executable);if(!step)return;ids.add(key);for(const dep of step.dependsOn||[])visit(dep)};visit(id)}
+ else {ids.delete(id);let changed=true;while(changed){changed=false;for(const step of steps)if(ids.has(step.id)&&step.dependsOn?.some(dep=>!ids.has(dep))){ids.delete(step.id);changed=true}}}
+ selected.value=[...ids]
+}
+function buildRequest():MigrationRequest{
+ return {source:{connectionId:sourceId.value,database:sourceDb.value},target:{connectionId:targetId.value,database:targetDb.value},mode:mode.value,...(mode.value==='schema'&&allSchema.value?{}:{objects:[...objects.value]}),...(mode.value!=='schema'&&policy.value!=='append'?{policy:policy.value}:{}),...(conditionEnabled.value&&conditionAllowed.value?{condition:{...condition.value}}:{}),...(mapped.value?{mappings:JSON.parse(JSON.stringify(mappings.value))}:{}),...(canDependencies.value&&includeDependencies.value?{includeDependencies:true}:{})}
+}
 async function compare(){
  await act(async()=>{
   invalidate()
-  const request:MigrationRequest={source:{connectionId:sourceId.value,database:sourceDb.value},target:{connectionId:targetId.value,database:targetDb.value},mode:mode.value,...(mode.value==='schema'&&allSchema.value?{}:{objects:[...objects.value]}),...(mode.value!=='schema'&&policy.value!=='append'?{policy:policy.value}:{}),...(conditionEnabled.value&&conditionAllowed.value?{condition:{...condition.value}}:{})}
+  const request=buildRequest()
   plan.value=await window.dbex.previewMigration(request)
-  selected.value=policy.value==='append'?plan.value.steps.filter(s=>s.executable).map(s=>s.id):[]
+  selected.value=policy.value==='append'&&!mapped.value?plan.value.steps.filter(s=>s.executable).map(s=>s.id):[]
  })
 }
 async function execute(){
@@ -105,27 +139,53 @@ async function poll(){
 }
 onMounted(async()=>{
  await poll()
+ try{await reloadTemplates()}catch(e){error.value=e instanceof Error?e.message:String(e)}
  if(active.value){history.value=true}
  else if(sourceId.value)await act(()=>catalog('source'))
  if(!closed)timer=setInterval(()=>{void poll()},700)
 })
 onBeforeUnmount(()=>{closed=true;if(timer)clearInterval(timer)})
 function setMode(value:MigrationMode){mode.value=sourceKind.value==='redis'&&value!=='schema'?'data':value;allSchema.value=value==='schema';objects.value=[];if(value==='schema'&&sourceKind.value==='redis'){sourceId.value='';sourceDb.value='';sourceCatalog.value=undefined;targetId.value='';targetDb.value='';targetCatalog.value=undefined}}
-function saveTemplate(){
- try{localStorage.setItem('dbex.migration.last-template.v1',JSON.stringify({source:{connectionId:sourceId.value,database:sourceDb.value},target:{connectionId:targetId.value,database:targetDb.value},mode:mode.value,objects:objects.value,allSchema:allSchema.value,policy:policy.value}))}
- catch{error.value='MIGRATION_INPUT: 迁移参数无效'}
+async function reloadTemplates(){templates.value=await window.dbex.listMigrationTemplates();templatesReady.value=true}
+async function saveTemplate(update=false){
+ await act(async()=>{
+  const item=await window.dbex.saveMigrationTemplate({name:templateName.value,request:buildRequest()},update?templateId.value:undefined)
+  await reloadTemplates();templateId.value=item.id;templateName.value=item.name
+ })
+}
+async function applyRequest(request:MigrationRequest){
+ if(!profiles.value.some(c=>c.id===request.source.connectionId)||!profiles.value.some(c=>c.id===request.target.connectionId))throw Error('MIGRATION_TEMPLATE: 配置中的连接已不存在')
+ sourceId.value=request.source.connectionId;sourceDb.value=request.source.database
+ targetId.value=request.target.connectionId;targetDb.value=request.target.database
+ mode.value=request.mode;allSchema.value=request.mode==='schema'&&!request.objects
+ policy.value=request.policy||'append';mappedEnabled.value=!!request.mappings;includeDependencies.value=!!request.includeDependencies
+ sourceCatalog.value=undefined;targetCatalog.value=undefined;objects.value=[];mappings.value=[]
+ await nextTick()
+ await catalog('source');await catalog('target')
+ objects.value=request.objects?.filter(name=>eligible.value.some(o=>o.name===name))||[]
+ await nextTick()
+ mappings.value=JSON.parse(JSON.stringify(request.mappings||[]))
+ conditionEnabled.value=!!request.condition
+ if(request.condition)condition.value={...request.condition}
+ await nextTick()
 }
 async function loadTemplate(){
  await act(async()=>{
+  const request=selectedTemplate.value?.request
+  if(request){await applyRequest(request);return}
+  // One-time compatibility with the old local last-template format.
   const saved=JSON.parse(localStorage.getItem('dbex.migration.last-template.v1')||'null')
-  if(!saved||!profiles.value.some(c=>c.id===saved.source?.connectionId)||!profiles.value.some(c=>c.id===saved.target?.connectionId)||!['schema','data','structure-data'].includes(saved.mode))throw new Error('MIGRATION_INPUT: 迁移参数无效')
-  sourceId.value=saved.source.connectionId;sourceDb.value=saved.source.database
-  targetId.value=saved.target.connectionId;targetDb.value=saved.target.database
-  mode.value=saved.mode;allSchema.value=mode.value==='schema'&&saved.allSchema===true
-  policy.value=policies.value.includes(saved.policy)?saved.policy:'append';conditionEnabled.value=false
-  sourceCatalog.value=undefined;targetCatalog.value=undefined;objects.value=[]
-  await catalog('source');await catalog('target')
-  objects.value=Array.isArray(saved.objects)?saved.objects.filter((name:unknown)=>typeof name==='string'&&eligible.value.some(o=>o.name===name)).slice(0,100):[]
+  if(!saved)throw Error('MIGRATION_TEMPLATE: 请选择迁移配置')
+  await applyRequest({...saved,...(saved.mode==='schema'&&saved.allSchema?{objects:undefined}:{})})
+ })
+}
+async function removeTemplate(){await act(async()=>{if(!selectedTemplate.value)return;await window.dbex.removeMigrationTemplate(templateId.value);templateId.value='';templateName.value='';await reloadTemplates()})}
+async function resume(){
+ await act(async()=>{
+  if(!displayedJob.value||!selectedTemplate.value)return
+  const next=await window.dbex.resumeMigrationPreview(displayedJob.value.id,selectedTemplate.value.request)
+  await applyRequest(next.request);history.value=false;await nextTick()
+  plan.value=next;selected.value=[]
  })
 }
 </script>
@@ -137,27 +197,32 @@ async function loadTemplate(){
    <button :class="{active:!history&&mode!=='schema'}" :disabled="busy||!!active" @click="history=false;setMode('structure-data')">{{t('数据传输')}}</button>
    <button :class="{active:history}" @click="history=true">{{t('任务记录')}}<span v-if="active"> · {{t('正在执行')}}</span></button>
   </nav>
+  <div class="migration-template-bar" v-if="!active">
+   <label class="field">{{t('迁移配置')}}<select v-model="templateId" :aria-label="t('迁移配置')" :disabled="busy||mappingBusy"><option value="">{{t('选择配置')}}</option><option v-for="item in templates" :key="item.id" :value="item.id">{{item.name}}</option></select></label>
+   <template v-if="!history"><input v-model="templateName" :aria-label="t('配置名称')" :placeholder="t('配置名称')" :disabled="busy||mappingBusy"/><button class="btn secondary small" :disabled="!canCompare||!templateName.trim()||!templatesReady" @click="saveTemplate(false)">{{t('另存当前配置')}}</button><button class="btn secondary small" :disabled="!canCompare||!selectedTemplate||!templateName.trim()" @click="saveTemplate(true)">{{t('更新配置')}}</button><button class="btn secondary small" :disabled="busy||mappingBusy" @click="loadTemplate">{{t('载入配置')}}</button><button class="btn secondary small" :disabled="busy||mappingBusy||!selectedTemplate" @click="removeTemplate">{{t('删除配置')}}</button></template>
+   <button v-else-if="remaining.length" class="btn secondary small" :disabled="busy||!selectedTemplate" @click="resume">{{t('续传未完成对象')}}</button>
+  </div>
   <div v-if="!history" class="migration-body">
    <div class="migration-endpoints">
     <section v-for="which in (['source','target'] as const)" :key="which" class="migration-endpoint">
      <h3>{{t(which==='source'?'源数据库':'目标数据库')}}</h3>
      <label class="field">{{t('连接名称')}}
-      <select v-if="which==='source'" v-model="sourceId" :disabled="busy" @change="changeProfile('source')"><option value="">{{t('请选择连接')}}</option><option v-for="item in sourceProfiles" :key="item.id" :value="item.id">{{item.name}} · {{item.kind}} · {{item.host}}:{{item.port}}</option></select>
-      <select v-else v-model="targetId" :disabled="busy" @change="changeProfile('target')"><option value="">{{t('请选择连接')}}</option><option v-for="item in targetProfiles" :key="item.id" :value="item.id">{{item.name}} · {{item.kind}} · {{item.host}}:{{item.port}}</option></select>
+      <select v-if="which==='source'" v-model="sourceId" :disabled="busy||mappingBusy" @change="changeProfile('source')"><option value="">{{t('请选择连接')}}</option><option v-for="item in sourceProfiles" :key="item.id" :value="item.id">{{item.name}} · {{item.kind}} · {{item.host}}:{{item.port}}</option></select>
+      <select v-else v-model="targetId" :disabled="busy||mappingBusy" @change="changeProfile('target')"><option value="">{{t('请选择连接')}}</option><option v-for="item in targetProfiles" :key="item.id" :value="item.id">{{item.name}} · {{item.kind}} · {{item.host}}:{{item.port}}</option></select>
      </label>
      <div class="migration-database-row">
       <label class="field">{{t('数据库')}}
-       <select v-if="which==='source'" v-model="sourceDb" :disabled="busy||!sourceCatalog" @change="changeSourceDatabase"><option value="">{{t('请选择数据库')}}</option><option v-for="db in sourceCatalog?.databases||[]" :key="db" :value="db">{{db}}</option></select>
-       <select v-else v-model="targetDb" :disabled="busy||!targetCatalog"><option value="">{{t('请选择数据库')}}</option><option v-for="db in targetCatalog?.databases||[]" :key="db" :value="db">{{db}}</option></select>
+       <select v-if="which==='source'" v-model="sourceDb" :disabled="busy||mappingBusy||!sourceCatalog" @change="changeSourceDatabase"><option value="">{{t('请选择数据库')}}</option><option v-for="db in sourceCatalog?.databases||[]" :key="db" :value="db">{{db}}</option></select>
+       <select v-else v-model="targetDb" :disabled="busy||mappingBusy||!targetCatalog" @change="changeTargetDatabase"><option value="">{{t('请选择数据库')}}</option><option v-for="db in targetCatalog?.databases||[]" :key="db" :value="db">{{db}}</option></select>
       </label>
       <button class="btn secondary" :disabled="busy||!(which==='source'?sourceId:targetId)" @click="act(()=>catalog(which))">{{t('刷新')}}</button>
      </div>
     </section>
    </div>
    <div class="migration-options">
-    <label v-if="mode!=='schema'" class="field">{{t('传输模式')}}<select v-model="mode" :disabled="busy"><option v-if="sourceKind!=='redis'" value="structure-data">{{t(modeLabels['structure-data'])}}</option><option value="data">{{t(modeLabels.data)}}</option></select></label>
+    <label v-if="mode!=='schema'" class="field">{{t('传输模式')}}<select v-model="mode" :aria-label="t('传输模式')" :disabled="busy||mappingBusy"><option v-if="sourceKind!=='redis'" value="structure-data">{{t(modeLabels['structure-data'])}}</option><option value="data">{{t(modeLabels.data)}}</option></select></label>
     <label v-else class="migration-check"><input v-model="allSchema" type="checkbox" :disabled="busy"/>{{t('比较全部对象（包含仅目标存在的对象）')}}</label>
-    <label v-if="mode!=='schema'" class="field">{{t('写入模式')}}<select v-model="policy" :disabled="busy" :aria-label="t('写入模式')"><option v-for="p in policies" :key="p" :value="p">{{t(migrationPolicyLabel(p,sourceKind))}}</option></select></label>
+    <label v-if="mode!=='schema'" class="field">{{t('写入模式')}}<select v-model="policy" :disabled="busy" :aria-label="t('写入模式')"><option v-for="p in policies" :key="p" :value="p">{{t(migrationPolicyLabel(p,targetKind||sourceKind))}}</option></select></label>
     <span class="migration-hint">{{t('支持六种数据库的基础迁移；复杂对象需要人工审核。')}}</span>
    </div>
    <div v-if="mode!=='schema'||!allSchema" class="migration-object-picker">
@@ -167,10 +232,13 @@ async function loadTemplate(){
      <span v-if="!eligible.length" class="migration-hint">{{t('未选择对象')}}</span>
     </div>
    </div>
+   <label v-if="canDependencies" class="migration-check"><input v-model="includeDependencies" type="checkbox" :disabled="busy||mappingBusy"/>{{t('包含普通外键及依赖顺序')}}</label>
+   <label v-if="mode==='data'&&sourceKind&&targetKind" class="migration-check"><input type="checkbox" :checked="mapped" :disabled="busy||mappingBusy||mappedRequired" @change="mappedEnabled=($event.target as HTMLInputElement).checked"/>{{t('启用对象及字段映射')}}</label>
+   <MigrationMappingPanel v-if="mapped&&sourceKind&&targetKind&&sourceDb&&targetDb&&objects.length" v-model="mappings" :source-id="sourceId" :source-db="sourceDb" :target-id="targetId" :target-db="targetDb" :source-kind="sourceKind" :target-kind="targetKind" :target-objects="targetObjects" :busy="busy" :allow-filters="policy!=='replace'&&!conditionEnabled" @ready="mappingReady=$event" @busy-change="mappingBusy=$event"/>
    <div v-if="conditionAllowed" class="migration-condition">
     <label class="migration-check"><input v-model="conditionEnabled" type="checkbox" :disabled="busy"/>{{t('源记录条件')}}</label>
     <template v-if="conditionEnabled"><input v-model="condition.field" :disabled="busy" :aria-label="t('筛选字段')" :placeholder="t('筛选字段')" maxlength="200"/>
-    <select v-model="condition.operator" :disabled="busy" :aria-label="t('比较运算符')"><option v-for="op in conditionOperators" :key="op.value" :value="op.value">{{op.label}}</option></select>
+    <select v-model="condition.operator" :disabled="busy" :aria-label="t('比较运算符')"><option v-for="op in (sourceKind==='clickhouse'?conditionOperators.filter(o=>o.value==='eq'):conditionOperators)" :key="op.value" :value="op.value">{{op.label}}</option></select>
     <select v-model="condition.type" :disabled="busy" :aria-label="t('数据类型')"><option v-for="type in conditionTypes" :key="type" :value="type">{{type}}</option></select>
     <input v-if="condition.operator!=='null'&&condition.operator!=='notNull'" v-model="condition.value" :disabled="busy" :aria-label="t('筛选值')" :placeholder="t('筛选值')" maxlength="4096"/></template>
    </div>
@@ -180,7 +248,7 @@ async function loadTemplate(){
    <template v-if="plan">
     <div class="migration-plan-list">
      <table><thead><tr><th><input type="checkbox" :checked="allSteps.length>0&&selected.length===allSteps.length" :disabled="!allSteps.length||busy" :aria-label="t('全选')" @change="toggleSteps(($event.target as HTMLInputElement).checked)"/></th><th>{{t('对象')}}</th><th>{{t('操作：')}}</th><th>{{t('差异')}}</th></tr></thead>
-      <tbody><tr v-for="step in plan.steps" :key="step.id" :class="{selected:detail===step.id}" @click="detail=step.id"><td><input v-model="selected" type="checkbox" :value="step.id" :disabled="!step.executable||busy" @click.stop/></td><td>{{step.name}}</td><td :class="step.action==='review'||step.action==='target-only'?'migration-warning':''">{{t(actionLabels[step.action]||step.action)}}</td><td>{{step.changes.map(changeLabel).join('; ')||'—'}}</td></tr></tbody>
+      <tbody><tr v-for="step in plan.steps" :key="step.id" :class="{selected:detail===step.id}" @click="detail=step.id"><td><input :checked="selected.includes(step.id)" type="checkbox" :disabled="!step.executable||busy" @change="selectStep(step.id,($event.target as HTMLInputElement).checked)" @click.stop/></td><td>{{step.name}}<template v-if="step.targetName&&step.targetName!==step.name"> → {{step.targetName}}</template></td><td :class="step.action==='review'||step.action==='target-only'?'migration-warning':''">{{t(actionLabels[step.action]||step.action)}}</td><td>{{step.changes.map(changeLabel).join('; ')||'—'}}</td></tr></tbody>
      </table>
     </div>
     <label v-if="!nonSql" class="field migration-script">{{t('部署脚本预览')}}<textarea readonly :value="sqlPreview" spellcheck="false"/></label>
@@ -199,6 +267,7 @@ async function loadTemplate(){
      <div class="migration-metrics"><div><small>{{t('已读取行数')}}</small><strong>{{displayedJob.rowsKnown===false?'—':displayedJob.rowsRead.toLocaleString()}}</strong></div><div><small>{{t('已提交行数')}}</small><strong>{{displayedJob.rowsKnown===false?'—':displayedJob.rowsCommitted.toLocaleString()}}</strong></div><div><small>{{t('未提交行数')}}</small><strong>{{displayedJob.rowsKnown===false?'—':displayedJob.rowsPending.toLocaleString()}}</strong></div><div><small>{{t('读取数据量')}}</small><strong>{{(displayedJob.bytesRead/1048576).toFixed(2)}} MiB</strong></div></div>
      <p v-if="displayedJob.error" class="inline-message error">{{localize(displayedJob.error)}}</p>
      <p v-if="displayedJob.created.length">{{t('已执行结构变更')}}：{{displayedJob.created.join(', ')}}</p>
+     <p v-if="remaining.length">{{t('可续传对象')}}：{{remaining.join(', ')}} · {{t('选择原迁移配置重新比较，不会自动重放写入。')}}</p>
      <p>{{t('已完成对象')}}：{{displayedJob.completed.join(', ')||'—'}}</p>
     </section>
     <table class="migration-history-table"><thead><tr><th>{{t('时间')}}</th><th>{{t('状态')}}</th><th>{{t('对象')}}</th><th>{{t('已提交行数')}}</th></tr></thead><tbody><tr v-for="job in jobs" :key="job.id" :class="{selected:displayedJob?.id===job.id}" tabindex="0" @click="historyId=job.id" @keydown.enter="historyId=job.id"><td>{{new Date(job.startedAt).toLocaleString()}}</td><td>{{t(stateLabels[job.state]||job.state)}}</td><td>{{job.completed.length}} / {{job.total}}</td><td>{{job.rowsKnown===false?'—':job.rowsCommitted.toLocaleString()}}</td></tr></tbody></table>
@@ -207,7 +276,7 @@ async function loadTemplate(){
   </div>
   <p v-if="error" role="alert" class="inline-message error migration-error">{{localize(error)}}</p>
   <footer class="dialog-footer migration-footer">
-   <template v-if="!history"><button class="btn secondary" :disabled="busy||!sourceDb||!targetDb" @click="saveTemplate">{{t('保存配置')}}</button><button class="btn secondary" :disabled="busy" @click="loadTemplate">{{t('载入配置')}}</button><button class="btn secondary" :disabled="busy||!sqlPreview" @click="exportSql">{{t('导出结构脚本')}}</button></template>
+   <template v-if="!history"><button class="btn secondary" :disabled="busy||!sqlPreview" @click="exportSql">{{t('导出结构脚本')}}</button></template>
    <button v-if="history&&!active&&displayedJob" class="btn secondary" :disabled="busy" @click="removeHistory">{{t('删除任务记录')}}</button>
    <button v-if="history&&active" class="btn danger-text" @click="cancel">{{t('取消任务')}}</button>
    <span class="migration-spacer"/>
@@ -222,7 +291,7 @@ async function loadTemplate(){
 .migration-tabs{display:flex;gap:0;padding:0 16px;border-bottom:1px solid var(--border);flex:none}
 .migration-tabs button{border:0;border-bottom:2px solid transparent;background:none;padding:12px 20px;color:var(--muted);border-radius:0}
 .migration-tabs button.active{color:var(--text);border-bottom-color:var(--accent)}
-.migration-body{flex:1;min-height:0;overflow:auto;padding:14px 16px;display:flex;flex-direction:column;gap:12px}
+.migration-template-bar{display:flex;align-items:center;flex-wrap:wrap;gap:7px;padding:8px 16px;border-bottom:1px solid var(--border)}.migration-template-bar .field{display:flex;align-items:center;gap:7px}.migration-template-bar select{max-width:220px}.migration-template-bar>input{min-width:100px;flex:1}.migration-body{flex:1;min-height:0;overflow:auto;padding:14px 16px;display:flex;flex-direction:column;gap:12px}
 .migration-endpoints{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 .migration-endpoint{border:1px solid var(--border);padding:12px;background:var(--panel-raised);min-width:0}
 .migration-endpoint h3{font-size:13px;margin:0 0 10px;font-weight:600}

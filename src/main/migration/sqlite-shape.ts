@@ -25,13 +25,14 @@ export function planSqliteMigration(source:SchemaSnapshot,target:SchemaSnapshot,
   if(!x?.safe||d&&!y?.safe)return {...step,changes:['SPECIAL OBJECT / CONSTRAINT / TRIGGER — MANUAL REVIEW']}
   if(!d)return mode==='data'?{...step,changes:['MISSING TARGET OBJECT']}:{...step,action:'create',changes:['MISSING TARGET OBJECT'],sql:create(s),executable:true,transfer:mode==='structure-data'}
   if(!y)return step
-  if(mode!=='schema')return sameSqliteShape(x,y)?{...step,action:'copy',changes:['APPEND DATA — STOP ON CONFLICT'],executable:true,transfer:true}:{...step,changes:['COLUMN DEFINITION OR TABLE OPTIONS DIFFER']}
+  if(mode!=='schema'&&sameSqliteShape(x,y))return{...step,action:'copy',changes:['APPEND DATA — STOP ON CONFLICT'],executable:true,transfer:true}
+  if(mode==='data')return {...step,changes:['COLUMN DEFINITION OR TABLE OPTIONS DIFFER']}
   if(sameSqliteShape(x,y))return {...step,action:'same'}
   const additions=x.fields.slice(y.fields.length),prefix=y.fields.every((f,i)=>JSON.stringify(f)===JSON.stringify(x.fields[i]))
   const idx=x.indexes.filter(v=>!y.indexes.some(w=>w.name===v.name)),sameIdx=y.indexes.every(v=>x.indexes.some(w=>JSON.stringify(v)===JSON.stringify(w)))
   if(!prefix||!sameIdx||x.strict!==y.strict||x.withoutRowid!==y.withoutRowid||additions.some(f=>f.pk||f.notnull&&f.defaultValue===null)||idx.some(v=>v.unique))return {...step,changes:['CONSTRAINTS / SPECIAL DEFINITION']}
   const sql=[...additions.map(f=>'ALTER TABLE main.'+sqliteQuote(name)+' ADD COLUMN '+col(f)),...idx.map(v=>indexSql(name,v))]
-  return {...step,action:sql.length?'alter':'review',sql,executable:sql.length>0,changes:[...additions.map(f=>'ADD COLUMN '+f.name),...idx.map(v=>'ADD INDEX '+v.name)]}
+  return {...step,action:sql.length?'alter':'review',sql,executable:sql.length>0,transfer:mode==='structure-data'&&sql.length>0,changes:[...additions.map(f=>'ADD COLUMN '+f.name),...idx.map(v=>'ADD INDEX '+v.name)]}
  })
 }
 

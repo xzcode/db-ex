@@ -14,8 +14,9 @@ import { ConnectionStore } from './connections/store'
 import {MigrationService} from './migration/service'
 import {FileTransferService} from './file-transfer/service'
 import {normalizeFileTransfer,dataFileFormat,type FileTransferRequest} from '../shared/file-transfer'
+import {MigrationTemplateStore} from './storage/migration-templates'
 import {MigrationHistory} from './migration/history'
-import {migrationPolicyLabel,type MigrationJob} from '../shared/migration'
+import {migrationPolicyLabel,type MigrationJob,type MigrationTemplate} from '../shared/migration'
 import { SessionManager } from './connections/manager'
 import {planScriptBatch} from './operations/query-batch'
 import { validateId } from './connections/validation'
@@ -46,6 +47,10 @@ const migrations=new MigrationService(id=>store.get(id),modulePath=>{
  const child=utilityProcess.fork(modulePath,[],{stdio:'ignore',serviceName:'DB EX SQLite migration'})
  return {send:message=>child.postMessage(message),onMessage:callback=>{child.on('message',callback)},onExit:callback=>{child.once('exit',callback)},onError:callback=>{child.on('error',callback)},kill:()=>{child.kill()}}
 },app.isPackaged?join(process.resourcesPath,'app.asar.unpacked','dist-electron','sqlite-worker.cjs'):join(__dirname,'sqlite-worker.cjs'),migrationHistory)
+const migrationTemplates=new MigrationTemplateStore({
+ async read(){const f=await readJson<{version:number;encrypted:string}>('migration-templates.secure.json');if(!f)return [];if(f.version!==1||typeof f.encrypted!=='string')throw Error('MIGRATION_TEMPLATE: 迁移配置无效');return decrypt<MigrationTemplate[]>(f.encrypted)},
+ write:values=>writeJson('migration-templates.secure.json',{version:1,encrypted:encrypt(values)})
+},request=>migrations.validateRequest(request))
 const fileTransfers=new FileTransferService(modulePath=>{
  const child=utilityProcess.fork(modulePath,[],{stdio:'ignore',serviceName:'DB EX file transfer'})
  return {send:message=>child.postMessage(message),onMessage:callback=>{child.on('message',callback)},onExit:callback=>{child.once('exit',callback)},onError:callback=>{child.on('error',callback)},kill:()=>{child.kill()}}
@@ -209,13 +214,19 @@ function registerIpc(): void {
   }))
   ipcMain.handle('migration:catalog',handler((win,id:unknown,database?:unknown)=>migrations.catalog(win.webContents.id,id,database)))
   ipcMain.handle('migration:preview',handler((win,request:unknown)=>migrations.preview(win.webContents.id,request)))
+  ipcMain.handle('migration:fields',handler((win,id:unknown,database:unknown,name:unknown)=>migrations.fields(win.webContents.id,id,database,name)))
+  ipcMain.handle('migration:templates',handler(()=>migrationTemplates.list()))
+  ipcMain.handle('migration:template-save',handler((_win,input:unknown,id?:string)=>migrationTemplates.save(input,id)))
+  ipcMain.handle('migration:template-remove',handler((_win,id:unknown)=>migrationTemplates.remove(id)))
+  ipcMain.handle('migration:resume-preview',handler((win,id:unknown,request:unknown)=>migrations.resumePreview(win.webContents.id,id,request)))
+
   ipcMain.handle('migration:jobs',handler(win=>migrations.list(win.webContents.id)))
   ipcMain.handle('migration:remove-history',handler((win,id:unknown)=>migrations.removeHistory(win.webContents.id,id)))
   ipcMain.handle('migration:cancel',handler((win,id:unknown)=>migrations.cancel(win.webContents.id,id)))
   ipcMain.handle('migration:run',handler(async(win,planId:unknown,steps:unknown)=>{
     const owner=win.webContents.id
     const info=migrations.confirmation(owner,planId,steps)
-    await confirm(win,info.policy==='replace'?'确认清空目标表并重新传输？':info.policy==='upsert'?'确认覆盖匹配的数据？':'确认执行数据库迁移？',tr('源数据库')+': '+info.source+'\n'+tr('目标数据库')+': '+info.target+'\n'+tr('结构变更')+': '+info.ddl+'\n'+tr('数据传输')+': '+info.data+'\n'+tr('写入模式')+': '+tr(migrationPolicyLabel(info.policy,info.kind))+(info.condition?'\n'+tr('源记录条件')+': '+info.condition.field+' '+info.condition.operator+' ('+info.condition.type+') '+JSON.stringify(info.condition.value):'')+'\n\n'+info.names.join(', ')+'\n\n'+tr('已完成的结构变更和已写入的数据可能无法自动回滚。源与目标结构须在执行前复核。'))
+    await confirm(win,info.policy==='replace'?'确认清空目标表并重新传输？':info.policy==='upsert'?'确认覆盖匹配的数据？':'确认执行数据库迁移？',tr('源数据库')+': '+info.source+'\n'+tr('目标数据库')+': '+info.target+'\n'+tr('结构变更')+': '+info.ddl+'\n'+tr('数据传输')+': '+info.data+'\n'+tr('写入模式')+': '+tr(migrationPolicyLabel(info.policy,info.kind))+(info.condition?'\n'+tr('源记录条件')+': '+info.condition.field+' '+info.condition.operator+' ('+info.condition.type+') '+JSON.stringify(info.condition.value):'')+'\n\n'+info.names.join(', ')+(info.mappings?'\n\n'+info.mappings.map(m=>m.source+' → '+m.target+'\n'+m.fields.map(f=>f.source+' → '+f.target+' ('+f.conversion+')').join('\n')+(m.predicate?'\n'+m.predicate.text+'\n'+JSON.stringify(m.predicate.parameters):m.mongoFilter?'\n'+m.mongoFilter:'')).join('\n\n').slice(0,5000):'')+'\n\n'+tr('已完成的结构变更和已写入的数据可能无法自动回滚。源与目标结构须在执行前复核。'))
     if(!windows.has(owner)||quitting)throw new Error('SESSION_CLOSED: 会话已关闭，请重新连接')
     return migrations.start(owner,planId,steps)
   }))

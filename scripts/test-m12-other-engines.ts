@@ -130,7 +130,7 @@ if(kind==='sqlite'){
   source='0';target='1';configs.source.redisDb=0;configs.target.redisDb=1
   const a=await createRedisClient(configs.source,route,tls),b=await createRedisClient(configs.target,route,tls)
   const names=['str','hash','list','set','zset','stream','keep'].map(n=>'dbex_m12_'+suffix+':'+n)
-  const [str,hash,list,set,zset,stream,keep]=names
+  const [str,hash,list,set,zset,stream,keep]=names,renamed='dbex_m12_'+suffix+':renamed'
   try{
    await a.set(str!,Buffer.from([0,255,128]),'PX',600000)
    await a.hset(hash!,'f',Buffer.from([255,1]))
@@ -151,10 +151,16 @@ if(kind==='sqlite'){
    const overwrite=await run('data',[keep!],undefined,'upsert')
    assert.equal(overwrite.rowsCommitted,1);assert.equal(await b.get(keep!),'changed')
    assert(await b.pttl(keep!)>0)
+   const mapped=await service.preview(owner,{...request('data',[str!]),mappings:[{source:str!,target:renamed,fields:[]}]})
+   assert.equal(mapped.steps[0]?.executable,true)
+   const renamedJob=await finish(service.start(owner,mapped.id,[mapped.steps[0]!.id]).id)
+   assert.equal(renamedJob.state,'completed',JSON.stringify(renamedJob));assert.equal(renamedJob.rowsCommitted,1)
+   assert((await a.dumpBuffer(str!)).equals(await b.dumpBuffer(renamed)));assert(await b.pttl(renamed)>0)
+   console.log('M12 Redis explicit Key rename preserves native payload and expiry')
    await redisArchiveFixture(a,b,configs.source,configs.target)
    console.log('M12 Redis explicit same-key overwrite with TTL passed')
    console.log('M12 Redis actual two logical DBs: six native types, binary DUMP/RESTORE and TTL preserved, no replacement')
-  }finally{await service.closeAll();await a.del(...names).catch(()=>{});await b.del(...names).catch(()=>{});a.disconnect();b.disconnect()}
+  }finally{await service.closeAll();await a.del(...names).catch(()=>{});await b.del(...names,renamed).catch(()=>{});a.disconnect();b.disconnect()}
  }else{
   const pool=await openClickHouseClients(config,route,tls),client=pool.make('default',30000)
   const command=(query:string)=>client.command({query})

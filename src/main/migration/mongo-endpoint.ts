@@ -32,14 +32,12 @@ function planPair(a:SchemaObject|undefined,b:SchemaObject|undefined,mode:Migrati
   return {...step,action:'create' as const,changes:['MISSING TARGET OBJECT'],executable:true,transfer:mode==='structure-data'}
  }
  if(!y)return step
- if(mode!=='schema'){
-  if(!equivalent(x,y))return {...step,changes:['COLUMN DEFINITION OR TABLE OPTIONS DIFFER']}
-  return {...step,action:'copy' as const,changes:['APPEND DATA — STOP ON CONFLICT'],executable:true,transfer:true}
- }
+ if(mode!=='schema'&&equivalent(x,y))return {...step,action:'copy' as const,changes:['APPEND DATA — STOP ON CONFLICT'],executable:true,transfer:true}
+ if(mode==='data')return {...step,changes:['COLUMN DEFINITION OR TABLE OPTIONS DIFFER']}
  if(equivalent(x,y))return {...step,action:'same' as const}
  const additions=x.indexes.filter(i=>!y.indexes.some(j=>j.name===i.name)),sameExisting=y.indexes.every(j=>x.indexes.some(i=>JSON.stringify(i)===JSON.stringify(j)))
  if(!sameExisting||additions.some(i=>i.unique))return {...step,changes:['CONSTRAINTS / SPECIAL DEFINITION']}
- return {...step,action:'alter' as const,changes:additions.map(i=>'ADD INDEX '+i.name),executable:additions.length>0}
+ return {...step,action:'alter' as const,changes:additions.map(i=>'ADD INDEX '+i.name),executable:additions.length>0,transfer:mode==='structure-data'&&additions.length>0}
 }
 export function planMongoMigration(source:SchemaSnapshot,target:SchemaSnapshot,mode:MigrationMode){
  const a=new Map(source.objects.map(o=>[o.name,o])),b=new Map(target.objects.map(o=>[o.name,o]))
@@ -126,7 +124,7 @@ export class MongoMigrationEndpoint implements MigrationEndpoint{
    yield JSON.parse(BSON.EJSON.stringify(doc,{relaxed:false})) as Record<string,unknown>
   }}finally{await cursor.close()}
  }
- async fileWrite(database:string,name:string,policy:DataFilePolicy,records:AsyncIterable<Record<string,unknown>>,beforeCommit:()=>void,committed:(n:number)=>void){
+ async fileWrite(database:string,name:string,policy:DataFilePolicy,records:AsyncIterable<Record<string,unknown>>,beforeCommit:()=>void,committed:(n:number)=>void,allowEmpty=false){
   validateManagedCollection(name)
   if(protectedDatabase(this.kind,database)||policy==='replace')throw new Error('FILE_TRANSFER: 不支持此数据库或操作')
   const object=(await this.schema(database,[name])).objects[0]
@@ -156,7 +154,7 @@ export class MongoMigrationEndpoint implements MigrationEndpoint{
    batch.push(doc);bytes+=size
   }
   await flush()
-  if(!total)throw new Error('FILE_TRANSFER: 没有可导入的记录')
+  if(!total&&!allowEmpty)throw new Error('FILE_TRANSFER: 没有可导入的记录')
  }
  async copyFrom(source:MigrationEndpoint,sourceDb:string,targetDb:string,object:SchemaObject,options:MigrationCopyOptions,...[read,pending,commitStart,committed]:CopyCallbacks){
   if(!(source instanceof MongoMigrationEndpoint))throw new Error('MIGRATION_UNSUPPORTED: 当前数据库类型尚不支持此操作')

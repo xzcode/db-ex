@@ -123,6 +123,11 @@ if [[ "${DBEX_M12_MIGRATION:-0}" == 1 ]]; then
   if [[ "$kind" == mysql || "$kind" == mariadb ]]; then script=scripts/test-m12-relational.ts; else script=scripts/test-m12-other-engines.ts; fi
   TMPDIR="$fixture" DBEX_M11_ENGINE="$kind" DBEX_M11_PORT="$actual" DBEX_M11_PASSWORD="$password" \
    DBEX_M11_TLS_DIR="$fixture/tls" node --import tsx "$script"
+  if [[ "$kind" == mysql || "$kind" == mariadb || "$kind" == mongodb || "$kind" == clickhouse ]]; then
+    npm run build:main
+    TMPDIR="$fixture" DBEX_M11_ENGINE="$kind" DBEX_M11_PORT="$actual" DBEX_M11_PASSWORD="$password" \
+      DBEX_M11_TLS_DIR="$fixture/tls" node --import tsx scripts/test-m12-cross-engine.ts
+  fi
   if [[ "$kind" == mysql || "$kind" == mariadb || "$kind" == mongodb ]]; then
     TMPDIR="$fixture" DBEX_M11_ENGINE="$kind" DBEX_M11_PORT="$actual" DBEX_M11_PASSWORD="$password" \
       DBEX_M11_TLS_DIR="$fixture/tls" node --import tsx scripts/test-m12-q-server-files.ts

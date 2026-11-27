@@ -38,10 +38,14 @@ async function installBridge(page: Page) {
         calls.push({action:'migrationCatalog',id,database})
         return {kind:id==='mongo'?'mongodb':'mysql',databases:id==='sql2'?['other']:['app'],...(database?{objects:id==='mongo'?[{name:'users',type:'collection',engine:'MongoDB'},{name:'audit',type:'collection',engine:'MongoDB'}]:[{name:'users',type:'BASE TABLE',engine:'InnoDB'},{name:'audit',type:'BASE TABLE',engine:'InnoDB'},{name:'user_view',type:'VIEW'}]}:{})}
       },
+      async migrationFields(id:string,database:string,object:string){calls.push({action:'migrationFields',id,database,object});return id==='mongo'?[{name:'id',type:'Long'},{name:'name',type:'String'}]:[{name:'id',type:'BIGINT'},{name:'name',type:'TEXT'}]},
+      async listMigrationTemplates(){return JSON.parse(localStorage.getItem('mock.migration-templates')||'[]')},
+      async saveMigrationTemplate(input:any,id?:string){const items=JSON.parse(localStorage.getItem('mock.migration-templates')||'[]');const value={id:id||crypto.randomUUID(),name:input.name,request:input.request,updatedAt:Date.now()};localStorage.setItem('mock.migration-templates',JSON.stringify([...items.filter((i:any)=>i.id!==value.id),value]));calls.push({action:'saveMigrationTemplate',input,id});return value},
+      async removeMigrationTemplate(id:string){const items=JSON.parse(localStorage.getItem('mock.migration-templates')||'[]');localStorage.setItem('mock.migration-templates',JSON.stringify(items.filter((i:any)=>i.id!==id)))},
       async previewMigration(request:any){
         calls.push({action:'previewMigration',request})
-        const steps=request.mode==='schema'?[{id:'create',name:'users',action:'create',changes:['MISSING TARGET OBJECT'],sql:['CREATE TABLE other.users (id INT)'],executable:true,transfer:false},{id:'review',name:'audit',action:'review',changes:['MODIFY COLUMN id'],sql:[],executable:false,transfer:false},{id:'keep',name:'keep_me',action:'target-only',changes:['TARGET ONLY OBJECT'],sql:[],executable:false,transfer:false}]:request.objects.map((name:string)=>({id:name,name,action:'copy',changes:['APPEND DATA — STOP ON CONFLICT'],sql:[],executable:true,transfer:true}))
-        return {id:'plan',request,sourceLabel:'Source',targetLabel:'Target',sourceKind:'mysql',targetKind:'mysql',expiresAt:Date.now()+600000,steps}
+        const steps=request.mode==='schema'?[{id:'create',name:'users',action:'create',changes:['MISSING TARGET OBJECT'],sql:['CREATE TABLE other.users (id INT)'],executable:true,transfer:false},{id:'review',name:'audit',action:'review',changes:['MODIFY COLUMN id'],sql:[],executable:false,transfer:false},{id:'keep',name:'keep_me',action:'target-only',changes:['TARGET ONLY OBJECT'],sql:[],executable:false,transfer:false}]:request.objects.map((name:string)=>({id:name,name,targetName:request.mappings?.find((m:any)=>m.source===name)?.target,action:'copy',changes:['APPEND DATA — STOP ON CONFLICT'],sql:[],executable:true,transfer:true}))
+        return {id:'plan',request,sourceLabel:'Source',targetLabel:'Target',sourceKind:configs.find(c=>c.id===request.source.connectionId)?.kind||'mysql',targetKind:configs.find(c=>c.id===request.target.connectionId)?.kind||'mysql',expiresAt:Date.now()+600000,steps}
       },
       async runMigration(id:string,steps:string[]){
         calls.push({action:'runMigration',id,steps})
@@ -1531,6 +1535,35 @@ test('M12 advanced transfer policy and condition require explicit selection befo
  await dialog.getByLabel('写入模式',{exact:true}).selectOption('replace')
  await expect(dialog.getByLabel('源记录条件',{exact:true})).toHaveCount(0)
  await expect(execute).toBeDisabled()
+})
+
+test('M12 cross-engine mapping and named templates require an explicit confirmed plan',async({page})=>{
+ await page.getByRole('button',{name:'数据传输',exact:true}).click()
+ const dialog=page.getByRole('dialog',{name:'数据库同步与迁移'})
+ const source=dialog.locator('.migration-endpoint').nth(0),target=dialog.locator('.migration-endpoint').nth(1)
+ await source.locator('select').nth(0).selectOption('sql');await source.locator('select').nth(1).selectOption('app')
+ await dialog.getByLabel('传输模式',{exact:true}).selectOption('data')
+ await target.locator('select').nth(0).selectOption('mongo');await target.locator('select').nth(1).selectOption('app')
+ await dialog.locator('.migration-object-list label').filter({hasText:'users'}).getByRole('checkbox').check()
+ await dialog.getByLabel('目标对象',{exact:true}).selectOption('audit')
+ await dialog.getByRole('button',{name:'加载字段',exact:true}).click()
+ await expect(dialog.getByLabel('源字段 1',{exact:true})).toHaveValue('id')
+ await dialog.getByLabel('目标字段 1',{exact:true}).fill('identifier')
+ await dialog.getByLabel('类型转换 1',{exact:true}).selectOption('text')
+ await dialog.getByLabel('SQL 条件',{exact:true}).fill('id >= ?')
+ await dialog.getByLabel('SQL 参数 JSON 数组',{exact:true}).fill('[2]')
+ await dialog.getByLabel('配置名称',{exact:true}).fill('SQL to Mongo')
+ await dialog.getByRole('button',{name:'另存当前配置',exact:true}).click()
+ await expect(dialog.getByLabel('迁移配置',{exact:true}).locator('option')).toHaveCount(2)
+ await dialog.getByLabel('目标字段 1',{exact:true}).fill('changed')
+ await dialog.getByRole('button',{name:'载入配置',exact:true}).click()
+ await expect(dialog.getByLabel('目标字段 1',{exact:true})).toHaveValue('identifier')
+ await dialog.getByRole('button',{name:'比较 / 生成计划',exact:true}).click()
+ await expect(dialog.locator('.migration-plan-list tbody tr')).toContainText('users → audit')
+ await expect.poll(()=>page.evaluate(()=>((window as any).__dbexCalls as any[]).filter(c=>c.action==='previewMigration').at(-1)?.request.mappings[0])).toMatchObject({source:'users',target:'audit',fields:[{source:'id',target:'identifier',conversion:'text'},{source:'name',target:'name',conversion:'auto'}],predicate:{text:'id >= ?',parameters:[2]}})
+ await expect(dialog.getByRole('button',{name:'确认执行',exact:true})).toBeDisabled()
+ await dialog.locator('.migration-plan-list tbody tr').first().getByRole('checkbox').check()
+ await expect(dialog.getByRole('button',{name:'确认执行',exact:true})).toBeEnabled()
 })
 
 test('UI refinement: catalog selection previews metadata and DDL without opening a data tab; inspector follows global state',async({page})=>{

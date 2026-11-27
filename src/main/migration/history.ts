@@ -24,7 +24,7 @@ export function normalizeMigrationHistory(input:unknown):MigrationJob[]{
    rowsRead:count(v.rowsRead),rowsCommitted:count(v.rowsCommitted),rowsPending:count(v.rowsPending),bytesRead:count(v.bytesRead),
    rowsKnown:v.rowsKnown!==false,sourceKind:['mysql','mariadb','sqlite','mongodb','redis','clickhouse'].includes(String(v.sourceKind))?v.sourceKind as DatabaseKind:undefined,sourceLabel:text(v.sourceLabel,1500),targetLabel:text(v.targetLabel,1500),
    policy:['append','upsert','replace'].includes(String(v.policy))?v.policy as MigrationPolicy:'append',selectedObjects:names(v.selectedObjects),
-   error:text(v.error,1000)
+   requestKey:text(v.requestKey,64),sourceIdentityKey:text(v.sourceIdentityKey,64),targetIdentityKey:text(v.targetIdentityKey,64),retryable:names(v.retryable),error:text(v.error,1000)
   }
  })
 }
@@ -40,7 +40,7 @@ export class MigrationHistory{
   let changed=false
   for(const job of entries){
    if(job.state==='running'){
-    job.state='uncertain';job.phase='finished';job.endedAt=Date.now()
+    job.state='uncertain';job.phase='finished';job.endedAt=Date.now();job.retryable=[]
     job.error='MIGRATION_INTERRUPTED: 上次任务异常中断，请核对目标后重新比较'
     changed=true
    }

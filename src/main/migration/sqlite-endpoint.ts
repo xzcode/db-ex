@@ -54,8 +54,8 @@ export class SqliteMigrationEndpoint implements MigrationEndpoint{
  applyStep(step:MigrationStep){return this.worker.call<void>('apply',[step.sql])}
  async fileColumnTypes(database:string,name:string){if(database!=='main')throw new Error('FILE_TRANSFER: 对象不存在');return this.worker.call<{name:string;type:string}[]>('fileColumnTypes',[name])}
  async fileFields(database:string,name:string){if(database!=='main')throw new Error('FILE_TRANSFER: 对象不存在');return this.worker.call<string[]>('fileFields',[name])}
- async *fileRows(database:string,name:string,selected?:string[],filter?:BrowseFilter){
-  await this.startSourceSnapshot()
+ async *fileRows(database:string,name:string,selected?:string[],filter?:BrowseFilter,snapshotStarted=false){
+  if(!snapshotStarted)await this.startSourceSnapshot()
   const columns=selected||await this.fileFields(database,name)
   await this.worker.call('beginFileRead',[name,columns,filter])
   for(;;){
@@ -64,7 +64,7 @@ export class SqliteMigrationEndpoint implements MigrationEndpoint{
    if(batch.done)break
   }
  }
- async fileWrite(database:string,name:string,columns:string[],policy:DataFilePolicy,records:AsyncIterable<Record<string,unknown>>,beforeCommit:()=>void,committed:(n:number)=>void){
+ async fileWrite(database:string,name:string,columns:string[],policy:DataFilePolicy,records:AsyncIterable<Record<string,unknown>>,beforeCommit:()=>void,committed:(n:number)=>void,allowEmpty=false){
   const object=(await this.schema(database,[name])).objects[0],info=sqliteShape(object)
   if(!info?.safe)throw new Error('FILE_TRANSFER: 目标结构需要人工审核')
   await this.prepareTarget();await this.worker.call('beginTarget',[name,info,policy,columns])
@@ -79,7 +79,7 @@ export class SqliteMigrationEndpoint implements MigrationEndpoint{
    if(batch.length&&(batch.length>=500||size+bytes>4*1024*1024))await flush()
    batch.push(row);size+=bytes
   }
-  await flush();if(!total)throw new Error('FILE_TRANSFER: 没有可导入的记录')
+  await flush();if(!total&&!allowEmpty)throw new Error('FILE_TRANSFER: 没有可导入的记录')
   beforeCommit();await this.worker.call('commit');committed(total)
  }
  async copyFrom(source:MigrationEndpoint,sourceDb:string,targetDb:string,object:SchemaObject,options:MigrationCopyOptions,...[read,pending,commitStart,committed]:CopyCallbacks){

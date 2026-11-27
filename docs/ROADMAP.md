@@ -328,3 +328,14 @@ file round trips. New candidate adds execution metadata/history dialog,
 calendar/precise time editing and exact read-only SQL binary previews.
 SQL query edit/retarget wiring and other remaining advanced features are
 not claimed complete. See Q1_Q5_REFINEMENT.md.
+
+### M12 final implementation candidate — 2026-11-27
+
+The scoped M12.1–M12.7 implementation is complete: six native engine
+adapters, safe additive schema/dependency synchronization, explicit
+cross-engine existing-object field/type mappings, source predicates,
+encrypted named migration templates, target locking and object-level
+checkpoint continuation. The M12.8 final remote/release gate remains
+pending on the exact candidate. Complex/destructive DDL stays review-only;
+row-difference synchronization belongs to M13. See M12_MIGRATION.md
+for scope, actual local evidence and limitations.

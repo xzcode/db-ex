@@ -188,3 +188,5 @@ try{
 
 
 }finally{await sessions.closeAll();await service.closeAll();s.close();t.close();await rm(dir,{recursive:true,force:true})}
+
+await import('./test-m12-final-sqlite')

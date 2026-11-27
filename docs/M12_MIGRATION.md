@@ -123,3 +123,75 @@ parallelism and resumable checkpoints, exact cross-server/version matrix
 and release upgrade acceptance. There is no automatic restart/resume.
 The stable release remains v1.0.0; the combined M12/UI candidate must pass
 its full CI, and remaining scope must be reviewed before v1.1.0 release.
+
+## M12 final implementation candidate — 2026-11-27
+
+This candidate completes the scoped M12 implementation. The older sections
+above describe historical stages, not the current feature list.
+
+| Stage | Implemented scope |
+|---|---|
+| M12.1 | Independent connections, immutable one-use plans, server identity and schema checks, encrypted job history, explicit object checkpoints |
+| M12.2 | SQL-family safe additive DDL, insertion of missing columns in their source order, ordinary indexes, opt-in same-engine foreign-key dependency ordering |
+| M12.3 | SQLite, MongoDB and ClickHouse native schema adapters with conservative review-only handling of unsupported objects |
+| M12.4 | SQL-family and SQLite bounded-batch copy, matching primary-key upsert, transactional replacement, source filtering and rollback |
+| M12.5 | MongoDB raw BSON, Redis native payload and expiry, ClickHouse native stream, per-batch/key acknowledgement |
+| M12.6 | Existing-object rename and explicit field/type mapping among MySQL, MariaDB, SQLite, MongoDB and ClickHouse; Redis-to-Redis Key rename; bound SQL predicates, MongoDB EJSON filters and typed conditions |
+| M12.7 | Mapping editor, dependency selection, encrypted named configuration CRUD, progress/history/cancellation and explicitly confirmed resume of known-safe unfinished objects |
+| M12.8 | Local final acceptance, extended real cross-engine CI, prior full CI and packaged macOS smoke; exact-candidate remote acceptance/release gate remains open |
+
+### Safety and scope decisions
+
+- Cross-engine data mappings use existing target objects; no guessed
+  cross-engine schema translation, destructive automatic DDL, arbitrary
+  procedure/trigger replay, or cross-engine Redis coercion. Mapping
+  conversions enforce numeric ranges, decimal scale, binary subtype,
+  supported types and required destination fields. Explicit text conversion
+  can preserve large numeric values when the destination has no matching
+  exact numeric type. The mapping UI and native confirmation expose
+  configured source/target names and field conversions.
+- Opt-in ordinary same-engine SQL foreign-key creation requires referenced
+  keys and parent objects in the plan; parents precede children. Cycles,
+  external references and unsupported definitions remain manual-review.
+  Safe additive structure+data plans can alter then copy, across supported
+  native adapters. Schema changes commit independently.
+- Independent windows may run concurrent migrations to distinct targets.
+  A physical target database is locked per active job. The previous
+  fixed total job deadline and global concurrent-job count cap are removed;
+  transfer memory is still bounded, metadata/connection checks retain
+  timeouts, and cancellation remains explicit. Native ClickHouse copy
+  streams without the former fixed overall byte/row/time cap.
+- Saved migration configurations are encrypted separately from the
+  metadata-only history. Resume matches the original configuration and
+  server identity, consumes selected checkpoints before writing, compares
+  fresh schemas, and requires a new native confirmation. Transactional
+  rollback and untouched objects may be eligible; acknowledged/uncertain
+  writes, nontransactional in-progress objects and interrupted running
+  jobs are not automatically replayed. Foreign-key dependency jobs require
+  a fresh full plan rather than shortcut resume. This is object-level
+  continuation, not a durable row-offset or distributed transaction.
+- External concurrent DDL or changes to source data after comparison are
+  still possible; compare again and use dedicated migration accounts.
+  M13 row-difference synchronization is a separate milestone.
+
+### Final candidate local evidence
+
+- Real MariaDB 10.11.14 ↔ SQLite: mapped UInt64, decimal, binary, text
+  and renamed fields; opt-in foreign-key creation and parent-first copy.
+- Real MongoDB 8.0.12 ↔ SQLite: mapped ObjectId/Decimal128 and byte-exact
+  BSON for the supported fixture.
+- Real ClickHouse 25.8.33.6 ↔ SQLite: exact typed scalar round-trip,
+  including binary values.
+- SQLite: mapped multi-object transfer, transactional rollback,
+  persisted checkpoint re-open and explicit resume excluding successful
+  objects, additive structure+data.
+- 13 focused migration/history/mapping tests and five M12 Playwright
+  scenarios passed. Prior candidate ef630ea passed all seven M12 real
+  fixture jobs, Verify DB EX, and macOS ad-hoc package verification.
+- Cross-engine SQL-family/MongoDB/ClickHouse round-trip and Redis
+  Key rename fixtures are now included in the M12 remote acceptance
+  pipeline. Do not infer that every engine pair/version has independently
+  passed. No user production database used.
+
+Keep stable master at v1.0.0 until the exact final candidate completes
+the required remote checks and release upgrade validation.

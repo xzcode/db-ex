@@ -1,5 +1,5 @@
 import {randomUUID} from 'node:crypto'
-import {addAbortSignal} from 'node:stream'
+import {addAbortSignal,Readable} from 'node:stream'
 import type {ClickHouseClient,ClickHouseSettings} from '@clickhouse/client'
 import type {ConnectionConfig} from '../../shared/types'
 import type {MigrationCatalog,MigrationMode,MigrationStep,MigrationCopyOptions} from '../../shared/migration'
@@ -8,7 +8,8 @@ import {validateConnection} from '../connections/validation'
 import {createTransport,type ConnectionTransport} from '../connections/transport'
 import {loadConnectionTls} from '../connections/tls-material'
 import {openClickHouseClients} from '../connections/clickhouse-client'
-import {byteBudget,MAX_TRANSFER_BYTES} from '../operations/clickhouse-transfer'
+import {sqlFileValue} from '../file-transfer/records'
+import {byteBudget} from '../operations/clickhouse-transfer'
 import type {SchemaObject,SchemaSnapshot} from './mysql-schema'
 import {checkedSnapshot,limitObjectNames,requireActive,reviewStep,type MigrationEndpoint,type CopyCallbacks} from './endpoint'
 
@@ -39,12 +40,13 @@ export function planClickHouseMigration(source:SchemaSnapshot,target:SchemaSnaps
   if(!x?.safe||d&&!y?.safe)return {...step,changes:['SPECIAL OBJECT / CONSTRAINT / TRIGGER — MANUAL REVIEW']}
   if(!d)return mode==='data'?{...step,changes:['MISSING TARGET OBJECT']}:{...step,action:'create',changes:['MISSING TARGET OBJECT'],sql:[createSql(targetDb,name,x)],executable:true,transfer:mode==='structure-data'}
   if(!y)return step
-  if(mode!=='schema')return equal(x,y)?{...step,action:'copy',changes:['APPEND DATA — NONTRANSACTIONAL'],executable:true,transfer:true}:{...step,changes:['COLUMN DEFINITION OR TABLE OPTIONS DIFFER']}
+  if(mode!=='schema'&&equal(x,y))return {...step,action:'copy',changes:['APPEND DATA — NONTRANSACTIONAL'],executable:true,transfer:true}
+  if(mode==='data')return {...step,changes:['COLUMN DEFINITION OR TABLE OPTIONS DIFFER']}
   if(equal(x,y))return {...step,action:'same'}
   const appended=x.columns.slice(y.columns.length),samePrefix=y.columns.every((c,i)=>JSON.stringify(c)===JSON.stringify(x.columns[i]))
   if(!samePrefix||JSON.stringify({...x,columns:[]})!==JSON.stringify({...y,columns:[]})||appended.some(c=>!c.type.startsWith('Nullable(')))return {...step,changes:['COLUMN DEFINITION OR TABLE OPTIONS DIFFER']}
   const sql=appended.map(c=>'ALTER TABLE '+qualified(targetDb,name)+' ADD COLUMN '+quote(c.name)+' '+c.type)
-  return {...step,action:sql.length?'alter':'review',sql,executable:sql.length>0,changes:appended.map(c=>'ADD COLUMN '+c.name)}
+  return {...step,action:sql.length?'alter':'review',sql,executable:sql.length>0,transfer:mode==='structure-data'&&sql.length>0,changes:appended.map(c=>'ADD COLUMN '+c.name)}
  })
 }
 const settings:ClickHouseSettings={max_execution_time:110,max_threads:2,max_insert_threads:'1',max_memory_usage:String(256*1024*1024),wait_end_of_query:1}
@@ -62,7 +64,7 @@ export class ClickHouseMigrationEndpoint implements MigrationEndpoint{
   let pool:Awaited<ReturnType<typeof openClickHouseClients>>|undefined
   try{
    pool=await openClickHouseClients(config,transport,await loadConnectionTls(config))
-   const client=pool.make('default',130000)
+   const client=pool.make('default',0)
    // serverUUID() is stable across aliases; require it rather than guessing.
    const result=await client.query({query:'SELECT toString(serverUUID()) AS identity',format:'JSONEachRow',abort_signal:signal})
    const rows=await result.json<{identity:string}>()
@@ -109,14 +111,68 @@ export class ClickHouseMigrationEndpoint implements MigrationEndpoint{
  async startSourceSnapshot(){}
  async prepareTarget(){}
  async applyStep(step:MigrationStep){for(const query of step.sql){requireActive(this.signal);await this.client.command({query,abort_signal:this.signal,clickhouse_settings:{...settings,readonly:'0'}})}}
+ async *mappedRows(database:string,name:string,fields:string[],filter?:{field:string;value:string}){
+  const info=shape((await this.schema(database,[name])).objects[0])
+  if(!info?.safe||!fields.length||fields.some(f=>!info.columns.some(c=>c.name===f))||filter&&!info.columns.some(c=>c.name===filter.field))throw Error('MIGRATION_MAPPING: 字段或对象映射无效')
+  const binary=(type:string)=>{const t=type.startsWith('Nullable(')?type.slice(9,-1):type;return t==='String'||/^FixedString\(\d+\)$/.test(t)}
+  const expressions=fields.map(f=>(binary(info.columns.find(c=>c.name===f)!.type)?'hex(':'toString(')+quote(f)+')')
+  const where=filter?' WHERE toString('+quote(filter.field)+') = {value:String}':''
+  const result=await this.client.exec({query:'SELECT '+expressions.join(', ')+' FROM '+qualified(database,name)+where+' FORMAT JSONCompactEachRow',query_params:filter?{value:filter.value}:undefined,query_id:randomUUID(),abort_signal:this.signal,clickhouse_settings:{...settings,readonly:'1',max_execution_time:0,cancel_http_readonly_queries_on_client_close:1}})
+  const decoder=new TextDecoder('utf-8',{fatal:true});let pending=''
+  try{
+   for await(const chunk of result.stream){
+    requireActive(this.signal);pending+=decoder.decode(Buffer.from(chunk),{stream:true})
+    for(;;){
+     const at=pending.indexOf('\n');if(at<0)break
+     const line=pending.slice(0,at);pending=pending.slice(at+1)
+     if(!line.trim())continue
+     if(Buffer.byteLength(line)>8*1024*1024)throw Error('MIGRATION_LIMIT: 单行数据超过传输批次限制')
+     const values:unknown=JSON.parse(line)
+     if(!Array.isArray(values)||values.length!==fields.length||values.some(v=>v!==null&&typeof v!=='string'))throw Error('MIGRATION_TYPE: 无法无损传输该字段值')
+     yield Object.fromEntries(fields.map((f,i)=>{const v=values[i];if(v===null)return [f,null];if(binary(info.columns.find(c=>c.name===f)!.type)){if(!/^(?:[a-fA-F0-9]{2})*$/.test(v))throw Error('MIGRATION_TYPE: 无法无损传输该字段值');return [f,{$dbexBinary:Buffer.from(v,'hex').toString('base64')}]}return [f,v]}))
+    }
+    if(Buffer.byteLength(pending)>8*1024*1024)throw Error('MIGRATION_LIMIT: 单行数据超过传输批次限制')
+   }
+   pending+=decoder.decode();if(pending.trim())throw Error('MIGRATION_TYPE: 无法无损传输该字段值')
+  }finally{result.stream.destroy()}
+ }
+ async mappedWrite(database:string,name:string,fields:string[],records:AsyncIterable<Record<string,unknown>>,beforeCommit:()=>void,committed:(n:number)=>void){
+  const info=shape((await this.schema(database,[name])).objects[0])
+  if(!info?.safe||!fields.length||fields.some(f=>!info.columns.some(c=>c.name===f)))throw Error('MIGRATION_MAPPING: 字段或对象映射无效')
+  const cols=fields.map(f=>info.columns.find(c=>c.name===f)!)
+  const binary=(type:string)=>{const t=type.startsWith('Nullable(')?type.slice(9,-1):type;return t==='String'||/^FixedString\(\d+\)$/.test(t)}
+  const input=cols.map((_,i)=>'c'+i+' Nullable(String)').join(', ')
+  const expressions=cols.map((c,i)=>'accurateCast('+(binary(c.type)?'unhex(c'+i+')':'c'+i)+", '"+c.type.replaceAll("'","''")+"')")
+  const query='INSERT INTO '+qualified(database,name)+' ('+fields.map(quote).join(', ')+') SELECT '+expressions.join(', ')+" FROM input('"+input+"') FORMAT JSONEachRow"
+  let batch:string[]=[],bytes=0
+  const flush=async()=>{
+   if(!batch.length)return
+   requireActive(this.signal);beforeCommit()
+   const stream=Readable.from(batch)
+   try{
+    const result=await this.client.exec({query,values:stream,query_id:randomUUID(),abort_signal:this.signal,clickhouse_settings:{...settings,readonly:'0',max_execution_time:0,async_insert:0,input_format_allow_errors_num:'0',input_format_allow_errors_ratio:0}})
+    for await(const chunk of result.stream){if(String(chunk).trim()){result.stream.destroy();throw Error('MIGRATION_WRITE: 写入结果与预期不一致，已停止')}}
+    committed(batch.length);batch=[];bytes=0
+   }finally{stream.destroy()}
+  }
+  for await(const row of records){
+   requireActive(this.signal)
+   const values=Object.fromEntries(cols.map((c,i)=>{const value=sqlFileValue(row[c.name]);return ['c'+i,value===null?null:Buffer.isBuffer(value)?value.toString('hex'):String(value)]}))
+   const line=JSON.stringify(values)+'\n',size=Buffer.byteLength(line)
+   if(size>8*1024*1024)throw Error('MIGRATION_LIMIT: 单行数据超过传输批次限制')
+   if(batch.length&&(batch.length>=500||bytes+size>4*1024*1024))await flush()
+   batch.push(line);bytes+=size
+  }
+  await flush()
+ }
  async copyFrom(source:MigrationEndpoint,sourceDb:string,targetDb:string,object:SchemaObject,options:MigrationCopyOptions,...[read,pending,commitStart,committed]:CopyCallbacks){
   if(options.policy!=='append'||options.condition||!(source instanceof ClickHouseMigrationEndpoint))throw new Error('MIGRATION_UNSUPPORTED: 当前数据库类型尚不支持此操作')
   const x=shape(object),actual=shape((await source.schema(sourceDb,[object.name])).objects[0]),target=shape((await this.schema(targetDb,[object.name])).objects[0])
   if(!x?.safe||!actual?.safe||!target?.safe||!equal(x,actual)||!equal(x,target))throw new Error('MIGRATION_STALE: 结构已变化，请重新比较')
   const cols=x.columns.map(c=>quote(c.name)).join(', ')
-  const signal=AbortSignal.any([this.signal,AbortSignal.timeout(120000)])
-  const result=await source.client.exec({query:'SELECT '+cols+' FROM '+qualified(sourceDb,object.name)+' FORMAT Native',query_id:randomUUID(),abort_signal:signal,clickhouse_settings:{...settings,readonly:'1',max_result_bytes:String(MAX_TRANSFER_BYTES),max_result_rows:'10000000',result_overflow_mode:'throw',cancel_http_readonly_queries_on_client_close:1}})
-  const budget=byteBudget(MAX_TRANSFER_BYTES,bytes=>read(0,bytes))
+  const signal=this.signal
+  const result=await source.client.exec({query:'SELECT '+cols+' FROM '+qualified(sourceDb,object.name)+' FORMAT Native',query_id:randomUUID(),abort_signal:signal,clickhouse_settings:{...settings,readonly:'1',max_execution_time:0,result_overflow_mode:'throw',cancel_http_readonly_queries_on_client_close:1}})
+  const budget=byteBudget(Number.MAX_SAFE_INTEGER,bytes=>read(0,bytes))
   const stream=addAbortSignal(signal,result.stream)
   stream.on('error',error=>budget.stream.destroy(error));budget.stream.on('error',()=>stream.destroy())
   let ended=false;stream.once('end',()=>{ended=true})
@@ -126,7 +182,7 @@ export class ClickHouseMigrationEndpoint implements MigrationEndpoint{
   stream.pipe(budget.stream)
   try{
    pending(0);commitStart()
-   const response=await this.client.exec({query:'INSERT INTO '+qualified(targetDb,object.name)+' ('+cols+') FORMAT Native',values:budget.stream,query_id:randomUUID(),abort_signal:signal,clickhouse_settings:{...settings,readonly:'0',async_insert:0,input_format_allow_errors_num:'0',input_format_allow_errors_ratio:0}})
+   const response=await this.client.exec({query:'INSERT INTO '+qualified(targetDb,object.name)+' ('+cols+') FORMAT Native',values:budget.stream,query_id:randomUUID(),abort_signal:signal,clickhouse_settings:{...settings,readonly:'0',max_execution_time:0,async_insert:0,input_format_allow_errors_num:'0',input_format_allow_errors_ratio:0}})
    for await(const chunk of response.stream){if(String(chunk).trim()){response.stream.destroy();throw new Error('MIGRATION_WRITE: 写入结果与预期不一致，已停止')}}
    if(!ended||!budget.stream.readableEnded)throw new Error('MIGRATION_WRITE: 写入结果与预期不一致，已停止')
    committed(0)
