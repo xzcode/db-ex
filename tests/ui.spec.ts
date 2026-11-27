@@ -134,6 +134,11 @@ async function installBridge(page: Page) {
         return { columns: [], rows: [], affectedRows: 1, message: '操作已完成' }
       },
       async clickhouseTransfer(id:string,input:any){calls.push({sessionId:id,action:'clickhouseTransfer',...input});return {bytes:1024}},
+      async executeReadBatch(id:string,request:any){calls.push({action:'executeReadBatch',id,request});return {total:2,items:[{sql:'SELECT 1',result:grid([{n:'1'}])},{sql:'SELECT 2',result:grid([{n:'2'}])}]}},
+      async listFilePresets(id:string,database:string,entity:string,direction:string){return JSON.parse(localStorage.getItem('mock.file-presets')||'[]').filter((p:any)=>p.connectionId===id&&p.database===database&&p.entity===entity&&p.direction===direction)},
+      async saveFilePreset(id:string,database:string,entity:string,direction:string,draft:any,presetId?:string){const all=JSON.parse(localStorage.getItem('mock.file-presets')||'[]');const item={...draft,id:presetId||crypto.randomUUID(),connectionId:id,database,entity,direction,kind:sessions[id].kind,updatedAt:new Date().toISOString()};localStorage.setItem('mock.file-presets',JSON.stringify([item,...all.filter((x:any)=>x.id!==item.id)]));return item},
+      async removeFilePreset(id:string,database:string,entity:string,direction:string,presetId:string){const all=JSON.parse(localStorage.getItem('mock.file-presets')||'[]');localStorage.setItem('mock.file-presets',JSON.stringify(all.filter((p:any)=>p.id!==presetId||p.connectionId!==id||p.database!==database||p.entity!==entity||p.direction!==direction)))},
+      async exportFileTransferReport(id:string){calls.push({action:'exportFileTransferReport',id});return true},
       async executeQuery(id:string,op:any){calls.push({action:'isolatedQuery',id});return (window as any).dbex.execute(id,op)},
       async cancelQuery(id:string){calls.push({action:'cancelQuery',id});return true},
       async listBrowseProfiles(id:string,database:string,entity:string){return JSON.parse(localStorage.getItem('mock.browse-profiles')||'[]').filter((p:any)=>p.connectionId===id&&p.database===database&&p.entity===entity)},
@@ -1790,4 +1795,81 @@ test('Q5: file preview, mapped import and completed job progress',async({page})=
  await expect(dialog).toContainText('操作已完成')
  await expect(dialog).toContainText('501')
  await dialog.getByRole('button',{name:'关闭',exact:true}).click()
+})
+
+
+test('Q follow-up: nested BSON tree rename and add retain the original document until save',async({page})=>{
+ await connect(page,'Mongo Local');await openUsers(page)
+ const w=page.locator('.workbench:visible')
+ await w.getByRole('button',{name:'只读 · 启用写入',exact:true}).click()
+ await w.locator('tr[data-row-index="0"] [data-grid-field="name"]').click()
+ await w.getByRole('button',{name:'编辑',exact:true}).click()
+ const editor=page.getByRole('dialog',{name:'编辑文档'})
+ await editor.getByRole('button',{name:'编辑文档树',exact:true}).click()
+ const tree=editor.locator('.bson-tree-editor')
+ await tree.getByRole('button',{name:'nested',exact:true}).click()
+ await tree.locator('tr[data-tree-path]').filter({hasText:'values'}).click()
+ await tree.getByRole('button',{name:'重命名字段',exact:true}).click()
+ await tree.getByLabel('字段名称',{exact:true}).fill('renamed')
+ await tree.getByRole('button',{name:'暂存修改',exact:true}).click()
+ await tree.locator('tr[data-tree-path]').filter({hasText:'nested'}).click()
+ await tree.getByRole('button',{name:'新增节点',exact:true}).click()
+ await tree.getByLabel('字段名称',{exact:true}).fill('wide')
+ await tree.getByLabel('节点值',{exact:true}).fill('Long("9007199254740993")')
+ await tree.getByRole('button',{name:'暂存修改',exact:true}).click()
+ expect(await page.evaluate(()=> (window as any).__dbexCalls.some((x:any)=>x.action==='mongo.replace'))).toBe(false)
+ await editor.getByRole('button',{name:'更新',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=>{const x=(window as any).__dbexCalls.filter((x:any)=>x.action==='mongo.replace').at(-1);return x?JSON.parse(x.document).nested:null})).toEqual({renamed:[{$numberLong:'99'},'99'],wide:{$numberLong:'9007199254740993'}})
+})
+
+test('Q follow-up: primary-key locator restores previous filter and continuous preview appends',async({page})=>{
+ await connect(page,'Mongo Local');await openUsers(page)
+ const w=page.locator('.workbench:visible')
+ await w.getByRole('button',{name:'定位记录',exact:true}).click()
+ const locate=page.getByRole('dialog',{name:'定位记录'})
+ await locate.getByLabel('_id',{exact:true}).fill('64b000000000000000000001')
+ await locate.getByRole('button',{name:'定位记录',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=>JSON.parse((window as any).__dbexCalls.filter((x:any)=>x.action==='mongo.find').at(-1)?.filter||'{}'))).toMatchObject({_id:{$eq:{$oid:'64b000000000000000000001'}}})
+ await w.getByRole('button',{name:'返回原筛选',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mongo.find').at(-1)?.filter)).toBe('{}')
+ await w.getByRole('button',{name:'连续浏览',exact:true}).click()
+ await w.getByRole('button',{name:'加载更多',exact:true}).click()
+ await expect(w.locator('.continuous-bar')).toContainText('6')
+ await expect(w.locator('.data-table tbody tr[data-row-index]')).toHaveCount(6)
+ await w.getByRole('button',{name:'退出连续浏览',exact:true}).click()
+ await expect(w.locator('.continuous-bar')).toHaveCount(0)
+ await expect(w.locator('.data-table tbody tr[data-row-index]')).toHaveCount(3)
+})
+
+test('Q follow-up: multi-result read batch and immutable result tabs',async({page})=>{
+ await connect(page,'MySQL Local')
+ await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ await page.locator('[data-object-kind="query-folder"]').click()
+ await page.locator('.object-list-panel:visible').getByRole('button',{name:/新建查询/}).click()
+ const editor=page.locator('.saved-query-editor:visible')
+ await replaceEditor(page,'.saved-query-editor:visible .query-editor .monaco-editor','SELECT 1; SELECT 2')
+ await editor.getByRole('button',{name:'批量查询（只读）',exact:true}).click()
+ await expect(editor.getByRole('button',{name:'语句结果 2',exact:true})).toBeVisible()
+ await editor.getByRole('button',{name:'语句结果 2',exact:true}).click()
+ await expect(editor.locator('.query-result-panel .data-table tbody')).toContainText('2')
+ await expect(editor.getByRole('button',{name:'下一页',exact:true})).toBeDisabled()
+ await expect(editor.getByRole('button',{name:'编辑',exact:true})).toBeDisabled()
+})
+
+test('Q follow-up: named file preset saves format and mapping, requires fresh preview',async({page})=>{
+ await connect(page,'MySQL Local');await openUsers(page)
+ const w=page.locator('.workbench:visible')
+ await w.getByRole('button',{name:'流式导入向导',exact:true}).click()
+ const d=page.getByRole('dialog',{name:'流式导入向导'})
+ await d.getByLabel('文件编码',{exact:true}).selectOption('gb18030')
+ await d.getByRole('button',{name:'选择数据文件',exact:true}).click()
+ await d.getByLabel('配置名称',{exact:true}).fill('Legacy encoding')
+ await d.getByRole('button',{name:'另存当前配置',exact:true}).click()
+ await expect(d.getByLabel('文件传输配置',{exact:true}).locator('option')).toContainText(['文件传输配置','Legacy encoding'])
+ await d.getByRole('button',{name:'应用配置',exact:true}).click()
+ await expect(d.locator('.file-sample')).toHaveCount(0)
+ await expect(d.getByRole('button',{name:'确认执行',exact:true})).toBeDisabled()
+ await expect(d.getByLabel('文件编码',{exact:true})).toHaveValue('gb18030')
+ await d.getByRole('button',{name:'选择数据文件',exact:true}).click()
+ await expect(d.locator('.file-sample')).toContainText('New record')
 })

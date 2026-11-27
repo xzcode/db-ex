@@ -1,5 +1,5 @@
 import {open,type FileHandle} from 'node:fs/promises'
-import type {DataFileFormat,FieldMapping,FileTransferRequest} from '../../shared/file-transfer'
+import type {DataFileFormat,DataFileEncoding,FieldMapping,FileTransferRequest} from '../../shared/file-transfer'
 import {dataFileName} from '../../shared/file-transfer'
 import {checkAborted} from '../operations/common'
 export const RECORD_BYTES=32*1024*1024 // per record, not whole-file size
@@ -7,8 +7,8 @@ export interface FileIdentity{dev:number;ino:number;size:number;mtimeMs:number}
 export function identity(s:FileIdentity):FileIdentity{return {dev:s.dev,ino:s.ino,size:s.size,mtimeMs:s.mtimeMs}}
 export function sameFile(a:FileIdentity,b:FileIdentity){return a.dev===b.dev&&a.ino===b.ino&&a.size===b.size&&a.mtimeMs===b.mtimeMs}
 const invalid=()=>new Error('FILE_TRANSFER: 文件记录格式无效')
-async function* textChunks(file:FileHandle,signal?:AbortSignal,onBytes?:(n:number)=>void){
- const decoder=new TextDecoder('utf-8',{fatal:true})
+async function* textChunks(file:FileHandle,signal?:AbortSignal,onBytes?:(n:number)=>void,encoding:DataFileEncoding='utf-8'){
+ const decoder=new TextDecoder(encoding,{fatal:true})
  const buffer=Buffer.allocUnsafe(64*1024);let position=0
  while(true){checkAborted(signal);const {bytesRead}=await file.read(buffer,0,buffer.length,position);if(!bytesRead)break;position+=bytesRead;onBytes?.(bytesRead);yield decoder.decode(buffer.subarray(0,bytesRead),{stream:true})}
  const tail=decoder.decode();if(tail)yield tail
@@ -41,8 +41,8 @@ function checkedRecord(value:unknown):Record<string,unknown>{
  walk(value)
  return value as Record<string,unknown>
 }
-export async function* readFileRecords(file:FileHandle,format:DataFileFormat,delimiter:string,signal?:AbortSignal,onBytes?:(n:number)=>void){
- const chunks=textChunks(file,signal,onBytes)
+export async function* readFileRecords(file:FileHandle,format:DataFileFormat,delimiter:string,signal?:AbortSignal,onBytes?:(n:number)=>void,encoding:DataFileEncoding='utf-8'){
+ const chunks=textChunks(file,signal,onBytes,encoding)
  if(format==='csv'){
   let headers:string[]|undefined
   for await(const row of csvRecords(chunks,delimiter,signal)){
@@ -62,12 +62,12 @@ export async function* readFileRecords(file:FileHandle,format:DataFileFormat,del
   if(pending.trim())yield checkedRecord(JSON.parse(pending))
  }
 }
-export async function inspectFile(path:string,format:DataFileFormat,delimiter:string){
+export async function inspectFile(path:string,format:DataFileFormat,delimiter:string,encoding:DataFileEncoding='utf-8'){
  const file=await open(path,'r')
  try{
   const stat=await file.stat();if(!stat.isFile()||!stat.size)throw invalid()
   const sample:Record<string,unknown>[]=[],fields=new Set<string>();let bytes=0
-  for await(const row of readFileRecords(file,format,delimiter)){
+  for await(const row of readFileRecords(file,format,delimiter,undefined,undefined,encoding)){
    const size=Buffer.byteLength(JSON.stringify(row))
    if(size>RECORD_BYTES)throw invalid()
    for(const name of Object.keys(row))fields.add(dataFileName(name))

@@ -17,6 +17,8 @@ import FieldValueDialog from './components/FieldValueDialog.vue'
 import DataFileWizard from './components/DataFileWizard.vue'
 import {fileTransferSupported} from '../shared/file-transfer'
 import BrowseProfilesDialog from './components/BrowseProfilesDialog.vue'
+import RecordLocator from './components/RecordLocator.vue'
+import {appendBrowsePage,recordLocator} from '../shared/browse-navigation'
 import type {BrowseProfile,BrowseProfileDraft} from '../shared/browse-profile'
 import {parseBsonDocument} from '../shared/bson-display'
 import {normalizeGridLayout,type GridLayout} from '../shared/grid-layout'
@@ -30,6 +32,7 @@ import BrowseRecordView from './components/BrowseRecordView.vue'
 import { browseOffset, compileMongoFilter, compileMysqlFilter, MAX_BROWSE_OFFSET, newBrowseFilter, type BrowseFilter } from '../shared/browse-filter'
 import type { ObjectInspection } from '../shared/object-inspection'
 import BsonDocumentTree from './components/BsonDocumentTree.vue'
+import BsonTreeEditor from './components/BsonTreeEditor.vue'
 import { canSafelyEditMongoDocument, formatMongoDocument, mongoDocumentDraft, mongoFieldFilter, mongoFieldText, parseMongoDocumentEditor } from '../shared/bson-editor'
 import type { BsonTypeBranch } from '../shared/bson-types'
 import { csvFromRows, sqlRowsFromFile, validateSqlRow } from './data-format'
@@ -68,6 +71,48 @@ const pageInput = ref(1)
 const browseVisited=ref<Record<number,number>>({1:0})
 const customSize=ref<number>(browsePageSize.value)
 const profileDialog=ref(false)
+const locatorOpen=ref(false)
+const locatorKeys=computed(()=>isMongo.value?['_id']:primaryKeys.value)
+const locatorReturn=ref<{mongo:typeof appliedMongo.value;mysql:BrowseFilter;offset:number;page:number;size:number}>()
+const continuous=ref(false)
+const appendError=ref('')
+const continuousBase=ref(0)
+async function locateRecord(value:ReturnType<typeof recordLocator>){
+ if(!guardGridDraft()||busy.value)return
+ const previous=locatorReturn.value||{mongo:{...appliedMongo.value},mysql:JSON.parse(JSON.stringify(appliedMysql.value)),offset:offset.value,page:pageInput.value,size:browsePageSize.value}
+ const mongo=value.mongo||appliedMongo.value
+ if(await loadData(0,mongo,value.filter,browsePageSize.value)){
+  locatorReturn.value=previous;locatorOpen.value=false
+  visualFilter.value=value.filter;filterMode.value='builder'
+  if(value.mongo){filter.value=value.mongo.filter;projection.value=value.mongo.projection;sort.value=value.mongo.sort}
+  showMongoFilters.value=true
+  if(result.value?.rows.length)selectedRow.value=0
+  else notice.value='未找到匹配记录'
+ }
+}
+async function restoreLocator(){
+ const saved=locatorReturn.value;if(!saved||!guardGridDraft())return
+ if(await loadData(saved.offset,saved.mongo,saved.mysql,saved.size,saved.page)){
+  locatorReturn.value=undefined;visualFilter.value=saved.mysql
+  if(isMongo.value){filterMode.value='text';filter.value=saved.mongo.filter;projection.value=saved.mongo.projection;sort.value=saved.mongo.sort}
+ }
+}
+async function appendPage(){
+ if(!continuous.value||busy.value||!guardGridDraft()||!result.value||result.value.nextOffset===undefined)return
+ const first=result.value,at=first.nextOffset,version=generation
+ if(at===undefined||at>MAX_BROWSE_OFFSET)return
+ appendError.value=''
+ const operation:DatabaseOperation=isMongo.value?{action:'mongo.find',...entity.value,...appliedMongo.value,offset:at,limit:browsePageSize.value}:{action:'mysql.browse',...entity.value,filter:appliedMysql.value,offset:at,limit:browsePageSize.value}
+ const next=await execute(operation,false)
+ if(!next||version!==generation||!continuous.value||result.value!==first)return
+ try{result.value=appendBrowsePage(first,next,props.session.kind);editableRows.value=false}catch(e){appendError.value=messageOf(e)}
+}
+async function toggleContinuous(){
+ if(!guardGridDraft()||busy.value||!result.value)return
+ if(continuous.value){await loadData(continuousBase.value);return}
+ continuous.value=true;continuousBase.value=offset.value;editableRows.value=false;appendError.value=''
+}
+
 const fileWizard=ref<'import'|'export'>()
 const previousBrowseOffset=computed(()=>browseVisited.value[pageInput.value-1]??Math.max(0,offset.value-browsePageSize.value))
 const totalRows = ref<string>()
@@ -87,6 +132,7 @@ const historyOnlyFavorites = ref(false)
 const snippetName = ref('')
 const historyError = ref('')
 const edit = ref<{ mode: 'insert' | 'update' | 'import'; text: string; original?: SqlRow; originalDocument?: string; count?: number; syntax?: 'typed' | 'ejson' } | null>(null)
+const treeEdit=ref(false)
 const editError = ref('')
 const editNotice = ref('')
 const validatingEdit = ref(false)
@@ -131,7 +177,7 @@ const isMysql=computed(()=>capabilities.value.browser==='relational')
 const isMongo=computed(()=>capabilities.value.browser==='document')
 const isRedis=computed(()=>capabilities.value.browser==='keyspace')
 const libraryKind = computed(() => props.node?.category === 'queries' ? 'query' : props.node?.category === 'pipelines' ? 'aggregation' : undefined)
-const canWrite = computed(() => props.session.writable && !props.node?.readOnly && props.node?.kind !== 'mongo-category')
+const canWrite = computed(() => !continuous.value && props.session.writable && !props.node?.readOnly && props.node?.kind !== 'mongo-category')
 const inspectorName = computed(() => isRedis.value ? (tab.value === 'data' ? result.value?.rows[selectedRow.value]?.key || (redisDetail.value ? redisKey.value : '') : '') : entity.value.entity)
 const inspectionKey = computed(() => JSON.stringify([props.session.id, props.session.kind, entity.value.database, inspectorName.value]))
 const visibleSnippets = computed(() => snippets.value.filter(item => item.kind === props.session.kind && (!historyOnlyFavorites.value || item.favorite) && (!isMongo.value || !item.mongoKind || item.mongoKind === 'aggregation')))
@@ -148,6 +194,7 @@ const canEditRow = computed(() => !props.node?.readOnly && supportsRecordMutatio
 // Drafts are scoped to the current loaded page and never sent during typing.
 const gridDrafts=ref<CellDraft[]>([])
 const fieldDialog=ref<{row:number;field:string;type:string;value:string;editable:boolean;exact:boolean}>()
+const columnDetails=computed(()=>Object.fromEntries((structure.value?.rows||[]).filter(r=>r.name||r.Field).map(r=>[r.name||r.Field,{type:r.type||r.Type,comment:r.comment||r.Comment}])))
 const gridLayout=ref<GridLayout>()
 let lastGridLayout:GridLayout|undefined
 function rememberGridLayout(value:GridLayout){lastGridLayout=value}
@@ -428,6 +475,7 @@ async function loadData(nextOffset = 0, proposedMongo = appliedMongo.value, prop
     mongoQuery.value = (find + '.sort(' + (mongo.sort.trim() || '{}') + ').limit(' + size + ').skip(' + nextOffset + ')').slice(0, 3000)
     try { editableRows.value = !!next.documents && Object.keys(JSON.parse(mongo.projection || '{}')).length === 0 } catch { editableRows.value = false }
   } else return false
+  continuous.value=false;appendError.value=''
   if(nextOffset===0||size!==browsePageSize.value||!sameFilter)browseVisited.value={1:0}
   browseVisited.value={...browseVisited.value,[nextPage]:nextOffset}
   offset.value = nextOffset
@@ -581,8 +629,9 @@ function openResultRow(index: number) {
   if (isMongo.value) viewMongoDocument(index)
   else if (tab.value === 'data' && !isRedis.value) openEdit()
 }
-function openInsert() { if (!guardGridDraft()||!canInsertRecord.value) return; editError.value = ''; editNotice.value = ''; edit.value = { mode: 'insert', text: isMysql.value ? '{} ' : '{\n  "name": ""\n}', syntax: isMongo.value ? 'typed' : undefined } }
+function openInsert() { treeEdit.value=false; if (!guardGridDraft()||!canInsertRecord.value) return; editError.value = ''; editNotice.value = ''; edit.value = { mode: 'insert', text: isMysql.value ? '{} ' : '{\n  "name": ""\n}', syntax: isMongo.value ? 'typed' : undefined } }
 function openEdit() {
+  treeEdit.value=false
   if(!guardGridDraft())return
   if (!canEditRow.value || busy.value || !props.session.writable || tab.value !== 'data') return
   editError.value = ''; editNotice.value = ''
@@ -596,6 +645,7 @@ function openEdit() {
     edit.value = { mode: 'update', ...formatted, originalDocument }
   }
 }
+function editMongoTree(index:number){selectedRow.value=index;openEdit();if(edit.value?.mode==='update')openTreeEditor()}
 function editMongoRow(index: number) {
   selectedRow.value = index
   openEdit()
@@ -638,6 +688,10 @@ async function mongoContextAction(action: 'add' | 'copy-value' | 'copy-document'
 }
 function mongoEditText(draft: NonNullable<typeof edit.value>): string {
   return draft.syntax === 'typed' ? parseMongoDocumentEditor(draft.text) : JSON.stringify(JSON.parse(draft.text))
+}
+function openTreeEditor(){
+ if(!edit.value||edit.value.mode==='import')return
+ useRawEjson();if(edit.value.syntax==='ejson')treeEdit.value=true
 }
 function useRawEjson() {
   if (!edit.value || validatingEdit.value || busy.value) return
@@ -732,6 +786,16 @@ async function importData() {
     }
     editError.value = ''
   } catch (reason) { setError(reason) }
+}
+async function exportRows(indices:number[]){
+ const snapshot=result.value;if(!snapshot||!indices.length||!guardGridDraft())return
+ try{
+  const rows=[...new Set(indices)].filter(i=>Number.isInteger(i)&&i>=0&&i<snapshot.rows.length)
+  if(!rows.length)return
+  if(isMongo.value&&!snapshot.documents||!isMongo.value&&!snapshot.rawRows)throw new Error('当前仅有预览值；不能据此覆盖完整字段。')
+  const content=isMongo.value?'['+rows.map(i=>snapshot.documents![i]!).join(',\n')+']':JSON.stringify(rows.map(i=>snapshot.rawRows![i]),null,2)
+  if(await window.dbex.exportFile((entity.value.entity||'query')+'-selected.json',content,'json'))notice.value=t('已导出所选 {0} 条记录',[rows.length])
+ }catch(e){setError(e)}
 }
 async function exportData(format: 'csv' | 'json') {
   if (!result.value) return
@@ -881,7 +945,7 @@ watch(()=>props.node?.id,()=>{
   const remembered=editorCache.get(editorScopeKey)
   sql.value=remembered?.sql??(hasEntity.value&&isMysql.value?'SELECT * FROM '+quote(entity.value.database)+'.'+quote(entity.value.entity)+';':'SELECT 1 AS result;')
   parameters.value=remembered?.parameters??'[]';lastQuery=undefined;pipeline.value=remembered?.pipeline??'[\n  { "$limit": 100 }\n]'
-  browsePageSize.value=pageSizeFor(preferences.value,props.session.kind);customSize.value=browsePageSize.value;browseVisited.value={1:0};profileDialog.value=false;fileWizard.value=undefined
+  browsePageSize.value=pageSizeFor(preferences.value,props.session.kind);customSize.value=browsePageSize.value;browseVisited.value={1:0};profileDialog.value=false;fileWizard.value=undefined;locatorOpen.value=false;locatorReturn.value=undefined;continuous.value=false;appendError.value=''
   redisScanCursors.value=['0'];redisScanIndex.value=0
   visualFilter.value=newBrowseFilter();appliedMysql.value=newBrowseFilter();appliedMongo.value={filter:'{}',projection:'{}',sort:'{}'}
   filter.value=remembered?.filter??'{}';projection.value=remembered?.projection??'{}';sort.value=remembered?.sort??'{}';filterMode.value=remembered&&(remembered.filter!=='{}'||remembered.projection!=='{}'||remembered.sort!=='{}')?'text':'builder';filterError.value=''
@@ -925,7 +989,7 @@ const recordRecovery=useQueryRecovery(()=>{
   if(value.mode==='import'&&Number.isSafeInteger(value.count)&&value.count>=1&&value.count<=500)restored.count=value.count
   editError.value='';editNotice.value='';edit.value=restored;tab.value='data'
 })
-function closeEdit(){edit.value=null;recordRecovery.clear()}
+function closeEdit(){treeEdit.value=false;edit.value=null;recordRecovery.clear()}
 watch(()=>preferences.value.records,()=>{limit.value=pageSizeFor(preferences.value,props.session.kind)},{deep:true})
 onBeforeUnmount(() => { disposed = true; generation++; if (inspectionTimer) clearTimeout(inspectionTimer) })
 </script>
@@ -968,7 +1032,7 @@ onBeforeUnmount(() => { disposed = true; generation++; if (inspectionTimer) clea
       </div>
     </template>
     <template v-else>
-      <div class="editor-toolbar browser-top-toolbar"><template v-if="tab === 'data' && !isRedis"><button v-if="fileTransferSupported(session.kind)" class="btn secondary small" :disabled="busy||!hasEntity||gridDirty||node?.readOnly" @click="fileWizard='import'">{{t('流式导入向导')}}</button><button v-if="fileTransferSupported(session.kind)" class="btn secondary small" :disabled="busy||!hasEntity||gridDirty" @click="fileWizard='export'">{{t('流式导出向导')}}</button><button v-if="session.connectionId" class="btn secondary small" :disabled="busy||!hasEntity||gridDirty" @click="profileDialog=true">{{t('浏览配置')}}</button><button class="btn secondary small" :aria-label="t('编辑')" :disabled="busy || !canEditRow || !canWrite" @click="openEdit"><span aria-hidden="true">✎</span> {{ t('编辑') }}</button><button class="btn secondary small" :aria-label="t('查询条件')" :aria-expanded="showMongoFilters" :class="{ 'active-filter': filtersActive || showMongoFilters }" @click="showMongoFilters = !showMongoFilters"><span aria-hidden="true">⌕</span> {{ t('查询条件') }} <span v-if="filtersActive" aria-hidden="true">•</span></button><button class="btn secondary small" :disabled="busy || !hasEntity || !canImportRecords" @click="importData">{{ t('导入') }} {{ isMysql ? 'CSV / JSON' : 'EJSON' }}</button></template><button v-if="isMongo && tab !== 'data'" class="btn secondary small" :disabled="selectedRow < 0 || !result?.documents?.[selectedRow]" @click="viewMongoDocument()">{{ t('查看文档') }}</button><span class="toolbar-spacer"></span><button class="btn secondary small" :disabled="!result?.rows.length" @click="exportData('json')">{{ t('导出当前页 JSON') }}</button><button class="btn secondary small" :disabled="!result?.rows.length" @click="exportData('csv')">CSV</button></div>
+      <div class="editor-toolbar browser-top-toolbar"><template v-if="tab === 'data' && !isRedis"><button class="btn secondary small" :disabled="busy||!hasEntity||gridDirty||!locatorKeys.length" @click="locatorOpen=true">{{t('定位记录')}}</button><button v-if="locatorReturn" class="btn secondary small" :disabled="busy||gridDirty" @click="restoreLocator">{{t('返回原筛选')}}</button><button class="btn secondary small" :class="{selected:continuous}" :disabled="busy||!result||gridDirty" @click="toggleContinuous">{{t(continuous?'退出连续浏览':'连续浏览')}}</button><button v-if="fileTransferSupported(session.kind)" class="btn secondary small" :disabled="busy||!hasEntity||gridDirty||continuous||node?.readOnly" @click="fileWizard='import'">{{t('流式导入向导')}}</button><button v-if="fileTransferSupported(session.kind)" class="btn secondary small" :disabled="busy||!hasEntity||gridDirty" @click="fileWizard='export'">{{t('流式导出向导')}}</button><button v-if="session.connectionId" class="btn secondary small" :disabled="busy||!hasEntity||gridDirty" @click="profileDialog=true">{{t('浏览配置')}}</button><button class="btn secondary small" :aria-label="t('编辑')" :disabled="busy || !canEditRow || !canWrite" @click="openEdit"><span aria-hidden="true">✎</span> {{ t('编辑') }}</button><button class="btn secondary small" :aria-label="t('查询条件')" :aria-expanded="showMongoFilters" :class="{ 'active-filter': filtersActive || showMongoFilters }" @click="showMongoFilters = !showMongoFilters"><span aria-hidden="true">⌕</span> {{ t('查询条件') }} <span v-if="filtersActive" aria-hidden="true">•</span></button><button class="btn secondary small" :disabled="busy || !hasEntity || !canImportRecords" @click="importData">{{ t('导入') }} {{ isMysql ? 'CSV / JSON' : 'EJSON' }}</button></template><button v-if="isMongo && tab !== 'data'" class="btn secondary small" :disabled="selectedRow < 0 || !result?.documents?.[selectedRow]" @click="viewMongoDocument()">{{ t('查看文档') }}</button><span class="toolbar-spacer"></span><button class="btn secondary small" :disabled="!result?.rows.length" @click="exportData('json')">{{ t('导出当前页 JSON') }}</button><button class="btn secondary small" :disabled="!result?.rows.length" @click="exportData('csv')">CSV</button></div>
       <section v-if="tab === 'data' && !isRedis && showMongoFilters" class="browse-filter-panel">
         <header class="filter-panel-header"><span>{{ t('查询条件') }}</span><div v-if="isMongo" class="filter-mode-switch"><button type="button" :class="{ active: filterMode === 'builder' }" @click="filterMode = 'builder'">{{ t('创建工具') }}</button><button type="button" :class="{ active: filterMode === 'text' }" @click="filterMode = 'text'">{{ t('文本') }}</button></div></header>
         <div v-if="filterError" class="inline-message error" role="alert">{{ localize(filterError) }}</div><p v-if="mongoFindRecovery.error.value" class="compact-help">{{ t(mongoFindRecovery.error.value) }}</p><div v-if="mongoFindRecovery.available.value" class="recovery-banner"><span>{{ t('发现未恢复的查询草稿') }}</span><button class="btn secondary small" @click="mongoFindRecovery.restore">{{ t('恢复草稿') }}</button><button class="btn secondary small" @click="mongoFindRecovery.dismiss">{{ t('放弃草稿') }}</button></div>
@@ -976,9 +1040,10 @@ onBeforeUnmount(() => { disposed = true; generation++; if (inspectionTimer) clea
         <div v-else class="mongo-filters"><label>Filter<textarea v-model="filter" rows="3" spellcheck="false" /></label><label>Projection<textarea v-model="projection" rows="3" spellcheck="false" /></label><label>Sort<textarea v-model="sort" rows="3" spellcheck="false" /></label><button class="btn primary" :disabled="busy || !hasEntity" @click="applyTextFilter">{{ t('查询') }}</button><button class="btn secondary" :disabled="busy || !hasEntity" @click="resetBrowseFilter">{{ t('重置筛选') }}</button></div>
       </section>
       <div v-if="columnDraft" class="editor-toolbar grid-batch-editor"><strong>{{ columnDraft.field }}</strong><span class="muted-text">{{ t('当前页') }} · {{ result?.rows.length||0 }} {{ t('条记录') }}</span><input :value="columnDraft.text" :aria-label="t('整列修改值')" spellcheck="false" @input="columnDraft.text=($event.target as HTMLInputElement).value;columnDraft.changed=true" @keydown.enter.prevent="stageColumn" @keydown.esc.prevent="columnDraft=undefined" /><button class="btn secondary small" @click="stageColumn">{{ t('暂存修改') }}</button></div>
-      <BrowseRecordView v-if="result && tab === 'data' && !isRedis && browseView !== 'grid'" :result="result" :selected="selectedRow" :mongo="isMongo" :mode="browseView" :offset="offset" @select="selectedRow = $event" @open="viewMongoDocument" @field="openField" />
-      <ResultGrid v-else-if="result" :workspace-tools="tab==='data'&&!isRedis" :layout-scope="tab==='data'?gridLayoutScope:undefined" :layout-value="gridLayout" :exact-cell="exactCell" :editable-cell-text="gridEditingEnabled?(row,field)=>spec(row,field)?.text:undefined" @layout-change="rememberGridLayout" @stage-cells="stageCells" @cell-view="openField" :columns="result.columns" :rows="result.rows" :column-types="isMysql ? result.columnTypes : undefined" :relational-kind="session.kind==='mariadb'?'mariadb':'mysql'" :sqlite-types="result.sqliteTypes" :null-cells="result.nullCells" :redis-row-types="isRedis ? result.redisRowTypes : undefined" :selected="selectedRow" :offset="offset" :bson-types="isMongo ? result.bsonTypes : undefined"  :documents="isMongo ? result.documents : undefined" :document-menu="isMongo && !!result.documents?.length && !busy" :can-edit-document="isMongo && tab === 'data' && editableRows && canWrite && !busy" :can-add-document="isMongo && tab === 'data' && hasEntity && canWrite && !busy" :can-filter-document="isMongo && tab === 'data' && hasEntity && !busy" :active="active!==false" :action-columns="columnActionFields" :column-sort="tab==='data'?activeSortRules:[]" @column-action="handleColumnAction" :inline-cell="inlineCell" :inline-drafts="previewDraftMap" :can-inline-edit="canInlineEdit" :can-edit-column="canEditColumn" @inline-begin="beginInline" @inline-input="text=>{if(inlineCell)inlineCell.text=text}" @inline-finish="finishInline" @column-selected="selectGridColumn" @column-edit="beginColumn" @document-action="mongoContextAction" @document-edit="editMongoRow" @document-view="viewMongoDocument" @select="selectGridRow" @open="openResultRow" />
+      <BrowseRecordView v-if="result && tab === 'data' && !isRedis && browseView !== 'grid'" :result="result" :selected="selectedRow" :mongo="isMongo" :mode="browseView" :offset="offset" @select="selectedRow = $event" @open="viewMongoDocument" @field="openField" @edit-tree="editMongoTree" />
+      <ResultGrid v-else-if="result" :workspace-tools="tab==='data'&&!isRedis" :layout-scope="tab==='data'?gridLayoutScope:undefined" :layout-value="gridLayout" :column-details="columnDetails" :export-selection="tab==='data'&&!gridDirty" @export-rows="exportRows" :exact-cell="exactCell" :editable-cell-text="gridEditingEnabled?(row,field)=>spec(row,field)?.text:undefined" @layout-change="rememberGridLayout" @stage-cells="stageCells" @cell-view="openField" :columns="result.columns" :rows="result.rows" :column-types="isMysql ? result.columnTypes : undefined" :relational-kind="session.kind==='mariadb'?'mariadb':'mysql'" :sqlite-types="result.sqliteTypes" :null-cells="result.nullCells" :redis-row-types="isRedis ? result.redisRowTypes : undefined" :selected="selectedRow" :offset="offset" :bson-types="isMongo ? result.bsonTypes : undefined"  :documents="isMongo ? result.documents : undefined" :document-menu="isMongo && !!result.documents?.length && !busy" :can-edit-document="isMongo && tab === 'data' && editableRows && canWrite && !busy" :can-add-document="isMongo && tab === 'data' && hasEntity && canWrite && !busy" :can-filter-document="isMongo && tab === 'data' && hasEntity && !busy" :active="active!==false" :action-columns="columnActionFields" :column-sort="tab==='data'?activeSortRules:[]" @column-action="handleColumnAction" :inline-cell="inlineCell" :inline-drafts="previewDraftMap" :can-inline-edit="canInlineEdit" :can-edit-column="canEditColumn" @inline-begin="beginInline" @inline-input="text=>{if(inlineCell)inlineCell.text=text}" @inline-finish="finishInline" @column-selected="selectGridColumn" @column-edit="beginColumn" @document-action="mongoContextAction" @document-edit="editMongoRow" @document-view="viewMongoDocument" @select="selectGridRow" @open="openResultRow" />
       <div v-else class="empty-state"><span class="empty-icon">▤</span><strong>{{ hasEntity ? t('运行查询查看结果') : t('选择数据库中的表或集合') }}</strong><span>{{ isMysql ? t('可直接切换到 SQL 编辑器执行查询。') : t('使用左侧资源树选择目标。') }}</span></div>
+      <div v-if="continuous" class="continuous-bar"><span>{{t('连续浏览为只读；已加载记录')}}, {{result?.rows.length||0}}</span><button class="btn secondary small" :disabled="busy||result?.nextOffset===undefined||result.nextOffset>1000000" @click="appendPage">{{t('加载更多')}}</button><span v-if="appendError" class="inline-message error">{{localize(appendError)}}</span></div>
       <footer v-if="tab === 'data' && !isRedis" class="result-footer browse-footer">
         <div class="browse-record-actions">
           <button class="browse-icon" type="button" :title="t('新增')" :aria-label="t('新增')" :disabled="busy || !hasEntity || !canInsertRecord" @click="openInsert">＋</button>
@@ -1011,6 +1076,7 @@ onBeforeUnmount(() => { disposed = true; generation++; if (inspectionTimer) clea
       <footer v-else class="result-footer"><span>{{ result?.rows.length || 0 }} {{ t('条记录') }}<span v-if="result?.durationMs !== undefined"> · {{ result.durationMs }} ms</span><span v-if="result?.truncated"> {{ t('· 已达到单页限制') }}</span></span><div class="result-page-controls"><button v-if="offset > 0 && tab === 'query'" class="btn secondary small" :disabled="busy" @click="runQuery(Math.max(0, offset - limit))">{{ t('← 上一页') }}</button><button v-if="result?.nextOffset !== undefined && tab === 'query'" class="btn secondary small" :disabled="busy" @click="runQuery(result.nextOffset)">{{ t('下一页 →') }}</button></div><span>{{ session.writable ? t('可写会话') : t('只读会话') }}</span></footer>
     </template>
 
+    <RecordLocator v-if="locatorOpen&&active!==false" :kind="session.kind" :database="entity.database" :entity="entity.entity" :keys="locatorKeys" :structure="structure" @locate="locateRecord" @close="locatorOpen=false"/>
     <DataFileWizard v-if="fileWizard&&active!==false" :session="session" :database="entity.database" :entity="entity.entity" :direction="fileWizard" :fields="result?.columns" :filter="isMysql?appliedMysql:undefined" :mongo-filter="isMongo?appliedMongo.filter:undefined" @close="fileWizard=undefined" @session="emit('updateSession',$event)" @completed="fileWizard==='import'&&loadData(0)"/>
     <BrowseProfilesDialog v-if="profileDialog&&active!==false" :session-id="session.id" :database="entity.database" :entity="entity.entity" :draft="currentProfile()" @apply="applyBrowseProfile" @close="profileDialog=false"/>
     <FieldValueDialog v-if="fieldDialog&&active!==false" v-bind="fieldDialog" :mongo="isMongo" @stage="stageField" @close="fieldDialog=undefined"/>
@@ -1028,9 +1094,9 @@ onBeforeUnmount(() => { disposed = true; generation++; if (inspectionTimer) clea
         <header class="dialog-header"><div><span class="eyebrow">{{ entityTitle() }}</span><h2 id="edit-title">{{ edit.mode === 'update' ? t(isMongo ? '编辑文档' : '编辑记录') : edit.mode === 'import' ? t('导入预览') : t('新增记录') }}</h2></div><button class="icon-button" :aria-label="t('关闭')" :disabled="busy || validatingEdit" @click="closeEdit">×</button></header>
         <div v-if="editError" class="inline-message error" role="alert">{{ localize(editError) }}</div>
         <div v-if="editNotice" class="inline-message notice" role="status">{{ t(editNotice) }}</div>
-        <div v-if="isMongo && edit.mode !== 'import'" class="mongo-edit-mode"><span class="muted-text">{{ t(edit.syntax === 'typed' ? 'BSON 文档语法' : '原始 EJSON') }}</span><button v-if="edit.syntax === 'typed'" class="btn secondary small" type="button" :disabled="busy || validatingEdit" @click="useRawEjson">{{ t('原始 EJSON') }}</button><span class="toolbar-spacer"></span><span class="muted-text">{{ t(edit.mode === 'update' ? '修改时必须保留 _id' : '未指定 _id 时自动生成') }}</span></div>
+        <div v-if="isMongo && edit.mode !== 'import'" class="mongo-edit-mode"><span class="muted-text">{{ t(edit.syntax === 'typed' ? 'BSON 文档语法' : '原始 EJSON') }}</span><button v-if="edit.syntax === 'typed'" class="btn secondary small" type="button" :disabled="busy || validatingEdit" @click="useRawEjson">{{ t('原始 EJSON') }}</button><button class="btn secondary small" :disabled="busy||validatingEdit" @click="treeEdit?treeEdit=false:openTreeEditor()">{{t(treeEdit?'文本编辑器':'编辑文档树')}}</button><span class="toolbar-spacer"></span><span class="muted-text">{{ t(edit.mode === 'update' ? '修改时必须保留 _id' : '未指定 _id 时自动生成') }}</span></div>
         <p v-else class="compact-help">{{ isMysql ? t('JSON 字段值支持字符串、数字、布尔、null；BIGINT / DECIMAL 请使用字符串。省略自增字段可使用默认值。') : t('使用 Extended JSON 保留 ObjectId、Date、Decimal128 等 BSON 类型；修改时必须保留 _id。') }}</p>
-        <div class="document-editor"><CodeEditor v-model="edit.text" :language="edit.syntax === 'typed' ? 'dbex-bson-document' : 'json'" :readonly="!canWrite || busy || validatingEdit" /></div>
+        <div class="document-editor"><BsonTreeEditor v-if="isMongo&&treeEdit" v-model="edit.text" :readonly="!canWrite||busy||validatingEdit"/><CodeEditor v-else v-model="edit.text" :language="edit.syntax === 'typed' ? 'dbex-bson-document' : 'json'" :readonly="!canWrite || busy || validatingEdit" /></div>
         <footer class="dialog-footer"><button v-if="isMongo && edit.mode !== 'import'" class="btn secondary" type="button" :disabled="busy || validatingEdit" @click="validateEdit">{{ t(validatingEdit ? '处理中…' : '验证') }}</button><span v-if="isMongo && edit.mode !== 'import'" class="toolbar-spacer"></span><button class="btn secondary" :disabled="busy || validatingEdit" @click="closeEdit">{{ t('取消') }}</button><button class="btn primary" :disabled="busy || validatingEdit || !canWrite || !supportsRecordMutation(edit.mode)" @click="saveEdit">{{ t(isMongo && edit.mode === 'update' ? '更新' : isMongo && edit.mode === 'insert' ? '新增' : '审阅并保存') }}</button></footer>
       </section>
     </div>

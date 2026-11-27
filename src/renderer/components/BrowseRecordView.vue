@@ -6,7 +6,7 @@ import { formatMongoDocument } from '../../shared/bson-editor'
 import BsonDocumentTree from './BsonDocumentTree.vue'
 import ResultGrid from './ResultGrid.vue'
 const props = defineProps<{ result: OperationResult; selected: number; mode: 'record' | 'text'; mongo: boolean; offset: number }>()
-const emit = defineEmits<{ select: [index:number]; open: [index:number];field:[index:number,field:string] }>()
+const emit = defineEmits<{ select: [index:number]; open: [index:number];field:[index:number,field:string];editTree:[index:number] }>()
 const index = computed(() => Math.max(0, Math.min(props.selected, props.result.rows.length - 1)))
 const document = computed(() => props.result.documents?.[index.value])
 const row = computed(() => props.result.rawRows?.[index.value] || props.result.rows[index.value] || {})
@@ -23,7 +23,7 @@ const record = computed(() => props.result.columns.map((field, i) => ({ [recordH
       <span class="toolbar-spacer"></span><button v-if="mongo && document !== undefined" class="btn secondary small" type="button" @click="emit('open',index)">{{ t('查看文档') }}</button>
     </div>
     <div v-if="!result.rows.length" class="empty-state">{{ t('暂无记录') }}</div>
-    <template v-else-if="mode === 'record'"><BsonDocumentTree v-if="mongo && document !== undefined" :document="document" :metadata="result.bsonTypes?.[index]" @edit-path="path=>{if(path.length===1)emit('field',index,path[0]!);else emit('open',index)}" editable/><ResultGrid v-else :columns="recordHeaders" :rows="record" resize-all @cell-view="(row)=>emit('field',index,result.columns[row]!)" @open="row=>emit('field',index,result.columns[row]!)"/></template>
+    <template v-else-if="mode === 'record'"><BsonDocumentTree v-if="mongo && document !== undefined" :document="document" :metadata="result.bsonTypes?.[index]" @edit-path="path=>{if(path.length===1)emit('field',index,path[0]!);else emit('editTree',index)}" editable/><ResultGrid v-else :columns="recordHeaders" :rows="record" resize-all @cell-view="(row)=>emit('field',index,result.columns[row]!)" @open="row=>emit('field',index,result.columns[row]!)"/></template>
     <pre v-else class="bson-raw-document" dir="ltr">{{ formatted }}</pre>
   </section>
 </template>

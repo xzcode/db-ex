@@ -22,3 +22,22 @@ Remaining work: multi-statement execution and multiple result sets; switch query
 - Ten focused Playwright tests passed, including both previously failing color regressions, selection/paste/save-all, extended BSON editor, persistent columns, named browse profile, custom page size, typed parameters, current statement execution, independent cancellation and file wizard.
 - Isolated real SQLite database: export and import of 50,001 records, 6,616,788 bytes, approximately 2.6 seconds combined in the development fixture; exact Int64, BLOB, REAL storage type and NULL. Duplicate rollback, mapped CSV replacement including multiline/doubled quotes, upsert with conversion-error reporting, non-clobber output. Real recursive read query cancelled and original session verified reusable.
 - No live customer databases or credentials were used. MySQL/MariaDB/MongoDB file endpoints need dedicated real engine CI coverage.
+
+## Follow-up — 2026-11-27
+
+- Q1: relational column type/comment display in column manager; selected records export to canonical MongoDB EJSON or exact available SQL JSON. Existing 8 MiB UI export limit remains for a selection; use full streaming export for large files. No write from a lossy preview.
+- Q2: editable document tree within the existing MongoDB edit dialog: add/remove/rename document fields, append/remove array elements, replace values including typed BSON constructors and canonical EJSON. Immutable _id and explicit save with original-document conflict check retained. Tree operations are local drafts.
+- Q3: exact typed primary-key tuple/ObjectId lookup (temporarily replaces applied filter, with explicit restore), sort priority up/down, and manually append further pages in a read-only continuous view. Regular pagination restores editable single-page mode. This is not a server-side snapshot or unbounded keyset cursor; existing offset and per-page protections remain.
+- Q4: read-only SQL batches, preflight all statements and parameters before executing, positional placeholders distributed across statements, ClickHouse named parameter map, independent bounded reads and individual result tabs. Stop on failure or cancellation, preserve preceding results. Existing 32 MiB aggregate preview limit; use smaller batches or stream export for large outputs. Explicit transactions and mixed write scripts are not supported by this batch mode.
+- Q5: encrypted named import/export presets scoped to connection/object/direction, no file path, token, or filter literals in persisted preset. Apply preset then choose and preview file again. Import decoding for UTF-8, UTF-16LE/BE, GB18030 and Windows-1252; export remains UTF-8. Full conversion-error report streamed to private temporary CSV, owner-scoped explicit non-overwriting export; UI still previews first 200. No row payload in report. Reports are removed on next job or window close. Database constraint errors still stop rather than automatically skip. Existing target guards and commit/uncertain handling remain.
+- Added all missing Traditional Chinese strings from the previous batch and new English/Traditional Chinese strings for this batch. Other languages use the existing English fallback for untranslated new controls.
+
+### Evidence
+
+35 focused unit/policy/locale cases passed. Full local suite: 179 passed, 10 environment-dependent skips, zero failures (189 top-level cases). Five focused browser tests passed, plus two earlier browsing/editing cases in an interrupted larger UI run. Typecheck and M11/M12 script typecheck passed.
+
+Real isolated SQLite: 50,001 record round-trip (6,616,788 bytes, 3.766 s combined in the development fixture); UTF-16 CSV import with 251 conversion errors, complete report with 251 records, owner scope protection; exact large integers/binary/REAL/NULL; rollback/upsert/replace and independent read cancellation. Real read batch parameter binding, whole-batch write preflight rejection, and partial result retention passed.
+
+Added dedicated MySQL 8.0/8.4, MariaDB 11.8, MongoDB 8.0 mTLS/SOCKS file round-trip fixtures to the existing isolated M12 workflow. They have not run locally. Full combined candidate CI and desktop packaging are still required before merging/releasing.
+
+Outstanding deeper parity: editable SQL query results, query retargeting, mixed read/write script semantics, full CTE and version-aware metadata, history metrics, SQL date/BLOB editor, raw SQL filter text, Excel/SQL/Parquet general import, and consistent Redis/ClickHouse file wizard integration. No claim that Q1–Q5 are fully complete.

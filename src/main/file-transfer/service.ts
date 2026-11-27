@@ -1,9 +1,10 @@
 import {randomUUID} from 'node:crypto'
-import {open,mkdtemp,rm,lstat} from 'node:fs/promises'
+import {open,mkdtemp,rm,lstat,copyFile,type FileHandle} from 'node:fs/promises'
+import {tmpdir} from 'node:os'
 import {basename,dirname,join} from 'node:path'
 import type {ConnectionConfig} from '../../shared/types'
 import type {FilePreview,FileTransferJob,FileTransferRequest,DataFileFormat} from '../../shared/file-transfer'
-import {dataFileFormat,dataFileDelimiter} from '../../shared/file-transfer'
+import {dataFileFormat,dataFileDelimiter,dataFileEncoding} from '../../shared/file-transfer'
 import {inspectFile,sameFile,readFileRecords,mapRecord,sqlFileValue,csvLine,RECORD_BYTES,type FileIdentity} from './records'
 import {MysqlMigrationEndpoint} from '../migration/mysql-endpoint'
 import {MongoMigrationEndpoint} from '../migration/mongo-endpoint'
@@ -27,25 +28,33 @@ export class FileTransferService{
  private active=new Map<number,Active>()
  private jobs=new Map<number,FileTransferJob>()
  private closed=new Set<number>()
+ private reports=new Map<number,{id:string;dir:string;path:string}>()
  constructor(private readonly factory?:SqliteProcessFactory,private readonly workerPath?:string){}
- async pick(owner:number,id:string,path:string,formatValue:unknown,delimiterValue:unknown):Promise<FilePreview>{
+ async pick(owner:number,id:string,path:string,formatValue:unknown,delimiterValue:unknown,encodingValue?:unknown):Promise<FilePreview>{
   if(this.active.has(owner))throw new Error('FILE_TRANSFER: 当前已有文件传输任务')
-  const format=dataFileFormat(formatValue),delimiter=dataFileDelimiter(delimiterValue),info=await inspectFile(path,format,delimiter)
-  const preview={token:randomUUID(),name:basename(path),size:info.identity.size,format,delimiter,fields:info.fields,sample:info.sample}
+  const format=dataFileFormat(formatValue),delimiter=dataFileDelimiter(delimiterValue),encoding=dataFileEncoding(encodingValue),info=await inspectFile(path,format,delimiter,encoding)
+  const preview={token:randomUUID(),name:basename(path),size:info.identity.size,format,delimiter,encoding,fields:info.fields,sample:info.sample}
   if(this.closed.has(owner))throw new Error('CANCELLED: 已取消操作')
   this.previews.set(owner,{id,path,stamp:info.identity,preview})
   return structuredClone(preview)
  }
  importPreview(owner:number,id:string,request:FileTransferRequest){
   const stored=this.previews.get(owner)
-  if(!stored||stored.id!==id||stored.preview.token!==request.token||stored.preview.format!==request.format||stored.preview.delimiter!==request.delimiter)throw new Error('FILE_TRANSFER: 文件已变化，请重新预览')
+  if(!stored||stored.id!==id||stored.preview.token!==request.token||stored.preview.format!==request.format||stored.preview.delimiter!==request.delimiter||dataFileEncoding(stored.preview.encoding)!==dataFileEncoding(request.encoding))throw new Error('FILE_TRANSFER: 文件已变化，请重新预览')
   if(request.mapping?.some(m=>!stored.preview.fields.includes(m.source)))throw new Error('FILE_TRANSFER: 字段映射无效')
   return stored
  }
  list(owner:number){const job=this.jobs.get(owner);return job?structuredClone(job):null}
  cancel(owner:number,id:string){const active=this.active.get(owner);if(active?.job.id===id)active.controller.abort()}
- async closeOwner(owner:number){this.closed.add(owner);this.previews.delete(owner);const active=this.active.get(owner);active?.controller.abort();await active?.done.catch(()=>{});this.jobs.delete(owner)}
- async closeAll(){await Promise.allSettled([...new Set([...this.previews.keys(),...this.active.keys(),...this.jobs.keys()])].map(id=>this.closeOwner(id)))}
+ async saveReport(owner:number,id:string,output:string){
+  const entry=this.reports.get(owner),job=this.jobs.get(owner)
+  if(!entry||entry.id!==id||job?.id!==id||job.state==='running')throw new Error('FILE_TRANSFER: 错误报告不可用')
+  const dir=await mkdtemp(join(dirname(output),'.dbex-report-')),staged=join(dir,'errors.csv')
+  try{await copyFile(entry.path,staged);await publishNewFile(staged,output)}finally{await rm(dir,{recursive:true,force:true})}
+ }
+ private async clearReport(owner:number){const old=this.reports.get(owner);if(old){this.reports.delete(owner);await rm(old.dir,{recursive:true,force:true})}}
+ async closeOwner(owner:number){this.closed.add(owner);this.previews.delete(owner);const active=this.active.get(owner);active?.controller.abort();await active?.done.catch(()=>{});await this.clearReport(owner);this.jobs.delete(owner)}
+ async closeAll(){await Promise.allSettled([...new Set([...this.previews.keys(),...this.active.keys(),...this.jobs.keys(),...this.reports.keys()])].map(id=>this.closeOwner(id)))}
  start(owner:number,id:string,request:FileTransferRequest,output:string|undefined,runner:Runner){
   if(this.closed.has(owner)||this.active.has(owner))throw new Error('FILE_TRANSFER: 当前已有文件传输任务')
   const preview=request.direction==='import'?this.importPreview(owner,id,request):undefined
@@ -54,8 +63,12 @@ export class FileTransferService{
   const job:FileTransferJob={id:randomUUID(),direction:request.direction,state:'running',read:0,committed:0,skipped:0,bytes:0,file:basename(path),errors:[]}
   const controller=new AbortController()
   this.previews.delete(owner);this.jobs.set(owner,job)
-  let uncertain=false
-  const done=Promise.resolve().then(()=>runner(async(config,parent)=>{
+  let uncertain=false,report:FileHandle|undefined
+  const reportError=async(row:number,code:string)=>{
+   if(!report){const dir=await mkdtemp(join(tmpdir(),'.dbex-file-report-')),path=join(dir,'errors.csv');try{report=await open(path,'wx',0o600);this.reports.set(owner,{id:job.id,dir,path});await report.writeFile('record,code\r\n')}catch(e){await report?.close().catch(()=>{});report=undefined;await rm(dir,{recursive:true,force:true});throw e}}
+   await report.writeFile(String(row)+','+code+'\r\n');job.hasErrorReport=true
+  }
+  const done=Promise.resolve().then(async()=>{await this.clearReport(owner);return runner(async(config,parent)=>{
    const signal=AbortSignal.any([parent,controller.signal])
    checkAborted(signal)
    if(protectedDatabase(config.kind,request.database))throw new Error('FILE_TRANSFER: 不允许操作系统数据库')
@@ -90,7 +103,7 @@ export class FileTransferService{
       if(!sameFile(await file.stat(),preview!.stamp))throw new Error('FILE_TRANSFER: 文件已变化，请重新预览')
       const mongo=endpoint instanceof MongoMigrationEndpoint
       const records=(async function*(){
-       for await(const row of readFileRecords(file,request.format,request.delimiter,signal,n=>{job.bytes+=n})){
+       for await(const row of readFileRecords(file,request.format,request.delimiter,signal,n=>{job.bytes+=n},dataFileEncoding(request.encoding))){
         checkAborted(signal);job.read++
         let record:Record<string,unknown>
         try{
@@ -98,7 +111,7 @@ export class FileTransferService{
          const size=Buffer.byteLength(JSON.stringify(record));if(size>RECORD_BYTES)throw new Error('FILE_TRANSFER: 单条文件记录过大')
          if(mongo){const doc=BSON.EJSON.parse(JSON.stringify(record),{relaxed:false});validateReadDocument(doc);if(request.policy==='upsert'&&!Object.hasOwn(doc,'_id'))throw new Error('FILE_TRANSFER: 插入更新需要映射全部主键');BSON.serialize(doc)}
          else Object.values(record).forEach(sqlFileValue)
-        }catch(e){if(!request.skipInvalid)throw new Error('FILE_TRANSFER: 第 '+job.read+' 条记录转换失败');job.skipped++;if(job.errors!.length<200)job.errors!.push({row:job.read,code:'INVALID_VALUE'});continue}
+        }catch(e){await reportError(job.read,'INVALID_VALUE');if(job.errors!.length<200)job.errors!.push({row:job.read,code:'INVALID_VALUE'});if(!request.skipInvalid)throw new Error('FILE_TRANSFER: 第 '+job.read+' 条记录转换失败');job.skipped++;continue}
         yield record
        }
        if(!sameFile(await file.stat(),preview!.stamp))throw new Error('FILE_TRANSFER: 文件已变化，请重新预览')
@@ -110,7 +123,7 @@ export class FileTransferService{
      }finally{await file.close()}
     }
    }finally{await endpoint.close()}
-  })).then(()=>{job.state='completed'},e=>{job.state=uncertain?'uncertain':controller.signal.aborted?'cancelled':'failed';job.error=safeFailure(e)}).finally(()=>{if(this.active.get(owner)?.controller===controller)this.active.delete(owner)})
+  })}).then(async()=>{try{await report?.sync()}catch{job.hasErrorReport=false}finally{await report?.close().catch(()=>{});report=undefined}job.state='completed'},async e=>{await report?.close().catch(()=>{});report=undefined;job.state=uncertain?'uncertain':controller.signal.aborted?'cancelled':'failed';job.error=safeFailure(e)}).catch(e=>{job.state='failed';job.error=safeFailure(e)}).finally(()=>{if(this.active.get(owner)?.controller===controller)this.active.delete(owner)})
   this.active.set(owner,{job,controller,done})
   return structuredClone(job)
  }

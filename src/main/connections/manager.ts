@@ -13,6 +13,8 @@ import type { SqliteProcessFactory } from '../operations/sqlite-client'
 import { databaseError, resourceName, type OperationContext } from '../operations/common'
 import { databaseAdapter, isKnownDatabaseAction, adapterAllowsAction } from './adapters'
 import type { AdapterSession } from './adapters/types'
+import {planReadBatch,sessionSensitiveSql} from '../operations/query-batch'
+import type {QueryBatchResult} from '../../shared/query-batch'
 
 interface LiveSession {
   info: SessionInfo
@@ -149,7 +151,7 @@ export class SessionManager {
     const session=this.session(id),adapter=databaseAdapter(session.info.kind)
     if(!input||typeof input!=='object'||!adapterAllowsAction(session.info.kind,input.action)||Buffer.byteLength(JSON.stringify(input))>4*1024*1024)throw new Error('INVALID_OPERATION: 不支持的操作')
     const eligible=['mysql.query','clickhouse.query','mongo.find','mongo.aggregate','mongo.count','mongo.estimateCount','mongo.indexes'].includes(input.action)
-    const sessionSensitive=input.action==='mysql.query'&&/\b(?:LAST_INSERT_ID|FOUND_ROWS|ROW_COUNT|CONNECTION_ID|GET_LOCK|RELEASE_LOCK|SHOW\s+SESSION|SHOW\s+WARNINGS)\b|@@|(?:^|[^@])@[a-z_]/i.test(input.sql)
+    const sessionSensitive=input.action==='mysql.query'&&sessionSensitiveSql(input.sql)
     if(!eligible||sessionSensitive||session.info.transaction||adapter.writes(input,session.info.writable))return this.execute(id,input)
     return this.external(id,false,async(config,parent)=>{
       session.isolatedRead=true
@@ -179,6 +181,25 @@ export class SessionManager {
         session.isolatedRead=false
       }
     })
+  }
+  async executeReadBatch(id:string,request:unknown):Promise<QueryBatchResult>{
+    const session=this.session(id)
+    if(session.info.transaction||session.controller)throw new Error('SESSION_BUSY: 请先提交或回滚当前事务')
+    const operations=planReadBatch(session.info.kind,request),batch:QueryBatchResult={items:[],total:operations.length}
+    let bytes=0
+    for(const [index,operation] of operations.entries()){
+      try{
+        // Each result is a bounded independent read, never a continuation
+        // of a write transaction. Preserve successfully completed results.
+        if(this.session(id).info.transaction)throw new Error('SESSION_BUSY: 请先提交或回滚当前事务')
+        const result=await this.executeQuery(id,operation)
+        const entry={sql:'sql'in operation?operation.sql:'',result}
+        const size=Buffer.byteLength(JSON.stringify(entry))
+        if(bytes+size>32*1024*1024)throw new Error('LIMIT_EXCEEDED: 批量结果预览超过32 MiB，请分批运行查询或使用流式导出')
+        bytes+=size;batch.items.push(entry)
+      }catch(e){batch.failedAt=index+1;batch.error=this.redact(databaseError(e).message);break}
+    }
+    return batch
   }
   cancelQuery(id:string):boolean{
     const session=this.session(id)

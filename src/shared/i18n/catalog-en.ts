@@ -1,3 +1,4 @@
+import {qFollowupEnglish} from './catalog-q-refinement'
 import {queryRefinementCatalogs} from './catalog-query-refinement'
 import { migrationCatalogs } from './catalog-migration'
 import {uiRefinementCatalogs} from './catalog-ui-refinement'
@@ -1124,4 +1125,5 @@ export const en: Readonly<Record<string, string>> = {
   ...migrationCatalogs.en,
   ...uiRefinementCatalogs.en,
   ...queryRefinementCatalogs.en,
+  ...qFollowupEnglish,
 }

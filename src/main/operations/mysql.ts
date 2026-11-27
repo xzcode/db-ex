@@ -16,7 +16,7 @@ interface QueryData {
   truncated: boolean
   truncationReason?:OperationResult['truncationReason']
 }
-interface ColumnInfo { name: string; type: string; nullable: boolean; key: string; extra: string }
+interface ColumnInfo { name: string; type: string; nullable: boolean; key: string; extra: string; comment:string }
 interface Structure { columns: ColumnInfo[]; primaryKeys: string[]; indexes: Record<string, unknown>[]; engine: string; tableType:string }
 
 /** One instance per physical connection; transactions cannot bleed between tabs. */
@@ -96,10 +96,10 @@ export class MysqlOperations {
         const structure = await this.structure(operation.database, operation.entity, signal)
         const rows = structure.columns.map(column => ({
           name: column.name, type: column.type, nullable: String(column.nullable), key: column.key,
-          extra: column.extra, engine: structure.engine,
+          extra: column.extra, comment:column.comment, engine: structure.engine,
           indexes: structure.indexes.filter(index => index.Column_name === column.name).map(index => `${index.Key_name}${Number(index.Non_unique) === 0 ? ' (unique)' : ''}`).join(', '),
         }))
-        return { columns: ['name', 'type', 'nullable', 'key', 'extra', 'engine', 'indexes'], rows, primaryKeys: structure.primaryKeys, objectCapabilities:mysqlObjectCapabilities(structure.tableType,structure.engine,structure.primaryKeys.length>0) }
+        return { columns: ['name', 'type', 'nullable', 'key', 'extra','comment', 'engine', 'indexes'], rows, primaryKeys: structure.primaryKeys, objectCapabilities:mysqlObjectCapabilities(structure.tableType,structure.engine,structure.primaryKeys.length>0) }
       }
       case 'mysql.begin': {
         requireWrite(context)
@@ -270,7 +270,7 @@ export class MysqlOperations {
     if (fields.truncated) throw new Error('LIMIT_EXCEEDED: 表字段过多，不能安全编辑')
     const records = this.records(fields)
     const columns = records.map(row => ({
-      name: String(row.Field), type: String(row.Type), nullable: row.Null === 'YES', key: String(row.Key), extra: String(row.Extra),
+      name: String(row.Field), type: String(row.Type), nullable: row.Null === 'YES', key: String(row.Key), extra: String(row.Extra),comment:typeof row.Comment==='string'?row.Comment:'',
     }))
     const engineData = await this.query('SELECT ENGINE,TABLE_TYPE FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? LIMIT 1', [database, entity], signal, 1)
     const engine = String(engineData.values[0]?.[0] ?? '')

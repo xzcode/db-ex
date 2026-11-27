@@ -317,3 +317,6 @@ real test evidence and remaining scope. Await exact CI before merge/release.
 
 ## Q1–Q5 — workspace refinement batch
 See [Q1–Q5 refinement evidence and remaining scope](Q1_Q5_REFINEMENT.md). Core grid, field editing, browse profiles, query completion/cancellation, and streaming import/export wizard implemented on the M12 candidate. Remaining deeper parity items and full release gates are explicitly tracked there.
+
+### Q1–Q5 follow-up
+Added typed record locator, continuous read-only page append, column comments/selected export, nested BSON tree editing, read-only multi-result SQL batch, named encrypted file presets, additional input encodings and full conversion-error reports. The previous Traditional Chinese catalog failure is fixed. See Q1_Q5_REFINEMENT.md for evidence, real server matrix and remaining scope.

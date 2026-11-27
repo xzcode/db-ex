@@ -231,8 +231,12 @@ export interface NativeCliSnapshot {output:string;status:string;running:boolean;
 export interface DbExAPI {
   readonly windowChrome:import('./window-chrome').WindowChrome
   readonly workspaceWindowId:string
-  pickDataFile(id:string,format:import('./file-transfer').DataFileFormat,delimiter:string):Promise<import('./file-transfer').FilePreview|null>
+  pickDataFile(id:string,format:import('./file-transfer').DataFileFormat,delimiter:string,encoding?:import('./file-transfer').DataFileEncoding):Promise<import('./file-transfer').FilePreview|null>
   startFileTransfer(id:string,request:import('./file-transfer').FileTransferRequest):Promise<import('./file-transfer').FileTransferJob|null>
+  listFilePresets(id:string,database:string,entity:string,direction:'import'|'export'):Promise<import('./file-transfer').FileTransferPreset[]>
+  saveFilePreset(id:string,database:string,entity:string,direction:'import'|'export',draft:import('./file-transfer').FileTransferPresetDraft,presetId?:string):Promise<import('./file-transfer').FileTransferPreset>
+  removeFilePreset(id:string,database:string,entity:string,direction:'import'|'export',presetId:string):Promise<void>
+  exportFileTransferReport(id:string):Promise<boolean>
   getFileTransferJob():Promise<import('./file-transfer').FileTransferJob|null>
   cancelFileTransfer(id:string):Promise<void>
   migrationCatalog(id:string,database?:string):Promise<import('./migration').MigrationCatalog>
@@ -278,6 +282,7 @@ export interface DbExAPI {
   preview(sessionId: string, database: string, entity: string, offset?: number): Promise<DataPreview>
   redisKeys(sessionId: string, cursor?: string, pattern?: string): Promise<DataPreview>
   redisValue(sessionId: string, key: string): Promise<DataPreview>
+  executeReadBatch(id:string,request:import('./query-batch').QueryBatchRequest):Promise<import('./query-batch').QueryBatchResult>
   executeQuery(id:string,operation:DatabaseOperation):Promise<OperationResult>
   cancelQuery(id:string):Promise<boolean>
   execute(sessionId: string, operation: DatabaseOperation): Promise<OperationResult>

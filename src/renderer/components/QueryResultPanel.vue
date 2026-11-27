@@ -42,6 +42,16 @@ function exportData(format:'csv'|'json'){
  const current=data.value
  void action(()=>{const rows=current.documents?.map(doc=>Object.fromEntries(Object.entries(JSON.parse(doc)).map(([key,value])=>[key,value!==null&&typeof value==='object'?JSON.stringify(value):value])))||current.rawRows||current.rows;return window.dbex.exportFile('query-result.'+format,format==='json'?resultJSON(current):csvFromRows(current.columns,rows),format)})
 }
+function exportRows(indices:number[]){
+ const current=data.value;if(!current||!indices.length)return
+ void action(async()=>{
+  const rows=[...new Set(indices)].filter(i=>Number.isInteger(i)&&i>=0&&i<current.rows.length)
+  if(!rows.length)return
+  if(!current.documents&&!current.rawRows)throw Error('当前仅有预览值；不能据此覆盖完整字段。')
+  const content=current.documents?'['+rows.map(i=>current.documents![i]!).join(',\n')+']':JSON.stringify(rows.map(i=>current.rawRows![i]),null,2)
+  await window.dbex.exportFile('query-selected.json',content,'json')
+ })
+}
 function viewRow(index:number,field?:string){
  if(!data.value?.rows[index])return
  selected.value=index
@@ -94,7 +104,7 @@ function edit(index:number){if(!pinned.value&&props.editable?.(index))emit('edit
    </div>
    <div v-if="localError" class="inline-message error">{{localize(localError)}}</div>
    <template v-if="data">
-    <ResultGrid v-if="view==='grid'" :columns="data.columns" :rows="data.rows" :documents="data.documents" :bson-types="data.bsonTypes" :column-types="data.columnTypes" :sqlite-types="data.sqliteTypes" :null-cells="data.nullCells" :relational-kind="kind==='clickhouse'?'clickhouse':kind==='mariadb'?'mariadb':'mysql'" :offset="currentOffset" :active="active" :selected="selected" :show-colors="colors" :resize-all="true" workspace-tools :document-menu="!!data.documents?.length" :can-edit-document="canEdit" :can-add-document="canAdd" @select="selected=$event" @cell-view="viewRow" @open="viewRow($event)" @document-view="viewRow($event)" @document-edit="edit($event)" @document-action="documentAction"/>
+    <ResultGrid v-if="view==='grid'" :columns="data.columns" :rows="data.rows" :documents="data.documents" :bson-types="data.bsonTypes" :column-types="data.columnTypes" :sqlite-types="data.sqliteTypes" :null-cells="data.nullCells" :relational-kind="kind==='clickhouse'?'clickhouse':kind==='mariadb'?'mariadb':'mysql'" :offset="currentOffset" :active="active" :selected="selected" :show-colors="colors" :resize-all="true" workspace-tools export-selection @export-rows="exportRows" :document-menu="!!data.documents?.length" :can-edit-document="canEdit" :can-add-document="canAdd" @select="selected=$event" @cell-view="viewRow" @open="viewRow($event)" @document-view="viewRow($event)" @document-edit="edit($event)" @document-action="documentAction"/>
     <div v-else-if="view==='tree'" class="query-result-tree">
      <div class="result-document-list"><button v-for="(row,i) in data.rows" :key="i" :class="{active:i===selected}" @click="selected=i">{{currentOffset+i+1}} · {{row._id||t('文档')}}</button></div>
      <BsonDocumentTree v-if="document" :document="document" :metadata="data.bsonTypes?.[selected]"/>

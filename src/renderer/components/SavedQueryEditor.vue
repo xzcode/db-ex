@@ -16,6 +16,8 @@ import {parseBsonDocument} from '../../shared/bson-display'
 import {compileMongoScript,mongoPageOperation,legacyMongoScript,type MongoScriptPlan} from '../../shared/mongo-query-script'
 import {formatQuery} from '../../shared/query-format'
 import QueryParameterDialog from './QueryParameterDialog.vue'
+import type {QueryBatchResult} from '../../shared/query-batch'
+import {sqlStatements} from '../../shared/sql-statements'
 import {useQueryRecovery} from '../composables/useQueryRecovery'
 import {cachedMetadata,rememberMetadata,metadataFields,metadataKey,inferMetadataTable,inferMetadataReferences} from '../metadata-completion'
 const props=defineProps<{session:SessionInfo;node:ExplorerNode;active:boolean;tableSuggestions?:string[]}>()
@@ -28,6 +30,7 @@ const name=ref(''),sql=ref(''),parameters=ref(clickhouse?'{}':'[]'),script=ref('
 const layout=ref<QueryLayout>('bottom')
 const executedQuery=ref(''),runId=ref(0),visited=ref<number[]>([])
 const resultEdit=ref<{mode:'insert'|'update';original?:string;index:number;entity:string;text:string;syntax:'typed'|'ejson';error:string}>()
+const batchResults=ref<QueryBatchResult>(),batchIndex=ref(0)
 const result=ref<OperationResult>(),offset=ref(0),limit=ref<number>(pageSizeFor(preferences.value,props.session.kind))
 const disconnectRequired=ref(false)
 const busy=ref(false),running=ref(false),loaded=ref(false),error=ref(''),notice=ref('')
@@ -111,11 +114,12 @@ const canPageBack=computed(()=>offset.value>(appliedMongoPlan.value?.baseOffset|
 const sourceLabel=computed(()=>props.session.name+' / '+database)
 const safeMongoCollection=computed(()=>applied.value?.action==='mongo.find'&&!protectedDatabase('mongodb',database)&&ordinaryMongoCollection(applied.value.entity)&&targets.value.some(n=>n.kind==='collection'&&!n.readOnly&&!n.maintenanceRestricted&&(n.entity||n.label)===(applied.value as {entity:string}).entity))
 function canEditResult(index:number){
+ if(batchResults.value)return false
  if(!props.session.writable||busy.value||!safeMongoCollection.value||!editableMongoResult(applied.value,result.value,index))return false
  const doc=parseBsonDocument(result.value!.documents![index]!)
  return !!doc&&Object.hasOwn(doc,'_id')
 }
-const canAddResult=computed(()=>!!props.session.writable&&!busy.value&&safeMongoCollection.value&&applied.value?.action==='mongo.find'&&(()=>{try{return !Object.keys(JSON.parse(applied.value.projection||'{}')).length}catch{return false}})())
+const canAddResult=computed(()=>!batchResults.value&&!!props.session.writable&&!busy.value&&safeMongoCollection.value&&applied.value?.action==='mongo.find'&&(()=>{try{return !Object.keys(JSON.parse(applied.value.projection||'{}')).length}catch{return false}})())
 function setLayout(value:QueryLayout){layout.value=value;try{if(value==='bottom'||value==='right')localStorage.setItem('dbex.query-layout',value)}catch{}}
 try{if(localStorage.getItem('dbex.query-layout')==='right')layout.value='right'}catch{}
 function showResults(){if(layout.value==='editor'){let next:QueryLayout='bottom';try{if(localStorage.getItem('dbex.query-layout')==='right')next='right'}catch{}setLayout(next)}}
@@ -245,10 +249,34 @@ function shortcut(event:KeyboardEvent){
 }
 onMounted(()=>window.addEventListener('keydown',shortcut,true))
 onBeforeUnmount(()=>{disposed=true;if(metadataTimer)clearTimeout(metadataTimer);window.removeEventListener('keydown',shortcut,true)})
+function selectBatch(index:number){
+ const item=batchResults.value?.items[index];if(!item)return
+ batchIndex.value=index;result.value=item.result;executedQuery.value=item.sql;offset.value=0;runId.value++
+}
+async function executeBatch(){
+ if(mode!=='sql'||busy.value||!loaded.value||props.session.transaction||resultEdit.value)return
+ if(!Number.isInteger(limit.value)||limit.value<1||limit.value>500){fail('INVALID_INPUT: 每页数量必须在 1 至 500 之间');return}
+ showResults()
+ await task(async()=>{
+  const source=editor.value?.selection()||sql.value,params=JSON.parse(parameters.value)
+  if(sqlStatements(source,props.session.kind).length<2)throw new Error('SQL_POLICY: 批量查询至少需要两条语句')
+  running.value=true;disconnectRequired.value=false;batchResults.value=undefined
+  try{
+   const batch=await window.dbex.executeReadBatch(props.session.id,{database,text:source,parameters:params,limit:limit.value})
+   if(disposed)return
+   applied.value=undefined;appliedMongoPlan.value=undefined;visited.value=[];result.value=undefined;offset.value=0
+   batchResults.value=batch;batchIndex.value=0
+   if(batch.items.length)selectBatch(0);else runId.value++
+   notice.value=t('已完成 {0} / {1} 条语句',[batch.items.length,batch.total])
+   if(batch.error)error.value=batch.error
+  }finally{running.value=false;disconnectRequired.value=false}
+ })
+}
 async function execute(paging?:number,selection=false,current=false){
  if(!loaded.value||busy.value||resultEdit.value)return
  if(!Number.isInteger(limit.value)||limit.value<1||limit.value>500){fail('INVALID_INPUT: 每页数量必须在 1 至 500 之间');return}
  showResults()
+ if(paging===undefined)batchResults.value=undefined
  await task(async()=>{
   let op:DatabaseOperation
   let nextPlan=appliedMongoPlan.value
@@ -323,7 +351,7 @@ async function exportQuery(format:'json'|'sql'){if(!currentId.value)return;await
   </div>
   <div class="editor-toolbar">
    <button class="btn primary small" :disabled="busy||!loaded" @click="execute(undefined,true)">{{ t('运行选中 / 全部') }}</button>
-   <button v-if="mode==='sql'" class="btn secondary small" :disabled="busy||!loaded" @click="execute(undefined,false,true)">{{t('运行当前语句')}}</button><button v-if="running" class="btn secondary small" @click="cancel">{{t(disconnectRequired?'取消并断开':'停止查询')}}</button>
+   <button v-if="mode==='sql'" class="btn secondary small" :disabled="busy||!loaded" @click="execute(undefined,false,true)">{{t('运行当前语句')}}</button><button v-if="mode==='sql'" class="btn secondary small" :disabled="busy||!loaded||session.transaction" @click="executeBatch">{{t('批量查询（只读）')}}</button><button v-if="running" class="btn secondary small" @click="cancel">{{t(disconnectRequired?'取消并断开':'停止查询')}}</button>
    <span class="toolbar-spacer"></span>
    <template v-if="mode==='sql'&&!clickhouse"><button class="btn secondary small" :disabled="busy||!session.writable||session.transaction" @click="transaction('mysql.begin')">{{ t('开始事务') }}</button><button class="btn secondary small" :disabled="busy||!session.transaction" @click="transaction('mysql.commit')">{{ t('提交') }}</button><button class="btn secondary small" :disabled="busy||!session.transaction" @click="transaction('mysql.rollback')">{{ t('回滚') }}</button></template>
    <span class="query-layout-buttons">
@@ -341,7 +369,7 @@ async function exportQuery(format:'json'|'sql'){if(!currentId.value)return;await
     </template>
     <div v-else class="query-editor native-mongo-editor"><CodeEditor ref="editor" v-model="script" language="dbex-mongo-script" completion-kind="mongodb" :readonly="busy||!loaded" :table-suggestions="targets.map(item=>item.entity||item.label)" :suggestions="fieldSuggestions" @execute="execute(undefined,true)" /></div>
    </template>
-   <template #result><QueryResultPanel :result="result" :kind="session.kind" :offset="offset" :query-text="executedQuery" :busy="busy" :active="active" :error="error" :notice="notice" :can-back="!clickhouse&&canPageBack" :can-first="!clickhouse&&canPageBack" :can-next="!clickhouse&&result?.nextOffset!==undefined" :can-refresh="canRefresh" :editable="canEditResult" :can-add="canAddResult" :run-id="runId" :source-label="sourceLabel" @page="page" @edit="editResult" @add="addResult" @remove="removeResult" @draft="draftResult" @collapse="setLayout('editor')"/></template>
+   <template #result><div v-if="batchResults" class="batch-results-strip"><button v-for="(item,i) in batchResults.items" :key="i" :title="item.sql" :class="['btn','secondary','small',{selected:batchIndex===i}]" @click="selectBatch(i)">{{t('语句结果')}} {{i+1}}</button><span class="muted-text">{{batchResults.items.length}} / {{batchResults.total}}</span><span v-if="batchResults.failedAt" class="danger-text">{{t('停止于语句')}} {{batchResults.failedAt}}</span></div><QueryResultPanel :result="result" :kind="session.kind" :offset="offset" :query-text="executedQuery" :busy="busy" :active="active" :error="error" :notice="notice" :can-back="!batchResults&&!clickhouse&&canPageBack" :can-first="!batchResults&&!clickhouse&&canPageBack" :can-next="!batchResults&&!clickhouse&&result?.nextOffset!==undefined" :can-refresh="!batchResults&&canRefresh" :editable="canEditResult" :can-add="canAddResult" :run-id="runId" :source-label="sourceLabel" @page="page" @edit="editResult" @add="addResult" @remove="removeResult" @draft="draftResult" @collapse="setLayout('editor')"/></template>
   </QuerySplit>
   <QueryParameterDialog v-if="parameterDialog&&active" :model-value="parameters" :named="clickhouse" @close="parameterDialog=false" @apply="value=>{parameters=value;parameterDialog=false}"/>
   <Teleport to="body"><div v-if="resultEdit&&active" class="modal-backdrop"><section class="dialog query-result-edit" role="dialog" :aria-label="t(resultEdit.mode==='insert'?'新增文档':'编辑文档')">
@@ -355,4 +383,5 @@ async function exportQuery(format:'json'|'sql'){if(!currentId.value)return;await
 </template>
 <style scoped>
 .query-object-fields{display:flex;gap:12px;align-items:end;padding:8px 12px;border-bottom:1px solid var(--border-soft);flex:none}.query-object-fields .field{flex:1;min-width:0}.query-object-fields .field:last-child{flex:0 0 86px}.query-object-toolbar{gap:6px}.saved-query-editor .workbench-header h2{margin:0} .query-context-header{padding:5px 10px;min-height:34px;border-bottom:1px solid var(--border-soft)}.query-context-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--text)}.query-context-label span{color:var(--muted)}.query-layout-buttons{display:flex;align-items:center;gap:4px;padding:3px 8px;background:var(--toolbar-bg);border-bottom:1px solid var(--border);flex:none}.query-layout-buttons .selected{background:var(--selected)}.query-result-edit{width:min(900px,90vw);height:min(620px,85vh);display:flex;flex-direction:column}.query-result-edit-code{flex:1;min-height:0}.query-object-fields{padding:5px 10px}.query-object-fields .field{display:flex;flex-direction:row;align-items:center;gap:6px}.query-object-fields .field span{flex:none}.query-object-fields .field:last-child{flex:0 0 120px}
+.batch-results-strip{display:flex;align-items:center;gap:5px;padding:4px 8px;overflow-x:auto;flex:none;background:var(--toolbar-bg);border-bottom:1px solid var(--border)}.batch-results-strip .selected{background:var(--selected)}
 </style>

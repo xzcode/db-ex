@@ -2,16 +2,18 @@
 import {computed,onMounted,onBeforeUnmount,ref,watch} from 'vue'
 import {t,localize} from '../i18n'
 import type {SessionInfo,ExplorerNode,OperationResult} from '../../shared/types'
-import {fileTransferSupported,type DataFileFormat,type DataFilePolicy,type FieldMapping,type FieldConversion,type FilePreview,type FileTransferJob,type FileTransferRequest} from '../../shared/file-transfer'
+import {fileTransferSupported,dataFileEncodings,type DataFileEncoding,type FileTransferPreset,type DataFileFormat,type DataFilePolicy,type FieldMapping,type FieldConversion,type FilePreview,type FileTransferJob,type FileTransferRequest} from '../../shared/file-transfer'
 import type {BrowseFilter} from '../../shared/browse-filter'
 import ResultGrid from './ResultGrid.vue'
 const props=defineProps<{session:SessionInfo;database:string;entity:string;direction:'import'|'export';fields?:string[];filter?:BrowseFilter;mongoFilter?:string}>()
 const emit=defineEmits<{close:[];session:[SessionInfo];completed:[]}>()
 const mongo=computed(()=>props.session.kind==='mongodb')
-const format=ref<DataFileFormat>('jsonl'),delimiter=ref(','),preview=ref<FilePreview>(),mapping=ref<FieldMapping[]>([]),policy=ref<DataFilePolicy>('append')
+const format=ref<DataFileFormat>('jsonl'),encoding=ref<DataFileEncoding>('utf-8'),delimiter=ref(','),preview=ref<FilePreview>(),mapping=ref<FieldMapping[]>([]),policy=ref<DataFilePolicy>('append')
 const preserve=ref(true),skipInvalid=ref(false),filterEnabled=ref(false),allFields=ref(true),exportFields=ref<string[]>([]),fieldText=ref('')
+const presets=ref<FileTransferPreset[]>([]),presetId=ref(''),presetName=ref(''),presetMapping=ref<FieldMapping[]>()
 const targetFields=ref<string[]>([]),busy=ref(false),error=ref(''),job=ref<FileTransferJob>(),step=ref(1)
 const writable=ref(props.session.writable)
+const canPersist=computed(()=>!!props.session.connectionId)
 const running=computed(()=>job.value?.state==='running')
 const stateLabel:Record<string,string>={running:'正在执行',completed:'操作已完成',failed:'失败',cancelled:'已取消',uncertain:'结果不确定'}
 const conversions:FieldConversion[]=['auto','string','integer','decimal','double','boolean','ejson','binary']
@@ -26,11 +28,38 @@ async function initialize(){
  if(!mongo.value){const result=await window.dbex.execute(props.session.id,{action:'mysql.structure',database:props.database,entity:props.entity});targetFields.value=result.rows.filter(r=>!/GENERATED|HIDDEN/i.test(r.extra||r.Extra||'')).map(r=>String(r.name||r.Field||'')).filter(Boolean);exportFields.value=[...targetFields.value]}
  else {targetFields.value=[...(props.fields||[])];fieldText.value=targetFields.value.join('\n')}
 }
-function mapFields(){if(!preview.value)return;mapping.value=preview.value.fields.map(source=>({source,target:mongo.value||targetFields.value.includes(source)?source:'',conversion:'auto'}))}
-async function chooseFile(){await act(async()=>{const file=await window.dbex.pickDataFile(props.session.id,format.value,delimiter.value);if(file){preview.value=file;mapFields();step.value=2}})}
+function mapFields(){
+ if(!preview.value)return
+ mapping.value=preview.value.fields.map(source=>{const prior=presetMapping.value?.find(m=>m.source===source);return prior?{...prior,target:mongo.value||targetFields.value.includes(prior.target)?prior.target:''}:{source,target:presetMapping.value?'':mongo.value||targetFields.value.includes(source)?source:'',conversion:'auto'}})
+ if(presetMapping.value?.some(m=>!preview.value!.fields.includes(m.source)))error.value='部分配置源字段未出现在文件样本中，请检查字段映射。'
+ presetMapping.value=undefined
+}
+async function reloadPresets(){if(canPersist.value)presets.value=await window.dbex.listFilePresets(props.session.id,props.database,props.entity,props.direction)}
+function loadPreset(){
+ const p=presets.value.find(x=>x.id===presetId.value);if(!p)return
+ const o=p.options;presetName.value=p.name;format.value=o.format;delimiter.value=o.delimiter;encoding.value=o.encoding||'utf-8'
+ policy.value=o.policy||'append';preserve.value=!!o.preserveDocuments;skipInvalid.value=!!o.skipInvalid
+ presetMapping.value=o.mapping?.map(m=>({...m}));allFields.value=o.fields===undefined
+ if(mongo.value)fieldText.value=(o.fields||props.fields||[]).join('\n');else exportFields.value=o.fields?[...o.fields]:[...targetFields.value]
+ filterEnabled.value=p.useCurrentFilter&&canFilter.value
+ preview.value=undefined;mapping.value=[];step.value=1
+}
+async function savePreset(update=false){
+ await act(async()=>{
+  const {token,database,entity,direction,filter,mongoFilter,...options}=request()
+  const saved=await window.dbex.saveFilePreset(props.session.id,props.database,props.entity,props.direction,{name:presetName.value,options,useCurrentFilter:filterEnabled.value},update?presetId.value:undefined)
+  await reloadPresets();presetId.value=saved.id;presetName.value=saved.name
+ })
+}
+async function removePreset(){await act(async()=>{await window.dbex.removeFilePreset(props.session.id,props.database,props.entity,props.direction,presetId.value);presetId.value='';presetName.value='';presetMapping.value=undefined;await reloadPresets()})}
+async function exportReport(){
+ if(!job.value||!job.value.hasErrorReport||running.value)return
+ await act(async()=>{await window.dbex.exportFileTransferReport(job.value!.id)})
+}
+async function chooseFile(){await act(async()=>{const file=await window.dbex.pickDataFile(props.session.id,format.value,delimiter.value,encoding.value);if(file){preview.value=file;mapFields();step.value=2}})}
 async function unlock(){await act(async()=>{const s=await window.dbex.setWriteAccess(props.session.id,true);writable.value=s.writable;emit('session',s)})}
 function request():FileTransferRequest{
- const base={direction:props.direction,database:props.database,entity:props.entity,format:format.value,delimiter:delimiter.value}
+ const base={direction:props.direction,database:props.database,entity:props.entity,format:format.value,delimiter:delimiter.value,encoding:props.direction==='import'?encoding.value:'utf-8' as const}
  if(props.direction==='import')return {...base,token:preview.value!.token,policy:policy.value,preserveDocuments:autoFields.value,mapping:autoFields.value?undefined:effectiveMapping.value,skipInvalid:skipInvalid.value}
  return {...base,fields:allFields.value&&format.value==='jsonl'?undefined:selectedFields.value,...(filterEnabled.value?{filter:props.filter,mongoFilter:props.mongoFilter}:{})}
 }
@@ -44,9 +73,9 @@ async function poll(){
  catch(e){if(!disposed)error.value=e instanceof Error?e.message:String(e)}finally{polling=false}
 }
 function back(){step.value=1;preview.value=undefined;job.value=undefined;notified=false}
-watch([format,delimiter],()=>{preview.value=undefined;mapping.value=[];if(props.direction==='import')step.value=1})
+watch([format,delimiter,encoding],()=>{preview.value=undefined;mapping.value=[];if(props.direction==='import')step.value=1})
 watch(policy,p=>{if(p==='replace')skipInvalid.value=false})
-onMounted(async()=>{await act(initialize);timer=setInterval(()=>void poll(),500)})
+onMounted(async()=>{await act(async()=>{await initialize();await reloadPresets()});timer=setInterval(()=>void poll(),500)})
 onBeforeUnmount(()=>{disposed=true;if(timer)clearInterval(timer);if(running.value&&job.value)void window.dbex.cancelFileTransfer(job.value.id).catch(()=>{})})
 </script>
 <template>
@@ -55,7 +84,8 @@ onBeforeUnmount(()=>{disposed=true;if(timer)clearInterval(timer);if(running.valu
   <div class="file-wizard-steps"><span :class="{active:step===1}">1 · {{t('文件与格式')}}</span><span :class="{active:step===2}">2 · {{t('预览与字段映射')}}</span><span :class="{active:step===3}">3 · {{t('执行结果')}}</span></div>
   <div v-if="error" class="inline-message error" role="alert">{{localize(error)}}</div>
   <div v-if="step!==3" class="file-wizard-body">
-   <div class="file-wizard-options"><label class="field">{{t('格式')}}<select v-model="format" :disabled="busy"><option value="jsonl">JSONL / EJSON</option><option value="csv">CSV</option></select></label><label v-if="format==='csv'" class="field">{{t('分隔符')}}<select v-model="delimiter" :disabled="busy"><option value=",">,</option><option value=";">;</option><option :value="'\t'">Tab</option><option value="|">|</option></select></label><span class="muted-text">UTF-8</span><button v-if="direction==='import'" class="btn secondary" :disabled="busy" @click="chooseFile">{{t('选择数据文件')}}</button><span v-if="preview" class="muted-text">{{preview.name}} · {{(preview.size/1048576).toFixed(2)}} MiB</span></div>
+   <div v-if="canPersist" class="file-preset-toolbar"><select v-model="presetId" :aria-label="t('文件传输配置')" :disabled="busy" @change="presetName=presets.find(p=>p.id===presetId)?.name||''"><option value="">{{t('文件传输配置')}}</option><option v-for="p in presets" :key="p.id" :value="p.id">{{p.name}}</option></select><button class="btn secondary small" :disabled="busy||!presetId" @click="loadPreset">{{t('应用配置')}}</button><input v-model="presetName" :aria-label="t('配置名称')" :placeholder="t('配置名称')"/><button class="btn secondary small" :disabled="busy||!presetName.trim()||direction==='import'&&!preview" @click="savePreset()">{{t('另存当前配置')}}</button><button class="btn secondary small" :disabled="busy||!presetId||!presetName.trim()||direction==='import'&&!preview" @click="savePreset(true)">{{t('更新配置')}}</button><button class="btn secondary small danger-text" :disabled="busy||!presetId" @click="removePreset">{{t('删除')}}</button></div>
+   <div class="file-wizard-options"><label class="field">{{t('格式')}}<select v-model="format" :disabled="busy"><option value="jsonl">JSONL / EJSON</option><option value="csv">CSV</option></select></label><label v-if="format==='csv'" class="field">{{t('分隔符')}}<select v-model="delimiter" :disabled="busy"><option value=",">,</option><option value=";">;</option><option :value="'\t'">Tab</option><option value="|">|</option></select></label><label v-if="direction==='import'" class="field">{{t('文件编码')}}<select v-model="encoding" :aria-label="t('文件编码')" :disabled="busy"><option v-for="e in dataFileEncodings" :key="e">{{e}}</option></select></label><span v-else class="muted-text">UTF-8</span><button v-if="direction==='import'" class="btn secondary" :disabled="busy" @click="chooseFile">{{t('选择数据文件')}}</button><span v-if="preview" class="muted-text">{{preview.name}} · {{(preview.size/1048576).toFixed(2)}} MiB</span></div>
    <p class="compact-help">{{t('按批次流式处理，不限制文件总行数。CSV 为文本格式，JSONL 保留扩展类型；大整数请使用字符串或扩展 JSON。')}}</p>
    <template v-if="direction==='import'&&preview">
     <section class="file-sample"><strong>{{t('文件数据预览')}} · {{preview.sample.length}}</strong><ResultGrid :columns="preview.fields" :rows="sampleRows" resize-all/></section>
@@ -76,9 +106,10 @@ onBeforeUnmount(()=>{disposed=true;if(timer)clearInterval(timer);if(running.valu
    <progress v-if="running" class="file-job-progress"/>
    <div class="file-job-metrics"><div><small>{{t('已读取行数')}}</small><strong>{{job.read.toLocaleString()}}</strong></div><div><small>{{t('已提交行数')}}</small><strong>{{job.committed.toLocaleString()}}</strong></div><div><small>{{t('已跳过行数')}}</small><strong>{{job.skipped.toLocaleString()}}</strong></div><div><small>{{t('读取数据量')}}</small><strong>{{(job.bytes/1048576).toFixed(2)}} MiB</strong></div></div>
    <p v-if="job.error" class="inline-message error">{{localize(job.error)}}</p><p v-if="job.state==='uncertain'" class="inline-message error">{{t('结果不确定，请核对目标数据，不要直接重试。')}}</p>
-   <table v-if="job.errors?.length"><thead><tr><th>{{t('记录')}}</th><th>{{t('错误')}}</th></tr></thead><tbody><tr v-for="item in job.errors" :key="item.row"><td>{{item.row}}</td><td>{{item.code}}</td></tr></tbody></table><p v-if="job.skipped>(job.errors?.length||0)" class="compact-help">{{t('只显示前 200 条转换错误，跳过总数如上。')}}</p>
+   <table v-if="job.errors?.length"><thead><tr><th>{{t('记录')}}</th><th>{{t('错误')}}</th></tr></thead><tbody><tr v-for="item in job.errors" :key="item.row"><td>{{item.row}}</td><td>{{item.code}}</td></tr></tbody></table><button v-if="job.hasErrorReport&&!running" class="btn secondary" :disabled="busy" @click="exportReport">{{t('导出完整转换错误报告')}}</button><p v-if="job.skipped>(job.errors?.length||0)" class="compact-help">{{t('只显示前 200 条转换错误，跳过总数如上。')}}</p>
   </div>
   <footer class="dialog-footer"><button v-if="running" class="btn secondary danger-text" @click="cancel">{{t('取消任务')}}</button><button v-else-if="step!==1" class="btn secondary" :disabled="busy" @click="back">{{t('重新配置')}}</button><span class="toolbar-spacer"/><button class="btn secondary" :disabled="busy||running" @click="emit('close')">{{t('关闭')}}</button><button v-if="step!==3" class="btn primary" :disabled="!canStart" @click="start">{{t('确认执行')}}</button></footer>
  </section></div></Teleport>
 </template>
-<style scoped>.data-file-wizard{width:min(980px,94vw);height:min(760px,92vh);display:flex;flex-direction:column}.file-wizard-steps{display:flex;gap:20px;padding:12px 16px;border-bottom:1px solid var(--border);color:var(--muted)}.file-wizard-steps .active{color:var(--accent);font-weight:600}.file-wizard-body{flex:1;min-height:0;overflow:auto;padding:12px 16px;display:flex;flex-direction:column;gap:12px}.file-wizard-options{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.file-wizard-options .field{display:flex;align-items:center;gap:7px}.file-sample{display:flex;flex-direction:column;height:210px;min-height:100px;border:1px solid var(--border);padding:6px;gap:4px}.file-mapping{overflow:auto;min-height:120px;max-height:320px;border:1px solid var(--border)}.file-mapping table{width:100%;border-collapse:collapse}.file-mapping th,.file-mapping td{padding:6px 9px;text-align:start;border-bottom:1px solid var(--border-soft)}.file-mapping th{position:sticky;top:0;background:var(--header-bg)}.file-mapping>label{display:flex;padding:5px;gap:6px}.file-job-metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.file-job-metrics>div{display:flex;flex-direction:column;gap:7px;background:var(--panel-raised);padding:12px}.file-job-metrics strong{font-size:20px}.file-job-metrics small{color:var(--muted)}.file-job-progress{width:100%;height:10px;accent-color:var(--accent)}</style>
+<style scoped>.data-file-wizard{width:min(980px,94vw);height:min(760px,92vh);display:flex;flex-direction:column}.file-wizard-steps{display:flex;gap:20px;padding:12px 16px;border-bottom:1px solid var(--border);color:var(--muted)}.file-wizard-steps .active{color:var(--accent);font-weight:600}.file-wizard-body{flex:1;min-height:0;overflow:auto;padding:12px 16px;display:flex;flex-direction:column;gap:12px}.file-wizard-options{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.file-wizard-options .field{display:flex;align-items:center;gap:7px}.file-sample{display:flex;flex-direction:column;height:210px;min-height:100px;border:1px solid var(--border);padding:6px;gap:4px}.file-mapping{overflow:auto;min-height:120px;max-height:320px;border:1px solid var(--border)}.file-mapping table{width:100%;border-collapse:collapse}.file-mapping th,.file-mapping td{padding:6px 9px;text-align:start;border-bottom:1px solid var(--border-soft)}.file-mapping th{position:sticky;top:0;background:var(--header-bg)}.file-mapping>label{display:flex;padding:5px;gap:6px}.file-job-metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.file-job-metrics>div{display:flex;flex-direction:column;gap:7px;background:var(--panel-raised);padding:12px}.file-job-metrics strong{font-size:20px}.file-job-metrics small{color:var(--muted)}.file-job-progress{width:100%;height:10px;accent-color:var(--accent)}.file-preset-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding-bottom:8px;border-bottom:1px solid var(--border)}.file-preset-toolbar input{min-width:110px;flex:1}.file-preset-toolbar select{max-width:220px}
+</style>

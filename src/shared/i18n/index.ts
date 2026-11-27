@@ -1,3 +1,4 @@
+import {qRefinementTraditional,qFollowupTraditional} from './catalog-q-refinement'
 import {queryRefinementCatalogs} from './catalog-query-refinement'
 import { migrationCatalogs } from './catalog-migration'
 import {uiRefinementCatalogs} from './catalog-ui-refinement'
@@ -117,7 +118,7 @@ export function resolveLocale(preference: LanguagePreference, systemLanguage: st
 }
 export const catalogs: Readonly<Record<Locale, Readonly<Record<string, string>>>> = {
   'zh-CN': {}, en,
-  'zh-TW': { ...zh_TW, ...connectionCatalogs['zh-TW'], ...indexHelpCatalogs['zh-TW'], ...navigationCatalogs['zh-TW'], ...queryEditorCatalogs['zh-TW'], ...gridEditCatalogs['zh-TW'], ...clickHouseManagementCatalogs['zh-TW'], ...migrationCatalogs['zh-TW'], ...uiRefinementCatalogs['zh-TW'], ...queryRefinementCatalogs['zh-TW'] },
+  'zh-TW': { ...zh_TW, ...connectionCatalogs['zh-TW'], ...indexHelpCatalogs['zh-TW'], ...navigationCatalogs['zh-TW'], ...queryEditorCatalogs['zh-TW'], ...gridEditCatalogs['zh-TW'], ...clickHouseManagementCatalogs['zh-TW'], ...migrationCatalogs['zh-TW'], ...uiRefinementCatalogs['zh-TW'], ...queryRefinementCatalogs['zh-TW'], ...qRefinementTraditional, ...qFollowupTraditional },
   'ja': { ...ja, ...connectionCatalogs['ja'], ...indexHelpCatalogs['ja'], ...navigationCatalogs['ja'], ...queryEditorCatalogs['ja'], ...gridEditCatalogs['ja'], ...clickHouseManagementCatalogs['ja'], ...migrationCatalogs['ja'], ...uiRefinementCatalogs['ja'] },
   'ko': { ...ko, ...connectionCatalogs['ko'], ...indexHelpCatalogs['ko'], ...navigationCatalogs['ko'], ...queryEditorCatalogs['ko'], ...gridEditCatalogs['ko'], ...clickHouseManagementCatalogs['ko'], ...migrationCatalogs['ko'], ...uiRefinementCatalogs['ko'] },
   'de': { ...de, ...connectionCatalogs['de'], ...indexHelpCatalogs['de'], ...navigationCatalogs['de'], ...queryEditorCatalogs['de'], ...gridEditCatalogs['de'], ...clickHouseManagementCatalogs['de'], ...migrationCatalogs['de'], ...uiRefinementCatalogs['de'] },

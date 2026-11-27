@@ -66,6 +66,19 @@ try{
  const upsert=await run({...base,format:'csv',delimiter:';',direction:'import',token:update.token,policy:'upsert',skipInvalid:true,mapping:[{source:'identifier',target:'id',conversion:'integer'},{source:'description',target:'note',conversion:'string'}]},undefined,b)
  assert.equal(upsert.state,'completed',JSON.stringify(upsert));assert.equal(upsert.committed,2);assert.equal(upsert.skipped,1)
  assert.equal(t.prepare('SELECT note FROM records WHERE id=1').get()?.note,'updated')
+ // A large conversion report contains all failures, not just the 200 UI rows.
+ const bad=join(dir,'legacy.csv')
+ const legacy='identifier;description\r\n4;中文\r\n'+Array.from({length:251},(_,i)=>'bad'+i+';invalid').join('\r\n')+'\r\n'
+ await writeFile(bad,Buffer.concat([Buffer.from([255,254]),Buffer.from(legacy,'utf16le')]))
+ const oldFile=await service.pick(owner,'q-fixture',bad,'csv',';','utf-16le')
+ const manyErrors=await run({...base,format:'csv',delimiter:';',encoding:'utf-16le',direction:'import',token:oldFile.token,skipInvalid:true,mapping:[{source:'identifier',target:'id',conversion:'integer'},{source:'description',target:'note',conversion:'string'}]},undefined,b)
+ assert.equal(manyErrors.state,'completed',JSON.stringify(manyErrors));assert.equal(manyErrors.skipped,251);assert.equal(manyErrors.committed,1);assert.equal(manyErrors.errors?.length,200);assert.equal(manyErrors.hasErrorReport,true)
+ const report=join(dir,'conversion-errors.csv')
+ await service.saveReport(owner,manyErrors.id,report)
+ assert.equal((await readFile(report,'utf8')).trim().split(/\r?\n/).length,252)
+ await assert.rejects(service.saveReport(owner+1,manyErrors.id,join(dir,'forbidden.csv')),/FILE_TRANSFER/)
+ assert.equal(t.prepare('SELECT note FROM records WHERE id=4').get()?.note,'中文')
+ console.log('Q5 UTF-16 CSV: 251 conversion errors, complete report exported, owner scope enforced')
  const existing=await run({...base,direction:'export'},jsonl)
  assert.equal(existing.state,'failed');assert.match(existing.error||'',/OUTPUT_EXISTS/)
  assert.equal((await readFile(jsonl,'utf8')).split('\n').length,50002)
@@ -81,5 +94,11 @@ try{
  assert.equal(next.rows[0]?.n,'50001')
  assert.equal(sessions.info(original.id).id,original.id)
  console.log('Q4 SQLite: real read query cancelled; original session remains usable')
+ const batch=await sessions.executeReadBatch(original.id,{database:'main',text:'SELECT ? AS n; SELECT COUNT(*) AS n FROM records;',parameters:['9223372036854775807'],limit:100})
+ assert.equal(batch.total,2);assert.deepEqual(batch.items.map(i=>i.result.rows[0]?.n),['9223372036854775807','50001'])
+ await assert.rejects(sessions.executeReadBatch(original.id,{database:'main',text:'SELECT 1; DELETE FROM records',parameters:[],limit:100}),/SQL_POLICY/)
+ const partial=await sessions.executeReadBatch(original.id,{database:'main',text:'SELECT 1 AS n; SELECT * FROM no_such_q_table; SELECT 3 AS n',parameters:[],limit:100})
+ assert.equal(partial.items.length,1);assert.equal(partial.failedAt,2)
+ console.log('Q4 SQLite: read batch parameter binding, preflight rejection, partial result retention passed')
 
 }finally{await sessions.closeAll();await service.closeAll();s.close();t.close();await rm(dir,{recursive:true,force:true})}

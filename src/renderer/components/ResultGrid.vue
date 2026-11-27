@@ -41,6 +41,8 @@ const props = withDefaults(defineProps<{
   workspaceTools?:boolean
   layoutScope?:string
   layoutValue?:GridLayout
+  columnDetails?:Record<string,{type?:string;comment?:string}>
+  exportSelection?:boolean
   exactCell?:(row:number,field:string)=>string|undefined
   editableCellText?:(row:number,field:string)=>string|undefined
   actionColumns?: string[]
@@ -50,7 +52,7 @@ const props = withDefaults(defineProps<{
   canInlineEdit?:(row:number,field:string)=>boolean
   canEditColumn?:(field:string)=>boolean
 }>(), { selected: -1, selectable: false, checked: () => [], offset: 0, showColors:true })
-const emit = defineEmits<{ cellView:[row:number,field:string];stageCells:[drafts:CellDraft[]];layoutChange:[layout:GridLayout];inlineBegin:[row:number,field:string];inlineInput:[text:string];inlineFinish:[cancel:boolean];columnSelected:[field:string];columnEdit:[field:string]; columnAction:[action:ColumnAction,field:string]; select: [index: number]; open: [index: number]; check: [index: number]; checkAll: []; documentEdit: [index: number]; documentView: [index: number]; documentAction: [action: 'add' | 'copy-value' | 'copy-document' | 'duplicate' | 'delete' | 'null' | 'empty' | 'filter', index: number, field?: string] }>()
+const emit = defineEmits<{ cellView:[row:number,field:string];stageCells:[drafts:CellDraft[]];exportRows:[indices:number[]];layoutChange:[layout:GridLayout];inlineBegin:[row:number,field:string];inlineInput:[text:string];inlineFinish:[cancel:boolean];columnSelected:[field:string];columnEdit:[field:string]; columnAction:[action:ColumnAction,field:string]; select: [index: number]; open: [index: number]; check: [index: number]; checkAll: []; documentEdit: [index: number]; documentView: [index: number]; documentAction: [action: 'add' | 'copy-value' | 'copy-document' | 'duplicate' | 'delete' | 'null' | 'empty' | 'filter', index: number, field?: string] }>()
 const mongo = computed(() => props.bsonTypes !== undefined)
 const rowHeight = computed(() => gridRowHeight(preferences.value,mongo.value))
 const headerHeight = computed(() => Math.max(mongo.value?28:34,preferences.value.records.fontSize+12))
@@ -152,7 +154,9 @@ const layout=ref<GridLayout>(readLayout()),settingsOpen=ref(false)
 const widths=computed(()=>layout.value.widths)
 const displayedColumns=computed(()=>props.workspaceTools?visibleGridColumns(layout.value):props.columns)
 function saveLayout(value:GridLayout){
- layout.value=normalizeGridLayout(value,props.columns)
+ const next=normalizeGridLayout(value,props.columns)
+ if(JSON.stringify(visibleGridColumns(layout.value))!==JSON.stringify(visibleGridColumns(next))){anchor.value=undefined;focus.value=undefined}
+ layout.value=next
  if(layoutKey.value)try{localStorage.setItem(layoutKey.value,JSON.stringify(layout.value))}catch{}
  emit('layoutChange',JSON.parse(JSON.stringify(layout.value)))
 }
@@ -160,6 +164,7 @@ watch([layoutKey,()=>props.columns.join('\0')],()=>{layout.value=readLayout();an
 watch(()=>props.layoutValue,v=>{if(v)saveLayout(v)},{deep:true})
 const anchor=ref<GridPoint>(),focus=ref<GridPoint>()
 const range=computed(()=>anchor.value&&focus.value?gridRange(anchor.value,focus.value):undefined)
+const selectionRows=computed(()=>range.value?Array.from({length:range.value.bottom-range.value.top+1},(_,i)=>range.value!.top+i):[])
 const rangeCount=computed(()=>range.value?(range.value.bottom-range.value.top+1)*(range.value.right-range.value.left+1):0)
 function inRange(row:number,column:number){const r=range.value;return !!r&&row>=r.top&&row<=r.bottom&&column>=r.left&&column<=r.right}
 function focusCell(row:number,column:number,extend=false,move=false){
@@ -357,9 +362,9 @@ function display(value: unknown): string {
 
 <template>
   <div v-if="workspaceTools" class="grid-tools">
-    <button class="btn secondary small" :disabled="!focus" @click="focus&&emit('cellView',focus.row,displayedColumns[focus.column]!)">{{t('字段编辑器')}}</button><button class="btn secondary small" @click="settingsOpen=true">{{t('列管理')}}</button><button class="btn secondary small" @click="showFind=!showFind">{{t('查找替换')}}</button><button class="btn secondary small" :disabled="!rangeCount" @click="copyRange()">{{t('复制选区')}}</button><span class="muted-text">{{rangeCount?rangeCount+' '+t('个单元格'):''}}</span>
+    <button class="btn secondary small" :disabled="!focus" @click="focus&&emit('cellView',focus.row,displayedColumns[focus.column]!)">{{t('字段编辑器')}}</button><button class="btn secondary small" @click="settingsOpen=true">{{t('列管理')}}</button><button class="btn secondary small" @click="showFind=!showFind">{{t('查找替换')}}</button><button class="btn secondary small" :disabled="!rangeCount" @click="copyRange()">{{t('复制选区')}}</button><button v-if="exportSelection" class="btn secondary small" :disabled="!selectionRows.length" @click="emit('exportRows',selectionRows)">{{t('导出所选记录')}}</button><span class="muted-text">{{rangeCount?rangeCount+' '+t('个单元格'):''}}</span>
     <template v-if="showFind"><input v-model="search" :aria-label="t('查找')" :placeholder="t('查找')"/><button class="btn secondary small" :disabled="!matches.length" @click="nextMatch">{{t('查找下一处')}} · {{matches.length}}</button><input v-if="editableCellText" v-model="replace" :aria-label="t('替换为')" :placeholder="t('替换为')"/><button v-if="editableCellText" class="btn secondary small" :disabled="!matches.length" @click="replaceMatches">{{t('暂存当前页替换')}}</button></template>
-    <GridColumnSettings v-if="settingsOpen" :fields="columns" :model-value="layout" @update:model-value="saveLayout" @close="settingsOpen=false"/>
+    <GridColumnSettings v-if="settingsOpen" :fields="columns" :model-value="layout" :details="columnDetails" @update:model-value="saveLayout" @close="settingsOpen=false"/>
   </div>
   <div ref="scrollHost" class="grid-scroll" tabindex="0" :aria-label="t('结果表格')" @scroll.passive="onScroll" @keydown="keyGrid" @copy="copyRange" @paste="pasteRange">
     <table :class="['data-table', 'configured-grid', { 'virtual-grid': virtual, 'mongo-grid': mongo||resizeAll||workspaceTools, 'typed-grid': !!columnTypes || !!redisRowTypes || !!sqliteTypes }]" :style="gridStyle" :aria-rowcount="rows.length + 1" :dir="mongo ? 'ltr' : undefined">

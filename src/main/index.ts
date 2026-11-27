@@ -1,3 +1,5 @@
+import {FilePresetStore} from './storage/file-presets'
+import type {FileTransferPreset} from '../shared/file-transfer'
 import { app, BrowserWindow, clipboard, dialog, ipcMain, shell, utilityProcess, nativeImage, screen, session as electronSession } from 'electron'
 import { windowChromeOptions } from '../shared/window-chrome'
 import { isLocale, resolveLocale, translate, localizeMessage, type Locale } from '../shared/i18n'
@@ -65,6 +67,14 @@ const browseProfiles=new BrowseProfileStore({
  async read(){const f=await readJson<{version:number;encrypted:string}>('browse-profiles.secure.json');if(!f)return [];if(f.version!==1||typeof f.encrypted!=='string')throw new Error('INVALID_PROFILE: 浏览配置文件无效');return decrypt<BrowseProfile[]>(f.encrypted)},
  write:values=>writeJson('browse-profiles.secure.json',{version:1,encrypted:encrypt(values)})
 })
+const filePresets=new FilePresetStore({
+ async read(){const f=await readJson<{version:number;encrypted:string}>('file-presets.secure.json');if(!f)return [];if(f.version!==1||typeof f.encrypted!=='string')throw new Error('FILE_TRANSFER: 配置文件无效');return decrypt<FileTransferPreset[]>(f.encrypted)},
+ write:values=>writeJson('file-presets.secure.json',{version:1,encrypted:encrypt(values)})
+})
+function presetScope(id:string,database:string,entity:string,direction:unknown):import('../shared/file-transfer').FileTransferPresetScope{
+ if(direction!=='import'&&direction!=='export')throw new Error('FILE_TRANSFER: 参数无效')
+ return {...browseScope(id,database,entity),direction}
+}
 function browseScope(id:string,database:string,entity:string){
  const scope=savedQueryScope(id,database)
  if(typeof entity!=='string'||!entity||entity.length>200||/[\u0000-\u001f]/.test(entity))throw new Error('INVALID_PROFILE: 浏览配置无效')
@@ -155,14 +165,22 @@ async function saveText(win: BrowserWindow, name: string, content: string, forma
   return true
 }
 function registerIpc(): void {
-  ipcMain.handle('file-transfer:pick',sessionHandler(async(win,id,format:unknown,delimiter:unknown)=>{
+  ipcMain.handle('file-transfer:pick',sessionHandler(async(win,id,format:unknown,delimiter:unknown,encoding?:unknown)=>{
     const result=await dialog.showOpenDialog(win,{properties:['openFile'],filters:[{name:'CSV / JSONL',extensions:['csv','jsonl','ndjson','txt']}]})
     if(result.canceled||!result.filePaths[0])return null
     assertOwner(win,id)
-    return fileTransfers.pick(win.webContents.id,id,result.filePaths[0],format,delimiter)
+    return fileTransfers.pick(win.webContents.id,id,result.filePaths[0],format,delimiter,encoding)
   }))
+  ipcMain.handle('file-presets:list',sessionHandler((_win,id,database:string,entity:string,direction:unknown)=>filePresets.list(presetScope(id,database,entity,direction))))
+  ipcMain.handle('file-presets:save',sessionHandler((_win,id,database:string,entity:string,direction:unknown,input:unknown,presetId?:string)=>filePresets.save(presetScope(id,database,entity,direction),input,presetId)))
+  ipcMain.handle('file-presets:remove',sessionHandler((_win,id,database:string,entity:string,direction:unknown,presetId:string)=>filePresets.remove(presetScope(id,database,entity,direction),presetId)))
   ipcMain.handle('file-transfer:job',handler(win=>fileTransfers.list(win.webContents.id)))
   ipcMain.handle('file-transfer:cancel',handler((win,id:string)=>fileTransfers.cancel(win.webContents.id,id)))
+  ipcMain.handle('file-transfer:report',handler(async(win,id:string)=>{
+    const result=await dialog.showSaveDialog(win,{defaultPath:'dbex-conversion-errors.csv',filters:[{name:'CSV',extensions:['csv']}]})
+    if(result.canceled||!result.filePath)return false
+    await fileTransfers.saveReport(win.webContents.id,id,result.filePath);return true
+  }))
   ipcMain.handle('file-transfer:start',sessionHandler(async(win,id,input:unknown)=>{
     const info=sessions.info(id),request=normalizeFileTransfer(input,info.kind),owner=win.webContents.id
     const writing=request.direction==='import'
@@ -300,6 +318,7 @@ function registerIpc(): void {
   })
   ipcMain.handle('sessions:execute',executeHandler(false))
   ipcMain.handle('sessions:execute-query',executeHandler(true))
+  ipcMain.handle('sessions:read-batch',sessionHandler((_win,id,input:unknown)=>sessions.executeReadBatch(id,input)))
   ipcMain.handle('sessions:cancel-query',sessionHandler((_win,id)=>sessions.cancelQuery(id)))
   ipcMain.handle('clipboard:copy-text', handler((_win, value: unknown) => {
     if (typeof value !== 'string' || Buffer.byteLength(value, 'utf8') > 2 * 1024 * 1024) throw new Error('LIMIT_EXCEEDED: 剪贴板文本过大')
