@@ -1,0 +1,39 @@
+name: M12 relational migration
+on:
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: m12-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  real-migration:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'feature/m12-')
+    name: Real structure sync and data transfer (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {engine: mysql, image: 'mysql:8.0'}
+          - {engine: mysql, image: 'mysql:8.4'}
+          - {engine: mariadb, image: 'mariadb:11.8'}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      - run: npx tsc --noEmit -p tsconfig.m11.json
+      - name: Real isolated mTLS/SSH database and M12 migration
+        env:
+          DBEX_M12_MIGRATION: '1'
+          ENGINE: ${{ matrix.engine }}
+          IMAGE: ${{ matrix.image }}
+        run: bash scripts/test-m11-engine-docker.sh "$ENGINE" "$IMAGE"

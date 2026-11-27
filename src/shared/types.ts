@@ -222,6 +222,11 @@ export interface NativeCliSnapshot {output:string;status:string;running:boolean;
 export interface DbExAPI {
   readonly windowChrome:import('./window-chrome').WindowChrome
   readonly workspaceWindowId:string
+  migrationCatalog(id:string,database?:string):Promise<import('./migration').MigrationCatalog>
+  previewMigration(request:import('./migration').MigrationRequest):Promise<import('./migration').MigrationPlan>
+  runMigration(planId:string,steps:string[]):Promise<import('./migration').MigrationJob>
+  listMigrationJobs():Promise<import('./migration').MigrationJob[]>
+  cancelMigration(id:string):Promise<void>
   newWorkspaceWindow():Promise<boolean>
   restoreWorkspaceWindows(restore:boolean):Promise<void>
   getNativePreferences():Promise<import('./preferences').NativePreferences>

@@ -9,6 +9,7 @@ import { readFile, stat, writeFile, mkdir, mkdtemp, rm, chmod } from 'node:fs/pr
 import { pathToFileURL } from 'node:url'
 import type { ConnectionConfig, DatabaseOperation, FileImport, QuerySnippet } from '../shared/types'
 import { ConnectionStore } from './connections/store'
+import {MigrationService} from './migration/service'
 import { SessionManager } from './connections/manager'
 import { validateId } from './connections/validation'
 import { SnippetStore } from './storage/snippets'
@@ -28,6 +29,7 @@ function getSystemLanguage(): string { return app.getPreferredSystemLanguages()[
 let currentLocale: Locale = 'en'
 const tr = (key: string, values: readonly unknown[] = []) => translate(currentLocale, key, values)
 const store = new ConnectionStore()
+const migrations=new MigrationService(id=>store.get(id))
 const sessions = new SessionManager(modulePath=>{
   const child=utilityProcess.fork(modulePath,[],{stdio:'ignore',serviceName:'DB EX SQLite'})
   return {send:message=>child.postMessage(message),onMessage:callback=>{child.on('message',callback)},onExit:callback=>{child.once('exit',callback)},onError:callback=>{child.on('error',callback)},kill:()=>{child.kill()}}
@@ -127,6 +129,17 @@ async function saveText(win: BrowserWindow, name: string, content: string, forma
   return true
 }
 function registerIpc(): void {
+  ipcMain.handle('migration:catalog',handler((win,id:unknown,database?:unknown)=>migrations.catalog(win.webContents.id,id,database)))
+  ipcMain.handle('migration:preview',handler((win,request:unknown)=>migrations.preview(win.webContents.id,request)))
+  ipcMain.handle('migration:jobs',handler(win=>migrations.list(win.webContents.id)))
+  ipcMain.handle('migration:cancel',handler((win,id:unknown)=>migrations.cancel(win.webContents.id,id)))
+  ipcMain.handle('migration:run',handler(async(win,planId:unknown,steps:unknown)=>{
+    const owner=win.webContents.id
+    const info=migrations.confirmation(owner,planId,steps)
+    await confirm(win,'确认执行数据库迁移？',tr('源数据库')+': '+info.source+'\n'+tr('目标数据库')+': '+info.target+'\n'+tr('结构变更')+': '+info.ddl+'\n'+tr('数据传输')+': '+info.data+'\n\n'+info.names.join(', ')+'\n\n'+tr('已完成的结构变更和已提交的表不会自动回滚。源与目标结构须在执行前复核。'))
+    if(!windows.has(owner)||quitting)throw new Error('SESSION_CLOSED: 会话已关闭，请重新连接')
+    return migrations.start(owner,planId,steps)
+  }))
   ipcMain.handle('workspace:new-window',handler(()=>{if(windows.size>=8)throw new Error('LIMIT_EXCEEDED: 最多打开8个工作区窗口');createWindow(randomUUID());return true}))
   ipcMain.handle('workspace:restore-windows',handler((win,restore:unknown)=>{
     if(typeof restore!=='boolean'||windowIds.get(win.webContents.id)!==startupWindowId||windowRestoreStarted)return
@@ -364,7 +377,7 @@ function createWindow(id=PRIMARY_WORKSPACE,bounds?:WorkspaceWindow['bounds']): v
   windows.add(contentsId);windowIds.set(contentsId,id)
   win.on('move',scheduleWindows);win.on('resize',scheduleWindows)
   win.on('close',()=>{if(!quitting&&windows.size===1)void persistWindows().catch(()=>{})})
-  win.webContents.once('destroyed', () => {windows.delete(contentsId);windowIds.delete(contentsId);void closeWindowSessions(contentsId);if(!quitting&&windowRestoreStarted)void persistWindows().catch(()=>{})})
+  win.webContents.once('destroyed', () => {windows.delete(contentsId);windowIds.delete(contentsId);void closeWindowSessions(contentsId);void migrations.closeOwner(contentsId);if(!quitting&&windowRestoreStarted)void persistWindows().catch(()=>{})})
   win.once('ready-to-show', () => win.show())
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   win.webContents.on('will-navigate', event => event.preventDefault())
@@ -398,5 +411,5 @@ app.on('before-quit', event => {
   event.preventDefault(); quitting = true
   if(windowSaveTimer)clearTimeout(windowSaveTimer)
   for(const cli of nativeClis.values())cli.stop()
-  void Promise.allSettled([persistWindows(),sessions.closeAll(),...nativeCliJobs.values()]).finally(() => app.quit())
+  void Promise.allSettled([persistWindows(),sessions.closeAll(),migrations.closeAll(),...nativeCliJobs.values()]).finally(() => app.quit())
 })

@@ -6,6 +6,7 @@ async function installBridge(page: Page) {
   await page.addInitScript(() => {
 
     const calls: Record<string, unknown>[] = []
+    const migrationJobs:any[]=[]
     const sessions: Record<string, any> = {}
     const savedObjects: any[] = []
     const additionalDbs: Record<string,string[]> = {}
@@ -32,6 +33,22 @@ async function installBridge(page: Page) {
       windowChrome:localStorage.getItem('mock.window-chrome')==='mac-native-controls'?'mac-native-controls':'native',
       workspaceWindowId:localStorage.getItem('mock.workspace-window')||'primary',
       async newWorkspaceWindow(){calls.push({action:'newWorkspaceWindow'});return true},
+      async migrationCatalog(id:string,database?:string){
+        calls.push({action:'migrationCatalog',id,database})
+        return {kind:'mysql',databases:id==='sql2'?['other']:['app'],...(database?{objects:[{name:'users',type:'BASE TABLE',engine:'InnoDB'},{name:'audit',type:'BASE TABLE',engine:'InnoDB'},{name:'user_view',type:'VIEW'}]}:{})}
+      },
+      async previewMigration(request:any){
+        calls.push({action:'previewMigration',request})
+        const steps=request.mode==='schema'?[{id:'create',name:'users',action:'create',changes:['MISSING TARGET OBJECT'],sql:['CREATE TABLE other.users (id INT)'],executable:true,transfer:false},{id:'review',name:'audit',action:'review',changes:['MODIFY COLUMN id'],sql:[],executable:false,transfer:false},{id:'keep',name:'keep_me',action:'target-only',changes:['TARGET ONLY OBJECT'],sql:[],executable:false,transfer:false}]:request.objects.map((name:string)=>({id:name,name,action:'copy',changes:['APPEND DATA — STOP ON CONFLICT'],sql:[],executable:true,transfer:true}))
+        return {id:'plan',request,sourceLabel:'Source',targetLabel:'Target',sourceKind:'mysql',targetKind:'mysql',expiresAt:Date.now()+600000,steps}
+      },
+      async runMigration(id:string,steps:string[]){
+        calls.push({action:'runMigration',id,steps})
+        const job={id:'migration-job',planId:id,state:'running',phase:'copying',startedAt:Date.now(),total:steps.length,completed:[],created:[],rowsRead:500,rowsCommitted:0,rowsPending:500,bytesRead:4096}
+        migrationJobs.unshift(job);return job
+      },
+      async listMigrationJobs(){return migrationJobs.map(j=>({...j}))},
+      async cancelMigration(id:string){calls.push({action:'cancelMigration',id});Object.assign(migrationJobs.find(j=>j.id===id),{state:'cancelled',phase:'finished',rowsPending:0})},
       async restoreWorkspaceWindows(restore:boolean){calls.push({action:'restoreWorkspaceWindows',restore})},
       async startNativeCli(id:string,database:string){calls.push({action:'startNativeCli',id,database})},
       async readNativeCli(){return {output:'fixture SQL result',status:'ready',running:false,closed:false}},
@@ -1398,4 +1415,48 @@ test('shared preferences update other workspaces without reloading',async({page}
  await expect(page.locator('html')).toHaveAttribute('lang','ar')
  await expect(page.locator('html')).toHaveAttribute('dir','rtl')
  await expect(page.locator('html')).toHaveAttribute('data-theme','light')
+})
+
+
+test('M12 structure sync previews safe DDL and excludes manual or target-only steps',async({page})=>{
+ await page.getByRole('button',{name:'结构同步',exact:true}).click()
+ const dialog=page.getByRole('dialog',{name:'数据库同步与迁移'})
+ const source=dialog.locator('.migration-endpoint').nth(0)
+ const target=dialog.locator('.migration-endpoint').nth(1)
+ await source.locator('select').nth(0).selectOption('sql')
+ await source.locator('select').nth(1).selectOption('app')
+ await target.locator('select').nth(0).selectOption('sql2')
+ await target.locator('select').nth(1).selectOption('other')
+ await dialog.getByRole('button',{name:'比较 / 生成计划',exact:true}).click()
+ const rows=dialog.locator('.migration-plan-list tbody tr')
+ await expect(rows).toHaveCount(3)
+ await expect(rows.filter({hasText:'audit'}).getByRole('checkbox')).toBeDisabled()
+ await expect(rows.filter({hasText:'keep_me'}).getByRole('checkbox')).toBeDisabled()
+ await expect(dialog.locator('textarea')).toHaveValue('CREATE TABLE other.users (id INT);')
+ await dialog.getByRole('button',{name:'导出结构脚本',exact:true}).click()
+ await dialog.getByRole('button',{name:'确认执行',exact:true}).click()
+ await expect(dialog.locator('.migration-progress')).toContainText('500')
+ await expect.poll(()=>page.evaluate(()=>((window as any).__dbexCalls as any[]).filter(c=>c.action==='runMigration').at(-1))).toMatchObject({id:'plan',steps:['create']})
+ await dialog.getByRole('button',{name:'收起',exact:true}).click()
+ await expect(dialog).toHaveCount(0)
+ await page.getByRole('button',{name:'数据传输',exact:true}).click()
+ await expect(dialog.locator('.migration-progress')).toBeVisible()
+ await dialog.getByRole('button',{name:'取消任务',exact:true}).click()
+ await expect(dialog.locator('.migration-progress')).toContainText('已取消')
+})
+test('M12 transfer requires explicitly selected ordinary tables',async({page})=>{
+ await page.getByRole('button',{name:'数据传输',exact:true}).click()
+ const dialog=page.getByRole('dialog',{name:'数据库同步与迁移'})
+ const source=dialog.locator('.migration-endpoint').nth(0)
+ const target=dialog.locator('.migration-endpoint').nth(1)
+ await source.locator('select').nth(0).selectOption('sql')
+ await source.locator('select').nth(1).selectOption('app')
+ await target.locator('select').nth(0).selectOption('sql2')
+ await target.locator('select').nth(1).selectOption('other')
+ await expect(dialog.getByRole('button',{name:'比较 / 生成计划',exact:true})).toBeDisabled()
+ await expect(dialog.locator('.migration-object-list')).not.toContainText('user_view')
+ await dialog.locator('.migration-object-list label').filter({hasText:'users'}).getByRole('checkbox').check()
+ await dialog.getByRole('button',{name:'比较 / 生成计划',exact:true}).click()
+ await expect(dialog.locator('.migration-plan-list tbody tr')).toHaveCount(1)
+ await expect.poll(()=>page.evaluate(()=>((window as any).__dbexCalls as any[]).filter(c=>c.action==='previewMigration').at(-1))).toMatchObject({request:{source:{connectionId:'sql',database:'app'},target:{connectionId:'sql2',database:'other'},mode:'structure-data',objects:['users']}})
 })

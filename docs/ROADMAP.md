@@ -279,3 +279,10 @@ MySQL/MongoDB 集成测试用 `DB_EX_INTEGRATION=1` 显式开启，连接 `MYSQL
 - M11 exact candidate `96288fe`: 15/15 specialist jobs, 171 integrated tests, 48 UI cases, all three native package/launch jobs and macOS ad-hoc smoke passed. Both MySQL 8.0 native tool and ClickHouse replica restart regressions passed on real fixtures.
 - PR #20 merged at `599a123`; M0–M11 implementation and defined acceptance are complete.
 - Prepare v1.0.0 as the first stable application release within the documented compatibility limits. Publish only after the same master release SHA passes the complete integrated/native and M11 workflows, including upgrade from the actual published v0.7.1; verify all eight release assets. Keep prior tags/assets unchanged.
+
+### M12: database structure synchronization and data transfer (2026-11-27)
+
+- Target v1.1.0; keep the published v1.0.0 stable baseline unchanged. M13 row-level data synchronization and M14 automation remain later milestones.
+- Initial implementation: MySQL/MariaDB structure comparison and safe additive DDL, independent migration connections and window-owned immutable plans, streamed append copies with per-table transaction boundaries, native confirmation, stale-plan/self-copy checks, task progress/cancel, SQL preview/export and local template.
+- Local real isolated MariaDB 10.11.14 proved 12,001-row exact-value transfer, additive structure sync, duplicate rollback, stale plan rejection, structure+data and cancellation during a blocked insert. Four focused policy tests, fourteen i18n tests and two focused UI cases passed.
+- See [M12 migration scope and evidence](M12_MIGRATION.md). M12 is in progress: remaining engine adapters, richer dependency/object support, mapping, conflict modes, durable task management and final compatibility/release validation are not yet complete.

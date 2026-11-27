@@ -5,6 +5,11 @@ import { windowChromeForPlatform } from '../shared/window-chrome'
 const api: DbExAPI = {
   windowChrome:windowChromeForPlatform(process.platform),
   workspaceWindowId:process.argv.find(x=>x.startsWith('--dbex-workspace='))?.slice('--dbex-workspace='.length)||'primary',
+  migrationCatalog:(id,database)=>ipcRenderer.invoke('migration:catalog',id,database),
+  previewMigration:request=>ipcRenderer.invoke('migration:preview',request),
+  runMigration:(id,steps)=>ipcRenderer.invoke('migration:run',id,steps),
+  listMigrationJobs:()=>ipcRenderer.invoke('migration:jobs'),
+  cancelMigration:id=>ipcRenderer.invoke('migration:cancel',id),
   newWorkspaceWindow:()=>ipcRenderer.invoke('workspace:new-window'),
   restoreWorkspaceWindows:restore=>ipcRenderer.invoke('workspace:restore-windows',restore),
   getNativePreferences:()=>ipcRenderer.invoke('preferences:native-get'),

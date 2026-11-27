@@ -20,6 +20,8 @@ import {workspaceStorageKey,PRIMARY_WORKSPACE} from '../shared/workspace-windows
 import { normalizeWorkspace, mergePendingWorkspace,forgetWorkspaceConnection,workspacePosition, categoryForNode, matchWorkspaceNode, validWorkbenchTab, type WorkspacePosition,type WorkspaceSnapshot, type WorkbenchTab } from '../shared/workspace-recovery'
 import { preferences, resolvedTheme } from './preferences'
 import NativeToolDialog from './components/NativeToolDialog.vue'
+import MigrationDialog from './components/MigrationDialog.vue'
+import {migrationSupported,type MigrationMode} from '../shared/migration'
 import NativeCliDialog from './components/NativeCliDialog.vue'
 import DatabaseActionsDialog from './components/DatabaseActionsDialog.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
@@ -45,6 +47,11 @@ const dbMenu=ref<{sessionId:string;node?:ExplorerNode;x:number;y:number}>()
 const dbMenuHost=ref<HTMLElement>()
 const cliDialog=ref<{sessionId:string;database:string}>()
 const cliSession=computed(()=>sessions.value.find(item=>item.id===cliDialog.value?.sessionId))
+const migrationDialog=ref<{mode:MigrationMode;sourceId?:string;database?:string}>()
+function openMigration(mode:MigrationMode,session=activeSession.value,database?:string){
+ if(!session||!migrationSupported(session.kind)||!session.connectionId){migrationDialog.value={mode};return}
+ migrationDialog.value={mode,sourceId:session.connectionId,database:database||explorers[session.id]?.selected?.database||explorers[session.id]?.catalog?.database}
+}
 const nativeDialog=ref<{sessionId:string;database:string}>()
 const nativeSession=computed(()=>sessions.value.find(item=>item.id===nativeDialog.value?.sessionId))
 const dbDialog=ref<{sessionId:string;database:string;mode:DatabaseMode}>()
@@ -352,12 +359,13 @@ async function catalogQueryAction(id:string,action:'copy'|'delete'|'export'|'exp
  })
  if(ok)await loadCatalog(id,folder,true)
 }
-async function dbMenuAction(action:DatabaseMode|'close'|'query'|'refresh'|'native'|'sqlite-backup'|'cli'){
+async function dbMenuAction(action:DatabaseMode|'close'|'query'|'refresh'|'native'|'sqlite-backup'|'cli'|'sync-structure'|'transfer-data'){
   const menu=dbMenu.value, session=dbMenuSession.value
   closeDbMenu()
   if(!menu||!session||current.value!==session.id)return
   const state=explorers[session.id],database=menu.node?.database||''
   if(!state)return
+  if(action==='sync-structure'||action==='transfer-data'){openMigration(action==='sync-structure'?'schema':'structure-data',session,database);return}
   if(action==='sqlite-backup'){if(databaseCapabilities(session.kind).backup==='file')void task(async()=>{if(await window.dbex.backupSqlite(session.id))notice.value='操作已完成'});return}
   if(action==='cli'){if(database&&['mysql','mariadb','sqlite'].includes(session.kind))cliDialog.value={sessionId:session.id,database};return}
   if(action==='native'){if(database&&databaseCapabilities(session.kind).backup==='native-tools')nativeDialog.value={sessionId:session.id,database};return}
@@ -465,7 +473,7 @@ onBeforeUnmount(() => { stopResize?.(); window.removeEventListener('pointerdown'
 
 <template>
   <main class="desktop" :style="{ '--sidebar-width': sidebarWidth + 'px' }">
-    <header class="topbar"><div class="brand"><img class="brand-symbol" :src="brandLogo" alt="" draggable="false" aria-hidden="true"/><strong>DB EX</strong><span class="brand-subtitle">DATABASE WORKSPACE</span></div><div class="top-actions"><button class="icon-button preferences-button" :aria-label="t('偏好设置')" :title="t('偏好设置')" @click="preferencesOpen=true">⚙</button></div></header>
+    <header class="topbar"><div class="brand"><img class="brand-symbol" :src="brandLogo" alt="" draggable="false" aria-hidden="true"/><strong>DB EX</strong><span class="brand-subtitle">DATABASE WORKSPACE</span></div><div class="top-actions"><button class="btn secondary migration-toolbar-button" @click="openMigration('schema')">{{t('结构同步')}}</button><button class="btn secondary migration-toolbar-button" @click="openMigration('structure-data')">{{t('数据传输')}}</button><button class="icon-button preferences-button" :aria-label="t('偏好设置')" :title="t('偏好设置')" @click="preferencesOpen=true">⚙</button></div></header>
     <div class="workspace"><ConnectionSidebar :connections="connections" :sessions="sessions" :current="current" :busy="busy" @refresh="refreshConnections" @create="newConnection" @connect="connectSaved" @activate="current = $event" @disconnect="disconnect" @edit="editConnection" @remove="deleteConnection" @import="importConnections" @export="exportConnections" @appearance="updateAppearance" @resource-menu="(event,id)=>showDbMenu(event,undefined,id)" @refresh-resources="refreshSessionResources">
         <template #resources="{session,grouped}">
           <ConnectionResourceTree :session="session" :state="explorers[session.id]" :active="session.id===current" :busy="busy||sessionBusy(explorers[session.id])" :color="sessionColor(session)" :grouped="grouped" @select="node=>toggleRoot(node,false,session.id)" @menu="(event,node)=>showDbMenu(event,node,session.id)" />
@@ -502,9 +510,10 @@ onBeforeUnmount(() => { stopResize?.(); window.removeEventListener('pointerdown'
       <button v-if="dbMenu.node" class="context-action" @click="dbMenuAction('close')">{{ t('关闭数据库') }}</button>
       <button v-if="dbMenuSession && databaseCapabilities(dbMenuSession.kind).databaseAdministration" class="context-action" :disabled="dbMenuSession?.transaction" @click="dbMenuAction('create')">{{ t('新建数据库') }}…</button>
       <button v-if="dbMenu.node && dbMenuSession && databaseCapabilities(dbMenuSession.kind).databaseAdministration" class="context-action danger" :disabled="protectedDatabase(dbMenuSession?.kind || 'mongodb',dbMenu.node.database || '') || dbMenuSession?.transaction" @click="dbMenuAction('drop')">{{ t('删除数据库') }}…</button>
-      <template v-if="dbMenu.node"><div class="context-menu-divider"></div><button class="context-action" @click="dbMenuAction('query')">{{ t('新建查询') }}</button><button class="context-action" @click="dbMenuAction('search')">{{ t('查找数据库对象') }}…</button><div class="context-menu-divider"></div><button v-if="dbMenuSession && databaseCapabilities(dbMenuSession.kind).backup==='file'" class="context-action" :disabled="dbMenuSession.transaction" @click="dbMenuAction('sqlite-backup')">{{ t('备份数据库') }}…</button><button v-if="dbMenuSession&&['mysql','mariadb','sqlite'].includes(dbMenuSession.kind)" class="context-action" @click="dbMenuAction('cli')">{{t('原生数据库 CLI')}}…</button><button v-if="dbMenuSession && databaseCapabilities(dbMenuSession.kind).backup==='native-tools'" class="context-action" @click="dbMenuAction('native')">{{ t('外部工具') }}…</button><button v-if="dbMenuSession?.kind!=='clickhouse'" class="context-action" @click="dbMenuAction('schema')">{{ t('导出结构脚本') }}…</button><button v-if="dbMenuSession?.kind!=='clickhouse'" class="context-action" @click="dbMenuAction('import')">{{ t('导入数据') }}…</button><button v-if="dbMenuSession?.kind!=='clickhouse'" class="context-action" @click="dbMenuAction('export')">{{ t('导出数据') }}…</button></template>
+      <template v-if="dbMenu.node"><div class="context-menu-divider"></div><button class="context-action" @click="dbMenuAction('query')">{{ t('新建查询') }}</button><button class="context-action" @click="dbMenuAction('search')">{{ t('查找数据库对象') }}…</button><div class="context-menu-divider"></div><button v-if="dbMenuSession && databaseCapabilities(dbMenuSession.kind).backup==='file'" class="context-action" :disabled="dbMenuSession.transaction" @click="dbMenuAction('sqlite-backup')">{{ t('备份数据库') }}…</button><button v-if="dbMenuSession&&['mysql','mariadb','sqlite'].includes(dbMenuSession.kind)" class="context-action" @click="dbMenuAction('cli')">{{t('原生数据库 CLI')}}…</button><button v-if="dbMenuSession && databaseCapabilities(dbMenuSession.kind).backup==='native-tools'" class="context-action" @click="dbMenuAction('native')">{{ t('外部工具') }}…</button><button v-if="dbMenuSession?.connectionId&&migrationSupported(dbMenuSession.kind)" class="context-action" @click="dbMenuAction('sync-structure')">{{t('结构同步')}}…</button><button v-if="dbMenuSession?.connectionId&&migrationSupported(dbMenuSession.kind)" class="context-action" @click="dbMenuAction('transfer-data')">{{t('数据传输')}}…</button><button v-if="dbMenuSession?.kind!=='clickhouse'" class="context-action" @click="dbMenuAction('schema')">{{ t('导出结构脚本') }}…</button><button v-if="dbMenuSession?.kind!=='clickhouse'" class="context-action" @click="dbMenuAction('import')">{{ t('导入数据') }}…</button><button v-if="dbMenuSession?.kind!=='clickhouse'" class="context-action" @click="dbMenuAction('export')">{{ t('导出数据') }}…</button></template>
       <div class="context-menu-divider"></div><button class="context-action" @click="dbMenuAction('refresh')">{{ t('刷新') }}</button>
     </div></Teleport>
+    <MigrationDialog v-if="migrationDialog" :connections="connections" :initial-mode="migrationDialog.mode" :source-id="migrationDialog.sourceId" :database="migrationDialog.database" @close="migrationDialog=undefined"/>
     <NativeCliDialog v-if="cliDialog&&cliSession" :session="cliSession" :database="cliDialog.database" @close="cliDialog=undefined" @session="updateSession"/>
     <NativeToolDialog v-if="nativeDialog&&nativeSession" :session="nativeSession" :database="nativeDialog.database" @close="nativeDialog=undefined" @session="updateSession" @disconnect="removeSession(nativeSession.id);nativeDialog=undefined" />
     <DatabaseActionsDialog v-if="dbDialog && dbDialogSession" :session="dbDialogSession" :database="dbDialog.database" :mode="dbDialog.mode" :existing="explorers[dbDialog.sessionId]?.roots.map(item=>item.database || item.label) || []" @close="dbDialog=undefined" @changed="databaseChanged" @select="databaseObjectSelected" @session="updateSession" />

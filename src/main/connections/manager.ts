@@ -1,14 +1,13 @@
 import { randomUUID } from 'node:crypto'
 import type { MongoCategory } from '../../shared/mongo-catalog'
 import { connectionDisplayEndpoint } from '../../shared/connection-form'
-import { readFile, stat } from 'node:fs/promises'
 import type { ConnectionOptions as TlsConnectionOptions } from 'node:tls'
 import type { ConnectionConfig, DatabaseOperation, DataPreview, ExplorerNode, OperationResult, SessionInfo } from '../../shared/types'
 import { createTransport, type ConnectionTransport } from './transport'
 import {openVerifiedNativeTlsForward} from './native-tls-forward'
 import type {NativeRoute} from '../operations/native-tools'
 import { validateConnection, validateId } from './validation'
-import { mongoUriTlsEnabled } from './mongo-topology'
+import { loadConnectionTls } from './tls-material'
 import { secretValues } from './credentials'
 import type { SqliteProcessFactory } from '../operations/sqlite-client'
 import { databaseError, resourceName, type OperationContext } from '../operations/common'
@@ -22,12 +21,6 @@ interface LiveSession {
   transport: ConnectionTransport
   tls: TlsConnectionOptions
   controller?: AbortController
-}
-async function certificate(path?: string): Promise<Buffer | undefined> {
-  if (!path) return undefined
-  const info = await stat(path)
-  if (!info.isFile() || info.size > 2 * 1024 * 1024) throw new Error('TLS_CONFIG: 证书文件必须为不超过2 MiB的普通文件')
-  return readFile(path)
 }
 export class SessionManager {
   private readonly sessions = new Map<string, LiveSession>()
@@ -58,10 +51,7 @@ export class SessionManager {
     const adapter = databaseAdapter(config.kind)
     try {
       transport = await createTransport({ ssh: config.ssh, proxy: config.proxy, timeoutMs: config.connectTimeoutMs })
-      const mongoTlsActive = config.kind === 'mongodb' && (config.tls.enabled || mongoUriTlsEnabled(config.uri))
-      const loadTls = config.tls.enabled || config.sentinelTls || mongoTlsActive
-      const [ca, cert, key] = loadTls ? await Promise.all([certificate(config.tls.caPath), certificate(config.tls.certPath), certificate(config.tls.keyPath)]) : []
-      const tls: TlsConnectionOptions = { ca, cert, key, servername: config.tls.servername || undefined, rejectUnauthorized: true, minVersion: 'TLSv1.2' }
+      const tls=await loadConnectionTls(config)
       driver=await adapter.connect({config,transport,tls,sqliteProcessFactory:this.sqliteProcessFactory,sqliteModulePath:this.sqliteModulePath})
       if (generation !== this.generation) throw new Error('SESSION_CLOSED: 窗口已关闭，本次连接已取消')
       const info: SessionInfo = { id: randomUUID(), connectionId, name: config.name, kind: config.kind,
