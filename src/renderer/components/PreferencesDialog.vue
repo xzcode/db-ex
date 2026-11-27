@@ -2,7 +2,7 @@
 import { computed,onMounted,ref } from 'vue'
 import { t,localize,languages } from '../i18n'
 import { preferences,resolvedTheme,savePreferences } from '../preferences'
-import { defaultPreferences,normalizePreferences,normalizeNativePreferences,syntaxDefaults,syntaxRoles,editorFonts,gridFonts,toolNames,type NativePreferences,type ToolName,type SyntaxRole } from '../../shared/preferences'
+import { defaultPreferences,normalizePreferences,normalizeNativePreferences,isLightTheme,syntaxDefaults,syntaxRoles,editorFonts,gridFonts,toolNames,type NativePreferences,type ToolName,type SyntaxRole } from '../../shared/preferences'
 import { bsonPalette,saveBsonPalette } from '../bson-preferences'
 import { databasePalettes,saveDatabasePalette } from '../database-color-preferences'
 import { bsonTypes,bsonLabel,isBsonType } from '../../shared/bson-types'
@@ -34,7 +34,7 @@ function paletteColor(value:string){
  return kind==='mongodb'&&isBsonType(value)?typeColor(normalizeBsonPalette(activePalette.value),value):kind!=='mongodb'?databaseTypeColor(kind,activePalette.value,value):undefined
 }
 const colorLabels:Record<SyntaxRole,string>={foreground:'常规',keyword:'关键字',comment:'注释',string:'字符串',number:'数字',background:'背景'}
-const colors=computed(()=>draft.value.editor.customColors?draft.value.editor.colors:syntaxDefaults(resolvedTheme(draft.value.theme)==='light'))
+const colors=computed(()=>draft.value.editor.customColors?draft.value.editor.colors:syntaxDefaults(isLightTheme(resolvedTheme(draft.value.theme))))
 function fail(reason:unknown){error.value=reason instanceof Error?reason.message:String(reason)}
 async function action(fn:()=>Promise<void>){if(busy.value)return;busy.value=true;error.value='';notice.value='';try{await fn()}catch(reason){fail(reason)}finally{busy.value=false}}
 function openLogs(){return action(()=>window.dbex.openLogs())}
@@ -46,14 +46,14 @@ function reset(){
  if(tab.value==='general'){draft.value.theme=d.theme;draft.value.language=d.language}
  else if(tab.value==='tabs'){draft.value.alwaysShowTabs=d.alwaysShowTabs;draft.value.startup=d.startup}
  else if(tab.value==='completion'){draft.value.completion=d.completion;draft.value.autoCompletion=d.autoCompletion;draft.value.firstSuggestion=d.firstSuggestion}
- else if(tab.value==='editor'){draft.value.editor=d.editor;draft.value.editor.colors=syntaxDefaults(resolvedTheme(draft.value.theme)==='light')}
+ else if(tab.value==='editor'){draft.value.editor=d.editor;draft.value.editor.colors=syntaxDefaults(isLightTheme(resolvedTheme(draft.value.theme)))}
  else if(tab.value==='records')draft.value.records=d.records
  else if(tab.value==='colors')palettes.value[paletteKind.value]=paletteKind.value==='mongodb'?{...newBsonPalette(),overrides:{}}:newDatabasePalette()
  else if(tab.value==='recovery')draft.value.recoverySeconds=d.recoverySeconds
  else if(tab.value==='tools'){native.value.tools={};status.value={};versions.value={}}
  else if(tab.value==='advanced')native.value.diagnostics=false
 }
-function customColorsChanged(){if(draft.value.editor.customColors)draft.value.editor.colors=syntaxDefaults(resolvedTheme(draft.value.theme)==='light')}
+function customColorsChanged(){if(draft.value.editor.customColors)draft.value.editor.colors=syntaxDefaults(isLightTheme(resolvedTheme(draft.value.theme)))}
 async function save(){await action(async()=>{
  await window.dbex.saveNativePreferences(normalizeNativePreferences(native.value))
  savePreferences(normalizePreferences(draft.value))
@@ -73,7 +73,7 @@ onMounted(()=>{void action(async()=>{native.value=normalizeNativePreferences(awa
         <template v-if="tab==='general'">
           <div class="pref-section-title">{{ t('外观') }}</div>
           <label class="pref-row"><span>{{ t('语言') }}</span><select v-model="draft.language" data-preference="language" :aria-label="t('语言')"><option value="system">{{ t('跟随系统') }}</option><option v-for="language in languages" :key="language.locale" :value="language.locale">{{ language.label }}</option></select></label>
-          <label class="pref-row"><span>{{ t('主题') }}</span><select v-model="draft.theme" data-preference="theme" :aria-label="t('主题')"><option value="system">{{ t('跟随系统') }}</option><option value="light">{{ t('浅色主题') }}</option><option value="dark">{{ t('深色主题') }}</option></select></label>
+          <label class="pref-row"><span>{{ t('主题') }}</span><select v-model="draft.theme" data-preference="theme" :aria-label="t('主题')"><option value="system">{{ t('跟随系统') }}</option><option value="light">{{ t('浅色主题') }}</option><option value="dark">{{ t('深色主题') }}</option><option value="gray">{{ t('灰色主题') }}</option><option value="black">{{ t('纯黑主题') }}</option><option value="soft-light">{{ t('柔和白色主题') }}</option></select></label>
           <div class="pref-section-title">{{ t('连接列表') }}</div>
           <div class="pref-row"><span></span><div><button class="btn secondary" type="button" data-action="create-connection" :disabled="busy||connectionBusy" @click="emit('createConnection')">{{ t('＋ 新建连接') }}</button></div></div>
           <div class="pref-section-title">{{ t('本地数据') }}</div>

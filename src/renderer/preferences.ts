@@ -1,5 +1,5 @@
 import { ref, watch } from 'vue'
-import { defaultPreferences,normalizePreferences,type AppPreferences } from '../shared/preferences'
+import { defaultPreferences,normalizePreferences,type AppPreferences,type ResolvedTheme } from '../shared/preferences'
 import { languagePreference,setLanguage } from './i18n'
 const KEY='dbex.preferences.v1'
 function load(){
@@ -14,7 +14,7 @@ export const preferences=ref(load())
 const media=window.matchMedia('(prefers-color-scheme: dark)')
 const systemDark=ref(media.matches)
 function persist(){try{localStorage.setItem(KEY,JSON.stringify(preferences.value))}catch{}}
-export function resolvedTheme(theme=preferences.value.theme):'dark'|'light'{return theme==='system'?(systemDark.value?'dark':'light'):theme}
+export function resolvedTheme(theme=preferences.value.theme):ResolvedTheme{return theme==='system'?(systemDark.value?'dark':'light'):theme}
 function applyTheme(){document.documentElement.dataset.theme=resolvedTheme()}
 media.addEventListener('change',event=>{systemDark.value=event.matches;applyTheme()})
 export function savePreferences(value:AppPreferences){preferences.value=normalizePreferences(value);setLanguage(preferences.value.language);persist();applyTheme()}

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import {computed,onMounted,onBeforeUnmount,ref} from 'vue'
+import {computed,onMounted,onBeforeUnmount,ref,watch} from 'vue'
 import {t,localize} from '../i18n'
 import {preferences} from '../preferences'
 import {pageSizeFor} from '../../shared/preferences'
@@ -9,8 +9,9 @@ import type {ClickHouseChange,ClickHouseTransferFormat,ClickHouseManagementView,
 import {csvFromRows,sqlRowsFromFile} from '../data-format'
 import ResultGrid from './ResultGrid.vue'
 import ObjectInspector from './ObjectInspector.vue'
+import {globalInspectorTab,openGlobalInspector,closeGlobalInspector} from '../inspector-preferences'
 import ClickHouseAdminDialog from './ClickHouseAdminDialog.vue'
-const props=defineProps<{session:SessionInfo;node:ExplorerNode;active:boolean;initialTab?:string}>()
+const props=defineProps<{session:SessionInfo;node:ExplorerNode;active:boolean;initialTab?:string;requestedTab?:string;tabRequest?:number}>()
 const emit=defineEmits<{busyChange:[boolean];updateSession:[SessionInfo];disconnect:[];tabChange:['data'|'structure'|'management'];dirtyChange:[boolean]}>()
 const database=props.node.database||'',entity=props.node.entity||''
 const tab=ref<'data'|'structure'|'management'>(props.initialTab==='structure'?'structure':props.initialTab==='management'&&!props.node.readOnly?'management':'data')
@@ -21,7 +22,8 @@ const managementViews: {value:ClickHouseManagementView;label:string}[]=[
 ]
 const managementView=ref<ClickHouseManagementView>('partitions'),managementResult=ref<OperationResult>(),managementOffset=ref(0)
 const canManage=computed(()=>props.node.kind==='table'&&!props.node.readOnly)
-const inspector=ref<'info'|'ddl'|'colors'|null>(null)
+const inspector=globalInspectorTab
+const inspected=ref(false)
 const pageSize=ref<number>(pageSizeFor(preferences.value,'clickhouse')),offset=ref(0)
 const sort=ref<SortRule[]>([]),filter=ref<{field:string;value:string}>(),filterDraft=ref<{field:string;value:string}>()
 const importRows=ref<SqlRow[]>(),importText=ref('')
@@ -77,7 +79,9 @@ async function changeTab(value:'data'|'structure'|'management',force=false){
  if(value==='management'&&(force||!managementResult.value))await loadManagement(managementView.value,managementOffset.value)
  if(value==='data'&&!result.value)await load()
 }
-async function openInspector(value:'info'|'ddl'|'colors'){inspector.value=value;if(value!=='colors'&&!inspection.value)await task(async()=>{inspection.value=(await execute({action:'clickhouse.inspect',...target})).inspection})}
+function openInspector(value:'info'|'ddl'|'colors'){openGlobalInspector(value)}
+async function refreshInspection(){if(!props.active||busy.value||disposed)return;inspected.value=true;await task(async()=>{inspection.value=(await execute({action:'clickhouse.inspect',...target})).inspection})}
+watch([inspector,()=>props.active,busy],()=>{if(props.active&&inspector.value&&inspector.value!=='colors'&&!inspected.value&&!busy.value)void refreshInspection()},{flush:'post'})
 async function action(action:ColumnAction,field:string){
  if(action==='filter'){filterDraft.value={field,value:''};return}
  await load(0,changeColumnSort(sort.value,field,action))
@@ -104,7 +108,8 @@ async function exportData(format:'csv'|'json'){await task(async()=>{
  if(await window.dbex.exportFile(name+'.'+format,content,format))notice.value='操作已完成'
 })}
 async function cancel(){try{await window.dbex.cancel(props.session.id);emit('disconnect')}catch(e){error.value=String(e)}}
-onMounted(()=>{if(props.node.kind==='clickhouse-dictionary'){tab.value='structure';void openInspector('info')}else if(tab.value!=='data')void changeTab(tab.value);else void load()})
+onMounted(()=>{if(props.node.kind==='clickhouse-dictionary'){tab.value='structure';if(inspector.value)void refreshInspection()}else if(tab.value!=='data')void changeTab(tab.value);else void load();if(inspector.value&&!busy.value)void refreshInspection()})
+watch(()=>props.tabRequest,()=>{if(props.requestedTab==='structure'||props.requestedTab==='data'||props.requestedTab==='management')void changeTab(props.requestedTab)})
 onBeforeUnmount(()=>{disposed=true})
 </script>
 <template>
@@ -147,6 +152,6 @@ onBeforeUnmount(()=>{disposed=true})
    <ClickHouseAdminDialog v-if="adminDraft" :session="session" :database="database" :entity="entity" :fields="adminFields" :initial-kind="adminDraft" :execute="execute" @busy-change="adminBusyChanged" @submitted="adminSubmitted" @close="closeAdmin" @cancel="cancel"/>
    <div v-if="importRows" class="modal-backdrop"><section class="dialog" role="dialog" :aria-label="t('导入预览')"><header class="dialog-header"><h2>{{ t('导入预览') }}</h2></header><div class="dialog-body"><p class="helper">{{ database }}.{{ entity }} · {{ importRows.length }} · MergeTree</p><p v-if="error" role="alert">{{ localize(error) }}</p><textarea v-model="importText" rows="12" spellcheck="false" :disabled="busy"/></div><footer class="dialog-footer"><button class="btn secondary" :disabled="busy" @click="closeImport">{{ t('取消') }}</button><button class="btn primary" :disabled="busy||!canInsert" @click="insert">{{ t('审阅并保存') }}</button></footer></section></div>
   </section>
-  <ObjectInspector v-if="inspector" :kind="session.kind" :database="database" :connection="session.name" :busy="busy" :tab="inspector" :name="entity" :inspection="inspection" :loading="busy" :error="error" @change="openInspector" @close="inspector=null" @refresh="inspection=undefined;inspector&&openInspector(inspector)" />
+  <ObjectInspector v-if="active&&inspector" :kind="session.kind" :database="database" :connection="session.name" :busy="busy" :tab="inspector" :name="entity" :inspection="inspection" :loading="busy" :error="error" @change="openInspector" @close="closeGlobalInspector" @refresh="refreshInspection" />
  </div>
 </template>
