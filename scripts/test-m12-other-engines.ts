@@ -5,6 +5,10 @@ import {join,resolve} from 'node:path'
 import {tmpdir} from 'node:os'
 import {DatabaseSync} from 'node:sqlite'
 import {BSON,type Document} from 'mongodb'
+import {redisArchiveFixture} from './q-redis-file-fixture'
+import {FileTransferService} from '../src/main/file-transfer/service'
+import {SessionManager} from '../src/main/connections/manager'
+import type {ClickHouseTransfer} from '../src/shared/types'
 import {MigrationService} from '../src/main/migration/service'
 import {newConnectionConfig} from '../src/shared/connection-form'
 import {createTransport} from '../src/main/connections/transport'
@@ -147,6 +151,7 @@ if(kind==='sqlite'){
    const overwrite=await run('data',[keep!],undefined,'upsert')
    assert.equal(overwrite.rowsCommitted,1);assert.equal(await b.get(keep!),'changed')
    assert(await b.pttl(keep!)>0)
+   await redisArchiveFixture(a,b,configs.source,configs.target)
    console.log('M12 Redis explicit same-key overwrite with TTL passed')
    console.log('M12 Redis actual two logical DBs: six native types, binary DUMP/RESTORE and TTL preserved, no replacement')
   }finally{await service.closeAll();await a.del(...names).catch(()=>{});await b.del(...names).catch(()=>{});a.disconnect();b.disconnect()}
@@ -170,6 +175,29 @@ if(kind==='sqlite'){
    const copy=await run('data',['items']);assert(copy.bytesRead>0&&copy.rowsKnown===false)
    const summary=async(db:string)=>(await (await client.query({query:'SELECT count() AS n, max(id) AS id, max(amount) AS amount, sum(cityHash64(payload)) AS payload, countIf(isNull(note)) AS nulls FROM '+db+'.items',format:'JSONEachRow',clickhouse_settings:{output_format_json_quote_64bit_integers:1,output_format_json_quote_decimals:1}})).json())[0]
    assert.deepEqual(await summary(source),await summary(target))
+   const files=new FileTransferService(),sessions=new SessionManager(),folder=await mkdtemp(join(tmpdir(),'dbex-ch-files-'))
+   try{
+    await command('CREATE TABLE '+target+'.file_copy'+definition)
+    const sess=await sessions.connect(configs.source,'ch-file-fixture')
+    const path=join(folder,'selected.native'),fields=['id','amount','payload','note']
+    async function fileJob(req:ClickHouseTransfer,path:string){
+     const stamp=req.direction==='import'?await stat(path):undefined
+     const job=files.startClickHouse(owner,req,path,(signal,options)=>sessions.clickhouseTransfer(sess.id,req,path,signal,options),stamp)
+     for(let i=0;i<800;i++){const v=files.list(owner)!;assert.equal(v.id,job.id);if(v.state!=='running'){await new Promise(r=>setTimeout(r,30));return v}await new Promise(r=>setTimeout(r,25))}
+     throw Error('ClickHouse file job timeout')
+    }
+    const exp=await fileJob({direction:'export',database:source,entity:'items',format:'native',fields,filter:{field:'id',value:'18446744073709551615'}},path)
+    assert.equal(exp.state,'completed',JSON.stringify(exp));assert.equal(exp.rowsKnown,false);assert.equal(exp.bytes,(await stat(path)).size)
+    const same=await fileJob({direction:'export',database:source,entity:'items',format:'native',fields},path)
+    assert.equal(same.state,'failed');assert.match(same.error||'',/OUTPUT_EXISTS/)
+    await sessions.setWriteAccess(sess.id,true)
+    const imp=await fileJob({direction:'import',database:target,entity:'file_copy',format:'native',fields},path)
+    assert.equal(imp.state,'completed',JSON.stringify(imp));assert.equal(imp.rowsKnown,false);assert.equal(imp.bytes,exp.bytes)
+    const q=async(table:string,where='')=>await (await client.query({query:'SELECT id, amount, hex(payload) AS payload, note FROM '+table+where,format:'JSONEachRow',clickhouse_settings:{output_format_json_quote_64bit_integers:1,output_format_json_quote_decimals:1}})).json()
+    assert.deepEqual(await q(target+'.file_copy'),await q(source+'.items',' WHERE id=18446744073709551615'))
+    console.log('Q5 ClickHouse Native selected-field filtered file jobs: precise UInt64/DECIMAL/binary/NULL, bytes progress, no clobber')
+   }finally{await files.closeAll();await sessions.closeAll();await rm(folder,{recursive:true,force:true})}
+
    await command('CREATE TABLE '+source+'.combined'+definition);await command('INSERT INTO '+source+'.combined SELECT * FROM '+source+'.items LIMIT 10')
    await run('structure-data',['combined'])
    console.log('M12 ClickHouse actual HTTPS: create table/add nullable column, native stream binary/UInt64/decimal/NULL fidelity, combined copy passed')

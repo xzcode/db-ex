@@ -125,7 +125,8 @@ export class SqliteMigrationWorkerEngine{
   const stmt=this.db.prepare('SELECT '+columns.map(q).join(',')+compiled.sql.slice('SELECT *'.length));stmt.setReadBigInts(true)
   this.readColumns=columns;this.iterator=stmt.iterate(...compiled.parameters.map(v=>typeof v==='boolean'?BigInt(Number(v)):v))[Symbol.iterator]();this.held=undefined
  }
- fileFields(name:string){return this.query('SELECT name FROM pragma_table_xinfo(?,?)',name,'main').map(r=>String(r.name))}
+ fileColumnTypes(name:string){return this.query('SELECT name,type FROM pragma_table_xinfo(?,?) ORDER BY cid',name,'main').map(r=>({name:String(r.name),type:String(r.type)}))}
+ fileFields(name:string){return this.fileColumnTypes(name).map(r=>r.name)}
  batch(){
   if(!this.iterator)return {rows:[],bytes:0,done:true}
   const rows:WireCell[][]=[];let bytes=0,done=false

@@ -10,6 +10,28 @@ export const qRefinementTraditional:Record<string,string>={
 }
 
 const followupPairs:Record<string,[string,string]>={
+ 'Parquet 按列类型和行组流式处理，支持精确整数、小数、二进制和 NULL；SQLite 动态类型及 BSON 使用扩展 JSON 表示。':['Parquet streams column types and row groups, preserving exact integers, decimals, binary and NULL. Dynamic SQLite values and BSON use extended JSON.','Parquet 依欄位類型及列群組串流處理，保留精確整數、小數、二進位及 NULL；SQLite 動態類型及 BSON 使用擴充 JSON 表示。'],
+ 'FILE_TRANSFER: Parquet 文件或字段类型无效':['FILE_TRANSFER: Invalid Parquet file or column type.','FILE_TRANSFER: Parquet 檔案或欄位類型無效。'],
+ 'FILE_TRANSFER: Parquet 单个行组超过解码容量，请重新分组导出':['FILE_TRANSFER: A Parquet row group exceeds the decoding capacity. Export with smaller row groups.','FILE_TRANSFER: Parquet 單一列群組超過解碼容量，請重新分組匯出。'],
+ 'Redis Key 原生存档':['Native Redis key archive','Redis Key 原生存檔'],
+ '导入 Key 存档':['Import key archive','匯入 Key 存檔'],
+ '导出 Key 存档':['Export key archive','匯出 Key 存檔'],
+ '导出匹配的 Key':['Export matching keys','匯出符合條件的 Key'],
+ '导出选中 Key':['Export selected keys','匯出選取 Key'],
+ '覆盖同名 Key':['Replace matching keys','覆寫同名 Key'],
+ '将覆盖同名 Key，请先备份。':['Matching keys will be replaced. Back up first.','將覆寫同名 Key，請先備份。'],
+ 'Redis 原生存档使用 SCAN、DUMP 和 RESTORE，保留二进制 Key、原始值和绝对过期时间；只支持独立实例。导入先校验完整文件，不会清空数据库。':['Native Redis archives use SCAN, DUMP and RESTORE to retain binary keys, values and absolute expiry. Standalone instances only. Import validates the whole file first and never flushes the database.','Redis 原生存檔使用 SCAN、DUMP 及 RESTORE，保留二進位 Key、原始值與絕對到期時間；僅支援獨立執行個體。匯入先驗證整份檔案，不會清空資料庫。'],
+ 'SCAN 不是数据库快照；扫描期间发生的修改可能影响存档内容。':['SCAN is not a snapshot; concurrent changes may affect the archive.','SCAN 不是資料庫快照；掃描期間的變更可能影響存檔內容。'],
+ 'Redis 逐 Key 写入，失败或取消不会回滚已确认的 Key；过期记录将跳过。':['Redis restores keys individually. Failure or cancellation does not roll back acknowledged keys; expired keys are skipped.','Redis 逐 Key 寫入，失敗或取消不會回復已確認的 Key；到期記錄會略過。'],
+ 'FILE_TRANSFER: Redis Key 存档记录无效或不支持的数据类型':['FILE_TRANSFER: Invalid Redis archive record or unsupported type.','FILE_TRANSFER: Redis Key 存檔記錄無效或不支援的類型。'],
+ 'FILE_TRANSFER: Redis 存档含重复 Key':['FILE_TRANSFER: Redis archive contains duplicate keys.','FILE_TRANSFER: Redis 存檔含重複 Key。'],
+ 'FILE_TRANSFER: Redis 目标 Key 已存在，已停止':['FILE_TRANSFER: Target Redis key exists; stopped.','FILE_TRANSFER: Redis 目標 Key 已存在，已停止。'],
+ 'FILE_TRANSFER: Redis DUMP 校验失败或版本不兼容':['FILE_TRANSFER: Redis DUMP validation failed or the version is incompatible.','FILE_TRANSFER: Redis DUMP 驗證失敗或版本不相容。'],
+ 'ClickHouse 由服务端原生解析和写入文件，保留精确类型。请选择与文件匹配的字段和顺序；不会自动映射或预执行导入。':['ClickHouse parses and writes files natively, preserving exact types. Select columns in matching file order. No automatic mapping or pre-execution.','ClickHouse 由伺服器原生解析及寫入檔案，保留精確類型。請依檔案順序選取欄位；不會自動對應或預執行匯入。'],
+ '原生数据流仅报告实际字节数，不推算记录数量。':['Native streams report actual bytes, not estimated row counts.','原生資料流僅回報實際位元組數，不推算記錄數量。'],
+ '已传输数据量':['Transferred bytes','已傳輸資料量'],
+ '选择数据文件并执行':['Select file and run','選擇資料檔案並執行'],
+
  'Excel 工作表':['Excel worksheet','Excel 工作表'],
  '全部工作表（表头相同）':['All worksheets (matching headers)','所有工作表（表頭相同）'],
  'Excel 使用首行表头；大整数及高精度小数可保存为文本，二进制使用 Base64，NULL 使用空值标记。导入不执行公式；导出超过单工作表容量时自动分表。':['Excel uses the first row as headers. Large integers and exact decimals can be text, binary uses Base64, and NULL uses a null marker. Formulas are not executed. Exports split automatically at the worksheet row limit.','Excel 使用首列資料列作為表頭；大整數及高精度小數可儲存為文字，二進位使用 Base64，NULL 使用空值標記。匯入不執行公式；超過單一工作表容量時自動分表。'],

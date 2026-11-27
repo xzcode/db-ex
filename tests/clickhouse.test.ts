@@ -88,7 +88,8 @@ test('ClickHouse management tab restores only on eligible tables and is localize
 })
 
 import {backupPlan,exactId,mergeTreeEngine,mutationPlan,userDatabase} from '../src/main/operations/clickhouse-admin'
-import {byteBudget,streamClickHouse,transferFormat} from '../src/main/operations/clickhouse-transfer'
+import {FileTransferService} from '../src/main/file-transfer/service'
+import {byteBudget,streamClickHouse,transferFormat,normalizeClickHouseTransfer} from '../src/main/operations/clickhouse-transfer'
 import {mkdtemp,readFile,writeFile,readdir,rm} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
@@ -135,4 +136,32 @@ test('ClickHouse file transfer streams formats without overwriting, rejects over
   const abort=new AbortController();abort.abort();await assert.rejects(()=>streamClickHouse(client,target,join(dir,'cancelled.parquet'),'"app"."events"',['"id"'],abort.signal),/CANCELLED/)
   assert.deepEqual(await readdir(dir),['fixture.parquet'])
  }finally{await rm(dir,{recursive:true,force:true})}
+})
+
+
+test('ClickHouse native jobs bind filters, report real bytes and cancel independently',async()=>{
+ const service=new FileTransferService(),dir=await mkdtemp(join(tmpdir(),'dbex-ch-job-'))
+ const req=normalizeClickHouseTransfer({database:'app',entity:'events',direction:'export',format:'native',fields:['id'],filter:{field:'note',value:"a' OR 1=1"}})
+ const calls:any[]=[]
+ const client={exec:async(input:any)=>{calls.push(input);return {stream:Readable.from([Buffer.from([0,255,1])])}}} as unknown as ClickHouseClient
+ async function finish(owner:number){for(let i=0;i<100;i++){const v=service.list(owner)!;if(v.state!=='running'){await new Promise(r=>setTimeout(r,10));return v}await new Promise(r=>setTimeout(r,10))}throw Error('job timeout')}
+ try{
+  assert.equal(transferFormat('native'),'Native')
+  assert.throws(()=>normalizeClickHouseTransfer({...req,direction:'import'}),/INVALID_INPUT/)
+  assert.throws(()=>normalizeClickHouseTransfer({...req,fields:['id','id']}),/INVALID_INPUT/)
+  const path=join(dir,'file.native')
+  service.startClickHouse(1,req,path,(signal,options)=>streamClickHouse(client,req,path,'"app"."events"',['"id"'],signal,options))
+  const result=await finish(1)
+  assert.equal(result.state,'completed');assert.equal(result.rowsKnown,false);assert.equal(result.bytes,3)
+  assert.deepEqual(calls[0].query_params,{dbex_filter:"a' OR 1=1"})
+  assert(!calls[0].query.includes("OR 1=1"))
+  const abort=(signal:AbortSignal)=>new Promise<never>((_,reject)=>{if(signal.aborted)reject(Error('CANCELLED: test'));else signal.addEventListener('abort',()=>reject(Error('CANCELLED: test')),{once:true})})
+  const j=service.startClickHouse(2,req,join(dir,'cancel.native'),async signal=>abort(signal))
+  service.cancel(1,j.id);assert.equal(service.list(2)?.state,'running')
+  service.cancel(2,j.id);assert.equal((await finish(2)).state,'cancelled')
+  let started=false
+  const k=service.startClickHouse(3,{...req,direction:'import',filter:undefined},path,async(signal,options)=>{options.beforeWrite();started=true;return abort(signal)})
+  for(let i=0;!started&&i<100;i++)await new Promise(r=>setTimeout(r,10))
+  assert(started);service.cancel(3,k.id);assert.equal((await finish(3)).state,'uncertain')
+ }finally{await service.closeAll();await rm(dir,{recursive:true,force:true})}
 })

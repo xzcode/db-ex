@@ -62,6 +62,7 @@ const api: DbExAPI = {
   executeQuery:(id,operation)=>ipcRenderer.invoke('sessions:execute-query',id,operation),
   cancelQuery:id=>ipcRenderer.invoke('sessions:cancel-query',id),
   execute: (id, operation) => ipcRenderer.invoke('sessions:execute', id, operation),
+  startClickHouseFileTransfer:(id,input)=>ipcRenderer.invoke('file-transfer:clickhouse',id,input),
   clickhouseTransfer: (id,input)=>ipcRenderer.invoke('sessions:clickhouse-transfer',id,input),
   validateMongoDocument: (document, original) => ipcRenderer.invoke('mongo:validate-document', document, original),
   copyText: value => ipcRenderer.invoke('clipboard:copy-text', value),

@@ -31,7 +31,7 @@ import { nativeTasks,runNativeTool,toolVersion } from './operations/native-tools
 import { nativeToolTasks,toolNames, type ToolName,type NativeToolTask } from '../shared/preferences'
 import { parseSshConfig } from './connections/ssh-config'
 import { adapterOperationWrites } from './connections/adapters'
-import { transferFormat } from './operations/clickhouse-transfer'
+import { transferFormat,normalizeClickHouseTransfer } from './operations/clickhouse-transfer'
 import { validateMongoDocumentEdit } from './operations/mongodb'
 
 function getSystemLanguage(): string { return app.getPreferredSystemLanguages()[0] || app.getLocale() || 'en' }
@@ -168,8 +168,8 @@ async function saveText(win: BrowserWindow, name: string, content: string, forma
 function registerIpc(): void {
   ipcMain.handle('file-transfer:pick',sessionHandler(async(win,id,format:unknown,delimiter:unknown,encoding?:unknown)=>{
     const selected=dataFileFormat(format)
-    if(selected==='sql'&&sessions.info(id).kind==='mongodb')throw Error('FILE_TRANSFER: 不支持此数据库或操作')
-    const extensions=selected==='xlsx'?['xlsx']:selected==='sql'?['sql']:selected==='csv'?['csv','txt']:['jsonl','ndjson','txt']
+    if(selected==='sql'&&sessions.info(id).kind==='mongodb'||sessions.info(id).kind==='redis'&&selected!=='jsonl')throw Error('FILE_TRANSFER: 不支持此数据库或操作')
+    const extensions=selected==='xlsx'?['xlsx']:selected==='parquet'?['parquet']:selected==='sql'?['sql']:selected==='csv'?['csv','txt']:['jsonl','ndjson','txt']
     const result=await dialog.showOpenDialog(win,{properties:['openFile'],filters:[{name:selected.toUpperCase(),extensions}]})
     if(result.canceled||!result.filePaths[0])return null
     assertOwner(win,id)
@@ -189,6 +189,7 @@ function registerIpc(): void {
   ipcMain.handle('file-transfer:start',sessionHandler(async(win,id,input:unknown)=>{
     const info=sessions.info(id),request=normalizeFileTransfer(input,info.kind),owner=win.webContents.id
     const writing=request.direction==='import'
+    if(info.kind==='redis'&&info.redisMode&&info.redisMode!=='standalone')throw Error('FILE_TRANSFER: Redis 存档仅支持独立实例')
     if(writing&&!info.writable)throw new Error('READ_ONLY: 请先启用当前会话的写入权限')
     if(info.transaction)throw new Error('SESSION_BUSY: 请先提交或回滚当前事务')
     let output:string|undefined,filename:string
@@ -201,8 +202,8 @@ function registerIpc(): void {
       if(result.canceled||!result.filePath)return null
       output=result.filePath;filename=basename(output)
     }
-    const detail=info.name+' · '+info.displayHost+'\n'+request.database+'.'+request.entity+'\n'+filename+'\n'+(writing?request.policy+'\n'+(request.preserveDocuments?'完整 EJSON 文档':request.mapping!.map(m=>m.source+' → '+m.target+' ('+m.conversion+')').join('\n')):'导出全部匹配记录，不覆盖现有文件。CSV 为文本格式；在电子表格中打开前注意公式风险。')
-    await confirm(win,writing?(request.policy==='replace'?'确认清空目标表并重新传输？':'确认导入文件？'):'确认导出文件？',detail+(writing?'\n'+tr(info.kind==='mongodb'?'MongoDB 分批写入，失败或取消时可能部分完成。':'关系型目标在独立事务中导入；提交结果不确定时请核对。'):''))
+    const detail=info.name+' · '+info.displayHost+'\n'+request.database+'.'+request.entity+'\n'+filename+'\n'+(info.kind==='redis'?(writing?tr('Redis Key 原生存档')+' · '+request.policy:tr('Redis Key 原生存档')+' · '+(request.redisKeys?tr('选中 Key')+': '+request.redisKeys.length:request.redisPattern)):(writing?request.policy+'\n'+(request.preserveDocuments?'完整 EJSON 文档':request.mapping!.map(m=>m.source+' → '+m.target+' ('+m.conversion+')').join('\n')):'导出全部匹配记录，不覆盖现有文件。CSV 为文本格式；在电子表格中打开前注意公式风险。'))
+    await confirm(win,writing?(request.policy==='replace'?'确认清空目标表并重新传输？':'确认导入文件？'):'确认导出文件？',detail+(writing?'\n'+tr(info.kind==='redis'?'Redis 逐 Key 写入，失败或取消不会回滚已确认的 Key；过期记录将跳过。':info.kind==='mongodb'?'MongoDB 分批写入，失败或取消时可能部分完成。':'关系型目标在独立事务中导入；提交结果不确定时请核对。'):''))
     assertOwner(win,id)
     return fileTransfers.start(owner,id,request,output,work=>sessions.external(id,writing,work))
   }))
@@ -403,10 +404,27 @@ function registerIpc(): void {
   ipcMain.handle('sessions:cli-stop',sessionHandler(async(_win,id)=>{
     const cli=nativeClis.get(id);if(!cli)return;cli.stop();await nativeCliJobs.get(id);nativeClis.delete(id)
   }))
+  ipcMain.handle('file-transfer:clickhouse',sessionHandler(async(win,id,input:unknown)=>{
+    const info=sessions.info(id),request=normalizeClickHouseTransfer(input),owner=win.webContents.id
+    if(info.kind!=='clickhouse')throw Error('INVALID_INPUT: ClickHouse transfer')
+    const writing=request.direction==='import'
+    if(writing&&!info.writable)throw Error('READ_ONLY: 请先启用当前会话的写入权限')
+    const filters=[{name:request.format.toUpperCase(),extensions:[request.format]}]
+    const selected=writing?await dialog.showOpenDialog(win,{properties:['openFile'],filters}):await dialog.showSaveDialog(win,{defaultPath:request.entity.replace(/[^A-Za-z0-9_-]/g,'_')+'.'+request.format,filters})
+    const path='filePaths'in selected?selected.filePaths[0]:selected.filePath
+    if(selected.canceled||!path)return null
+    const stamp=writing?await stat(path):undefined
+    if(stamp&&(!stamp.isFile()||!stamp.size))throw Error('INVALID_INPUT: ClickHouse transfer file')
+    const detail=info.name+' · '+info.displayHost+'\n'+request.database+'.'+request.entity+'\n'+basename(path)+' · '+request.format+'\n'+(request.fields?.join(', ')||tr('全部字段'))+(request.filter?'\n'+request.filter.field+' = '+JSON.stringify(request.filter.value):'')
+    await confirm(win,writing?'确认导入文件？':'确认导出文件？',detail+'\n'+tr(writing?'流式导入可能部分写入；失败或取消后请核对，不要直接重试。':'导出全部匹配记录，不覆盖已有文件。')+(!writing&&request.format==='csv'?'\n'+tr('原始 CSV 保留原值；在电子表格中打开前请检查公式风险。'):''))
+    assertOwner(win,id)
+    return fileTransfers.startClickHouse(owner,request,path,(signal,options)=>sessions.clickhouseTransfer(id,request,path,signal,options),stamp?{dev:stamp.dev,ino:stamp.ino,size:stamp.size,mtimeMs:stamp.mtimeMs}:undefined)
+  }))
   ipcMain.handle('sessions:clickhouse-transfer',sessionHandler(async(win,id:string,input:import('../shared/types').ClickHouseTransfer)=>{
     const info=sessions.info(id)
     if(info.kind!=='clickhouse'||!input||!['import','export'].includes(input.direction)||typeof input.database!=='string'||typeof input.entity!=='string'||input.database.length>200||input.entity.length>200)throw new Error('INVALID_INPUT: ClickHouse transfer')
     transferFormat(input.format)
+    if(input.fields!==undefined||input.filter!==undefined)throw Error('INVALID_INPUT: use ClickHouse file job for selected columns or filters')
     if(input.direction==='import'&&!info.writable)throw new Error('READ_ONLY: 请先启用当前会话的写入权限')
     const filters=[{name:input.format.toUpperCase(),extensions:[input.format]}]
     const selected=input.direction==='import'?await dialog.showOpenDialog(win,{properties:['openFile'],filters}):await dialog.showSaveDialog(win,{defaultPath:'clickhouse.'+input.format,filters})

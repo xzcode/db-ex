@@ -3,6 +3,7 @@ import type {DataFileFormat,DataFileEncoding,FieldMapping,FileTransferRequest} f
 import {dataFileName} from '../../shared/file-transfer'
 import {checkAborted} from '../operations/common'
 import {sqlDataRecords} from './sql-records'
+import {ParquetRecords} from './parquet-records'
 import {XlsxRecords} from './xlsx-records'
 export const RECORD_BYTES=32*1024*1024 // per record, not whole-file size
 export interface FileIdentity{dev:number;ino:number;size:number;mtimeMs:number}
@@ -44,6 +45,11 @@ function checkedRecord(value:unknown):Record<string,unknown>{
  return value as Record<string,unknown>
 }
 export async function* readFileRecords(file:FileHandle,format:DataFileFormat,delimiter:string,signal?:AbortSignal,onBytes?:(n:number)=>void,encoding:DataFileEncoding='utf-8',worksheet?:string){
+ if(format==='parquet'){
+  const parquet=await ParquetRecords.open(file,signal,onBytes)
+  for await(const row of parquet.records())yield checkedRecord(row)
+  return
+ }
  if(format==='xlsx'){
   const workbook=await XlsxRecords.open(file,signal,onBytes)
   try{yield*workbook.records(worksheet)}finally{await workbook.close()}
@@ -78,10 +84,13 @@ export async function inspectFile(path:string,format:DataFileFormat,delimiter:st
   const sample:Record<string,unknown>[]=[],fields=new Set<string>();let bytes=0
   if(format==='xlsx')workbook=await XlsxRecords.open(file)
   const selection=workbook?.selection(worksheet)
-  const records=workbook?workbook.records(selection?.worksheet):readFileRecords(file,format,delimiter,undefined,undefined,encoding)
+  const parquet=format==='parquet'?await ParquetRecords.open(file):undefined
+  if(parquet)for(const field of parquet.fields())fields.add(field)
+  const records=parquet?parquet.records():workbook?workbook.records(selection?.worksheet):readFileRecords(file,format,delimiter,undefined,undefined,encoding)
   let previewError:string|undefined
   try{
-   for await(const row of records){
+   for await(const record of records){
+    const row=parquet?checkedRecord(record):record
     const size=Buffer.byteLength(JSON.stringify(row))
     if(size>RECORD_BYTES)throw invalid()
     for(const name of Object.keys(row))fields.add(dataFileName(name))
@@ -104,7 +113,9 @@ function canonicalBinary(value:string){if(!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+
 export function mappedValue(value:unknown,conversion:FieldMapping['conversion'],mongo:boolean):unknown{
  if(value===null)return null
  if(conversion==='auto')return value
- const text=typeof value==='string'?value:typeof value==='number'||typeof value==='boolean'?String(value):JSON.stringify(value)
+ const wrapper=value&&typeof value==='object'?value as Record<string,unknown>:undefined
+ const scalar=wrapper&&Object.keys(wrapper).length===1?wrapper.$dbexInteger??wrapper.$dbexReal??wrapper.$dbexBinary:undefined
+ const text=typeof scalar==='string'?scalar:typeof value==='string'?value:typeof value==='number'||typeof value==='boolean'?String(value):JSON.stringify(value)
  switch(conversion){
  case 'string':return text
  case 'integer':if(!/^[+-]?\d+$/.test(text))throw invalid();return mongo?{$numberLong:BigInt(text).toString()}:{$dbexInteger:BigInt(text).toString()}
@@ -121,7 +132,14 @@ export function mapRecord(row:Record<string,unknown>,request:FileTransferRequest
  const out:Record<string,unknown>=Object.create(null)
  for(const m of request.mapping||[]){
   if(!Object.hasOwn(row,m.source)){if(mongo)continue;throw invalid()}
-  out[m.target]=mappedValue(row[m.source],m.conversion,mongo)
+  const value=row[m.source]
+  if(mongo&&request.format==='parquet'&&m.conversion==='auto'&&value&&typeof value==='object'&&Object.keys(value).length===1){
+   const v=value as Record<string,unknown>
+   if(typeof v.$dbexInteger==='string'){const n=BigInt(v.$dbexInteger);out[m.target]=n<-(1n<<63n)||n>(1n<<63n)-1n?{$numberDecimal:n.toString()}:{$numberLong:n.toString()};continue}
+   if(typeof v.$dbexReal==='string'){out[m.target]={$numberDouble:v.$dbexReal};continue}
+   if(typeof v.$dbexBinary==='string'){out[m.target]={$binary:{base64:v.$dbexBinary,subType:'00'}};continue}
+  }
+  out[m.target]=mappedValue(value,m.conversion,mongo)
  }
  if(!Object.keys(out).length)throw invalid()
  return out

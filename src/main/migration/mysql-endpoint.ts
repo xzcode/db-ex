@@ -171,12 +171,13 @@ export class MysqlMigrationEndpoint implements MigrationEndpoint{
   const inbound=await this.query('SELECT TABLE_NAME FROM information_schema.KEY_COLUMN_USAGE WHERE REFERENCED_TABLE_SCHEMA=? AND REFERENCED_TABLE_NAME=? LIMIT 1',[database,name])
   if(inbound.length)throw new Error('MIGRATION_DEPENDENCY: 目标表存在外部外键引用')
  }
- async fileFields(database:string,name:string){
+ async fileColumnTypes(database:string,name:string){
   if(protectedDatabase(this.kind,database))throw new Error('FILE_TRANSFER: 不允许操作系统数据库')
-  const rows=await this.query('SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? ORDER BY ORDINAL_POSITION LIMIT 1001',[database,name])
+  const rows=await this.query('SELECT COLUMN_NAME AS name,COLUMN_TYPE AS type FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? ORDER BY ORDINAL_POSITION LIMIT 1001',[database,name])
   if(!rows.length||rows.length>1000)throw new Error('FILE_TRANSFER: 无法读取目标字段')
-  return rows.map(r=>String(r.name))
+  return rows.map(r=>({name:String(r.name),type:String(r.type)}))
  }
+ async fileFields(database:string,name:string){return (await this.fileColumnTypes(database,name)).map(r=>r.name)}
  async *fileRows(database:string,name:string,selected?:string[],filter?:BrowseFilter){
   await this.startSourceSnapshot()
   const fields=await this.fileFields(database,name),columns=selected||fields

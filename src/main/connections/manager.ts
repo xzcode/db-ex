@@ -59,7 +59,7 @@ export class SessionManager {
       driver=await adapter.connect({config,transport,tls,sqliteProcessFactory:this.sqliteProcessFactory,sqliteModulePath:this.sqliteModulePath})
       if (generation !== this.generation) throw new Error('SESSION_CLOSED: 窗口已关闭，本次连接已取消')
       const info: SessionInfo = { id: randomUUID(), connectionId, name: config.name, kind: config.kind,
-        displayHost: connectionDisplayEndpoint(config).host, serverVersion:driver.serverVersion, writable: false, transaction: false }
+        displayHost: connectionDisplayEndpoint(config).host, serverVersion:driver.serverVersion,...(config.kind==='redis'?{redisMode:config.redisMode||'standalone' as const}:{}), writable: false, transaction: false }
       this.sessions.set(info.id, { info, driver, transport, config, tls })
       return { ...info }
     } catch (error) {
@@ -140,10 +140,10 @@ export class SessionManager {
       return work(config,signal,route)
     })
   }
-  async clickhouseTransfer(id:string,input:import('../../shared/types').ClickHouseTransfer,path:string){
+  async clickhouseTransfer(id:string,input:import('../../shared/types').ClickHouseTransfer,path:string,parent?:AbortSignal,options?:import('../operations/clickhouse-transfer').ClickHouseFileOptions){
     const session=this.session(id),driver=session.driver
     if(session.info.kind!=='clickhouse'||!driver.transfer)throw new Error('INVALID_OPERATION: ClickHouse transfer')
-    return this.external(id,input.direction==='import',(_config,signal)=>driver.transfer!(input,path,{writable:session.info.writable,confirmed:true,signal}))
+    return this.external(id,input.direction==='import',(_config,signal)=>driver.transfer!(input,path,{writable:session.info.writable,confirmed:true,signal:parent?AbortSignal.any([parent,signal]):signal},options))
   }
   /** Saved read-only query execution uses its own authenticated transport.
    * Cancelling or timing out the temporary query never destroys the explorer's

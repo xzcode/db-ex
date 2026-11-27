@@ -18,7 +18,7 @@ export const clickhouseAdapter:DatabaseAdapter={
    return {
     serverVersion:version,
     execute:(input,context)=>operations.execute(input as ClickHouseOperation,context),
-    transfer:(input,path,context)=>operations.transfer(input,path,context),
+    transfer:(input,path,context,options)=>operations.transfer(input,path,context,options),
     roots:context=>operations.roots(context),
     children:(database,_category,context,statistics)=>operations.children(database,context,statistics),
     close:pool.close

@@ -28,6 +28,8 @@
     "@clickhouse/client": "^1.25.0",
     "acorn": "^8.19.0",
     "exceljs": "4.4.0",
+    "hyparquet": "1.33.2",
+    "hyparquet-writer": "0.18.1",
     "ioredis": "^5.11.1",
     "monaco-editor": "^0.57.0",
     "mongodb": "^6.15.0",

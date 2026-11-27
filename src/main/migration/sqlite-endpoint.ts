@@ -52,6 +52,7 @@ export class SqliteMigrationEndpoint implements MigrationEndpoint{
  startSourceSnapshot(){return this.worker.call<void>('sourceSnapshot')}
  prepareTarget(){return this.worker.call<void>('prepareTarget')}
  applyStep(step:MigrationStep){return this.worker.call<void>('apply',[step.sql])}
+ async fileColumnTypes(database:string,name:string){if(database!=='main')throw new Error('FILE_TRANSFER: 对象不存在');return this.worker.call<{name:string;type:string}[]>('fileColumnTypes',[name])}
  async fileFields(database:string,name:string){if(database!=='main')throw new Error('FILE_TRANSFER: 对象不存在');return this.worker.call<string[]>('fileFields',[name])}
  async *fileRows(database:string,name:string,selected?:string[],filter?:BrowseFilter){
   await this.startSourceSnapshot()

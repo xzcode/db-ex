@@ -17,7 +17,7 @@ async function receive(message:Request){
       migration=new SqliteMigrationWorkerEngine(message.path);send({id:message.id,ok:true,value:migration.identity});return
     }
     if(message.kind==='migration'){
-      if(!migration||!message.method||!['catalog','schema','sourceSnapshot','prepareTarget','apply','beginTarget','beginRead','beginFileRead','fileFields','batch','insertBatch','commit'].includes(message.method))throw new Error('INVALID_OPERATION: SQLite migration')
+      if(!migration||!message.method||!['catalog','schema','sourceSnapshot','prepareTarget','apply','beginTarget','beginRead','beginFileRead','fileFields','fileColumnTypes','batch','insertBatch','commit'].includes(message.method))throw new Error('INVALID_OPERATION: SQLite migration')
       const fn=migration[message.method as keyof SqliteMigrationWorkerEngine]
       if(typeof fn!=='function')throw new Error('INVALID_OPERATION: SQLite migration')
       const value=await (fn as (...args:unknown[])=>unknown).apply(migration,message.args||[])

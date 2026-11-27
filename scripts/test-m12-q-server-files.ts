@@ -63,6 +63,17 @@ try{
    const excelRaw=await excelCollection.findOne({_id:doc._id},{raw:true})
    assert(Buffer.isBuffer(excelRaw)&&original.equals(excelRaw))
    console.log('Q5 real MongoDB XLSX explicit EJSON mappings: byte-exact selected document')
+   const pqCollection=await db.createCollection<Document&{_id:unknown}>('parquet_copy')
+   const pqPath=join(folder,'mongo.parquet')
+   const pqOut=await run({...base,format:'parquet',entity:'records',direction:'export',fields:excelFields,mongoFilter:JSON.stringify({_id:{$oid:'64b000000000000000000001'}})},pqPath,source)
+   assert.equal(pqOut.state,'completed',JSON.stringify(pqOut));assert.equal(pqOut.committed,1)
+   const pqPreview=await service.pick(owner,'fixture',pqPath,'parquet',',')
+   const pqIn=await run({...base,format:'parquet',entity:'parquet_copy',direction:'import',token:pqPreview.token,mapping:excelFields.map(field=>({source:field,target:field,conversion:'auto' as const}))})
+   assert.equal(pqIn.state,'completed',JSON.stringify(pqIn));assert.equal(pqIn.committed,1)
+   const pqRaw=await pqCollection.findOne({_id:doc._id},{raw:true})
+   assert(Buffer.isBuffer(pqRaw)&&original.equals(pqRaw))
+   console.log('Q5 real MongoDB Parquet: byte-exact selected BSON document')
+
 
   }finally{await db.dropDatabase().catch(()=>{});await client.close()}
  }else{
@@ -90,21 +101,22 @@ try{
    console.log('Q5 real '+kind+' mTLS/SOCKS JSONL round trip: 1001 rows, exact UInt64/DECIMAL/binary/NULL, rollback and replace')
    await client.query('CREATE TABLE '+table('copy_sql')+ddl)
    await client.query('CREATE TABLE '+table('copy_xlsx')+ddl)
+   await client.query('CREATE TABLE '+table('copy_parquet')+ddl)
    await client.execute('UPDATE '+table('records')+' SET note=? WHERE id=1',["O'Reilly "+String.fromCharCode(92)+'中文'])
    const predicate={join:'and' as const,groups:[],sort:[{field:'id',direction:1 as const}],raw:{text:'id IN (1,18446744073709551615) AND (note IS NULL OR note LIKE ?)',parameters:['O%']}}
    const [expected]=await client.query('SELECT * FROM '+table('records')+' WHERE id IN (1,18446744073709551615) ORDER BY id')
-   for(const format of ['sql','xlsx'] as const){
+   for(const format of ['sql','xlsx','parquet'] as const){
     const path=join(folder,'filtered.'+format)
     const exported=await run({...base,format,entity:'records',direction:'export',filter:predicate},path,source)
     assert.equal(exported.state,'completed',JSON.stringify(exported));assert.equal(exported.committed,2)
     const picked=await service.pick(owner,'fixture',path,format,',')
-    const fieldMapping=picked.fields.map(field=>({source:field,target:field,conversion:format==='sql'?'auto' as const:field==='payload'?'binary' as const:field==='id'?'integer' as const:'string' as const}))
+    const fieldMapping=picked.fields.map(field=>({source:field,target:field,conversion:format!=='xlsx'?'auto' as const:field==='payload'?'binary' as const:field==='id'?'integer' as const:'string' as const}))
     const imported=await run({...base,format,entity:'copy_'+format,direction:'import',token:picked.token,worksheet:picked.worksheet,mapping:fieldMapping})
     assert.equal(imported.state,'completed',JSON.stringify(imported));assert.equal(imported.committed,2)
     const [got]=await client.query('SELECT * FROM '+table('copy_'+format)+' ORDER BY id')
     assert.deepEqual(got,expected)
    }
-   console.log('Q3/Q5 real '+kind+' filtered SQL/XLSX round trip: exact UInt64/DECIMAL/binary/NULL and escaped text')
+   console.log('Q3/Q5 real '+kind+' filtered SQL/XLSX/Parquet round trip: exact UInt64/DECIMAL/binary/NULL and escaped text')
 
    // Use two independent fixture sessions, exactly as isolated query reads
    // and the original explorer's explicit writes are routed in the app.

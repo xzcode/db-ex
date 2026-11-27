@@ -78,7 +78,7 @@ async function installBridge(page: Page) {
       async testConnection(config: any, clearSecrets: string[]) { calls.push({ action: 'testConnection', config, clearSecrets }); return '连接成功' },
       async pickConnectionFile(kind: string) { calls.push({ action: 'pickConnectionFile', kind }); return '/test/client.pem' },
       async disconnect(id: string) { calls.push({ action: 'disconnect', id }) },
-      async roots(id: string) { return [{ id: id + '-db', label: id === 'redis' ? 'DB 0' : id === 'sql2' ? 'other' : 'app', kind: id === 'redis' ? 'keyspace' : 'database', database: id === 'sql2' ? 'other' : 'app' },...(additionalDbs[id]||[]).map(database=>({id:id+'-'+database,label:database,kind:'database',database}))] },
+      async roots(id: string) { return [{ id: id + '-db', label: id === 'redis' ? 'DB 0' : id === 'sql2' ? 'other' : 'app', kind: id === 'redis' ? 'keyspace' : 'database', database: id === 'redis' ? '0' : id === 'sql2' ? 'other' : 'app' },...(additionalDbs[id]||[]).map(database=>({id:id+'-'+database,label:database,kind:'database',database}))] },
       async children(id: string, database: string, category?: string) {
         if(id==='ch')return [{id:database+'-events',label:'events',database,entity:'events',kind:'table',metrics:[{label:'存储引擎',value:'MergeTree'},{label:'记录数（估算）',value:'10'}]}]
         if(id==='maria')return [{id:database+'-seq',label:'seq',database,entity:'seq',kind:'table',objectType:'sequence',readOnly:true},{id:database+'-history',label:'history',database,entity:'history',kind:'table',objectType:'system-versioned',readOnly:true}]
@@ -147,6 +147,7 @@ async function installBridge(page: Page) {
         if (op.action === 'redis.get') return { ...grid([{ value: 'hello' }]), value: 'hello', redisType: 'string', ttl: -1, length: 5, truncated: false }
         return { columns: [], rows: [], affectedRows: 1, message: '操作已完成' }
       },
+      async startClickHouseFileTransfer(id:string,input:any){calls.push({sessionId:id,action:'startClickHouseFileTransfer',...input});fileJob={id:'fixture-ch-file',direction:input.direction,state:'running',read:0,committed:0,skipped:0,bytes:0,rowsKnown:false,file:'fixture.'+input.format};return {...fileJob}},
       async clickhouseTransfer(id:string,input:any){calls.push({sessionId:id,action:'clickhouseTransfer',...input});return {bytes:1024}},
       async executeScriptBatch(id:string,request:any){
         calls.push({action:'executeScriptBatch',id,request})
@@ -1335,10 +1336,15 @@ test('ClickHouse scoped admin actions require preview and write access, and file
  await page.locator('.resource-node[data-object-kind="database"]').first().click()
  await page.locator('.resource-node[data-object-kind="table"]').filter({hasText:'events'}).click()
  const workbench=page.locator('.clickhouse-workbench:visible')
- await workbench.getByLabel('ClickHouse data format').selectOption('parquet')
- await workbench.getByRole('button',{name:'流式导出整表',exact:true}).click()
- await expect.poll(()=>page.evaluate(()=>(window as any).__dbexCalls.filter((c:any)=>c.action==='clickhouseTransfer').at(-1))).toMatchObject({database:'app',entity:'events',format:'parquet',direction:'export'})
- await expect(workbench.getByRole('button',{name:'流式导入',exact:true})).toBeDisabled()
+ await workbench.getByRole('button',{name:'流式导出向导',exact:true}).click()
+ const files=page.getByRole('dialog',{name:'流式导出向导',exact:true})
+ await files.getByLabel('格式',{exact:true}).selectOption('parquet')
+ await files.getByRole('button',{name:'note ↑',exact:true}).click()
+ await files.getByRole('button',{name:'选择数据文件并执行',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=>(window as any).__dbexCalls.filter((c:any)=>c.action==='startClickHouseFileTransfer').at(-1))).toMatchObject({database:'app',entity:'events',format:'parquet',direction:'export',fields:['note','id']})
+ await expect(files.getByText(/操作已完成/)).toBeVisible()
+ await files.getByRole('button',{name:'关闭',exact:true}).last().click()
+ await expect(workbench.getByRole('button',{name:'流式导入向导',exact:true})).toBeDisabled()
  await workbench.getByRole('button',{name:'管理',exact:true}).click()
  await workbench.getByRole('button',{name:'变更任务',exact:true}).click()
  await expect(workbench.getByRole('button',{name:'变更任务…',exact:true})).toBeDisabled()
@@ -2196,4 +2202,14 @@ test('Q5 Excel wizard: re-preview worksheet, field mapping and explicit import t
  expect(chosen).toMatchObject({id:'sql',sheet:'Second'})
  expect(request).toMatchObject({format:'xlsx',worksheet:'Second',direction:'import',database:'app',entity:'users',mapping:[{source:'name',target:'name',conversion:'auto'}]})
  expect(request.token).not.toBe(chosen.token)
+})
+
+
+test('Q5 Redis native archive uses explicit matching scope',async({page})=>{
+ await connect(page,'Redis Local')
+ await page.getByRole('button',{name:'导出 Key 存档',exact:true}).click()
+ const wizard=page.getByRole('dialog',{name:'流式导出向导',exact:true})
+ await wizard.getByLabel('Redis Key 匹配模式',{exact:true}).fill('profile:*')
+ await wizard.getByRole('button',{name:'确认执行',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=>(window as any).__dbexCalls.filter((c:any)=>c.action==='startFileTransfer').at(-1)?.request)).toMatchObject({direction:'export',database:'0',entity:'keyspace',format:'jsonl',redisPattern:'profile:*'})
 })

@@ -86,6 +86,7 @@ export interface SessionInfo {
   kind: DatabaseKind
   displayHost: string
   serverVersion?: string
+  redisMode?: ConnectionConfig['redisMode']
   writable: boolean
   transaction: boolean
 }
@@ -200,8 +201,8 @@ export type ClickHouseChange =
   | {kind:'dropPartition'|'detachPartition'|'attachPartition';partitionId:string}
   | {kind:'backup';disk:string;file:string}
   | {kind:'restore';disk:string;file:string;newTable:string}
-export type ClickHouseTransferFormat='csv'|'jsonl'|'parquet'
-export interface ClickHouseTransfer {database:string;entity:string;direction:'import'|'export';format:ClickHouseTransferFormat}
+export type ClickHouseTransferFormat='csv'|'jsonl'|'parquet'|'native'
+export interface ClickHouseTransfer {database:string;entity:string;direction:'import'|'export';format:ClickHouseTransferFormat;fields?:string[];filter?:{field:string;value:string}}
 export type ClickHouseOperation =
   | ({action:'clickhouse.query';database?:string;sql:string;parameters?:Record<string,SqlValue>;limit?:number} & Confirmed)
   | ({action:'clickhouse.browse';limit?:number;offset?:number;sort?:import('./browse-filter').SortRule[];filter?:{field:string;value:string}} & Entity)
@@ -291,6 +292,7 @@ export interface DbExAPI {
   executeQuery(id:string,operation:DatabaseOperation):Promise<OperationResult>
   cancelQuery(id:string):Promise<boolean>
   execute(sessionId: string, operation: DatabaseOperation): Promise<OperationResult>
+  startClickHouseFileTransfer(sessionId:string,input:ClickHouseTransfer):Promise<import('./file-transfer').FileTransferJob|null>
   clickhouseTransfer(sessionId:string,input:ClickHouseTransfer):Promise<{bytes:number}|null>
   validateMongoDocument(document: string, original?: string): Promise<void>
   copyText(value: string): Promise<void>

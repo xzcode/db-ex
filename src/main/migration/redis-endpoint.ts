@@ -8,6 +8,7 @@ import {createTransport,type ConnectionTransport} from '../connections/transport
 import {loadConnectionTls} from '../connections/tls-material'
 import {createRedisClient,setRedisReadBudget} from '../connections/redis-client'
 import type {SchemaObject,SchemaSnapshot} from './mysql-schema'
+import type {RedisArchiveRecord} from '../file-transfer/redis-records'
 import {checkedSnapshot,requireActive,reviewStep,type MigrationEndpoint,type CopyCallbacks} from './endpoint'
 
 const TYPES=new Set(['string','hash','list','set','zset','stream'])
@@ -81,6 +82,41 @@ export class RedisMigrationEndpoint implements MigrationEndpoint{
    if(type!=='none')objects.push({name,type,engine:'Redis',definition:type,triggerNames:[]})
   }
   return checkedSnapshot(objects)
+ }
+ async *archiveKeys(database:string,pattern?:string,selected?:string[]){
+  this.check(database)
+  if(selected){for(const key of selected){requireActive(this.signal);yield Buffer.from(key,'utf8')}return}
+  if(typeof pattern!=='string'||!pattern.length||pattern.length>1024)throw Error('FILE_TRANSFER: Redis 匹配模式无效')
+  let cursor='0'
+  do{
+   const [next,keys]=await this.budget(()=>this.client.scanBuffer(cursor,'MATCH',pattern,'COUNT',100))
+   cursor=String(next)
+   for(const key of keys){requireActive(this.signal);yield key}
+  }while(cursor!=='0')
+ }
+ async archiveRead(database:string,key:Buffer):Promise<RedisArchiveRecord|undefined>{
+  this.check(database)
+  if(key.length>1024*1024)throw Error('FILE_TRANSFER: Redis Key 超过单条记录容量')
+  const result=await this.budget(()=>this.client.callBuffer('EVAL',"local t=redis.call('TYPE',KEYS[1]).ok; if t=='none' then return {} end; local d=redis.call('DUMP',KEYS[1]); local ttl=redis.call('PTTL',KEYS[1]); local now=redis.call('TIME'); return {t,d,ttl,now[1],now[2]}",1,key)) as [Buffer,Buffer|null,number,Buffer,Buffer]|[]
+  if(!result.length)return undefined
+  const [type,dump,ttl,seconds,micros]=result
+  if(ttl===-2||!dump)return undefined
+  if(!TYPES.has(String(type))||!Buffer.isBuffer(dump)||dump.length>4*1024*1024||!Number.isSafeInteger(ttl)||ttl< -1)throw Error('FILE_TRANSFER: Redis Key 存档记录无效或不支持的数据类型')
+  const expiresAt=ttl===-1?null:Number(seconds)*1000+Math.floor(Number(micros)/1000)+ttl
+  if(expiresAt!==null&&!Number.isSafeInteger(expiresAt))throw Error('FILE_TRANSFER: Redis Key 存档记录无效或不支持的数据类型')
+  return {version:1,keyBase64:key.toString('base64'),type:String(type),dumpBase64:dump.toString('base64'),expiresAt}
+ }
+ async archiveRestore(database:string,record:{key:Buffer;dump:Buffer;expiresAt:number|null},replace:boolean):Promise<'restored'|'expired'|'exists'|'invalid'>{
+  this.check(database)
+  // The only script is fixed application code. Compare against target server
+  // time and use ABSTTL to avoid extending an expiring key's lifetime.
+  const script="local expiry=tonumber(ARGV[2]); if expiry>0 then local t=redis.call('TIME'); if expiry<=tonumber(t[1])*1000+math.floor(tonumber(t[2])/1000) then return 0 end end; local args={KEYS[1],ARGV[2],ARGV[1]}; if expiry>0 then table.insert(args,'ABSTTL') end; if ARGV[3]=='1' then table.insert(args,'REPLACE') end; local r=redis.pcall('RESTORE',unpack(args)); if type(r)=='table' and r.err then if string.find(r.err,'BUSYKEY',1,true) then return -1 end; if string.find(r.err,'DUMP payload',1,true) or string.find(r.err,'Bad data format',1,true) then return -2 end; return -3 end; return 1"
+  const result=await this.budget(()=>this.client.eval(script,1,record.key,record.dump,String(record.expiresAt??0),replace?'1':'0'))
+  if(result===1)return 'restored'
+  if(result===0)return 'expired'
+  if(result===-1)return 'exists'
+  if(result===-2)return 'invalid'
+  throw Error('FILE_TRANSFER: Redis 写入结果不确定，请核对目标数据')
  }
  async startSourceSnapshot(){}
  async prepareTarget(){}

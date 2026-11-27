@@ -94,7 +94,7 @@ async function loadMetadata(force=false){
    fields[ref.alias]=columns;fields[ref.table]=columns
   }
   if(metadataScope.value===key){qualifiedFields.value=fields;metadataColumns.value=[...new Set(Object.values(fields).flat())]}
- })
+ },!force)
 }
 const sqlFields=computed(()=>[...new Set([...metadataColumns.value,...Object.values(cteMetadata.value.fields).flat(),...(result.value?.columns||[])])])
 watch([metadataScope,loaded,()=>props.active],()=>{
@@ -324,7 +324,7 @@ watch(busy,value=>{
 },{flush:'sync'})
 watch(dirty,value=>emit('dirtyChange',value),{flush:'sync'})
 function fail(reason:unknown){error.value=reason instanceof Error?reason.message:String(reason)}
-async function task(fn:()=>Promise<void>){if(busy.value||disposed)return;busy.value=true;error.value='';notice.value='';try{await fn()}catch(reason){if(!disposed)fail(reason)}finally{busy.value=false}}
+async function task(fn:()=>Promise<void>,preserveOutcome=false){if(busy.value||disposed)return;busy.value=true;if(!preserveOutcome){error.value='';notice.value=''}try{await fn()}catch(reason){if(!disposed&&!preserveOutcome)fail(reason)}finally{busy.value=false}}
 function apply(value:QueryDraft){
  name.value=value.name
  if(mode==='sql'){sql.value=value.text;parameters.value=value.parameters||(clickhouse?'{}':'[]')}

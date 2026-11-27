@@ -203,3 +203,49 @@ MySQL/MariaDB/MongoDB TLS/SOCKS acceptance cases are part of the existing
 M12 fixture matrix and require remote execution on this exact candidate.
 Runtime dependency audit reported no known vulnerabilities after retaining
 the DOMPurify override and pinning the transitive UUID dependency.
+
+### Parquet and native Redis / ClickHouse file jobs
+
+- MySQL/MariaDB/SQLite/MongoDB use incremental Parquet row groups,
+  native integer/unsigned/decimal/binary/nullable primitives where the
+  source has a compatible type. SQLite dynamic values and selected BSON
+  fields are encoded as typed JSON/EJSON columns. Mapping is explicit;
+  arbitrary nested Parquet schemas and unsupported logical types are not
+  promised. Reads have a 64 MiB row-group decoding budget (not a total
+  file-size cap); large files should use reasonably sized row groups.
+  Missing selected BSON fields are represented as null; JSONL/EJSON is
+  still the preferred arbitrary-document fidelity format.
+- Redis standalone archives use SCAN MATCH or explicit UTF-8 key selection,
+  exact Base64 binary keys and native DUMP payloads, absolute expiration
+  and RESTORE. Import validates the record envelope and duplicate key
+  identities for the whole file before writing; the Redis server validates
+  payload checksums and format during RESTORE. Default conflict policy
+  stops without overwriting; overwrite must be confirmed explicitly.
+  Expired records are skipped. Scan is not a consistent snapshot.
+  Supported native types: string/hash/list/set/zset/stream. Each key has
+  a 1 MiB key and 4 MiB dump budget; module types, Cluster/Sentinel and
+  arbitrary Redis commands are not supported by this archive format.
+  The disk-backed key ledger prevents duplicate output without an
+  unbounded in-memory set. Acknowledged writes are not rolled back.
+- ClickHouse now has native CSVWithNames, JSONEachRow, Parquet and Native
+  file jobs with chosen/reordered columns and the applied equality filter
+  for exports. The new job path is streamed, independently cancellable,
+  uses actual byte progress (not invented row counts), no-clobber output
+  and input identity checks. It does not impose the legacy direct-call
+  256 MiB/120-second total limits. Import is append-only on supported
+  engines; the user chooses matching field order. No arbitrary cross-engine
+  conversion or automatic native schema mapping is claimed. If an import
+  is interrupted after the write starts, its outcome is uncertain.
+
+Local real fixtures: SQLite Parquet 50,001 rows with exact int64, dynamic
+REAL storage, BLOB and NULL; Redis 7.0.15 disposable loopback instance,
+seven keys covering six native data types, binary key/value and absolute
+TTL, conflict stop, opt-in overwrite, expired record and duplicate-key
+preflight. Remote M12 fixtures now cover filtered native ClickHouse
+file jobs and selected Parquet round trips for MySQL/MariaDB/MongoDB;
+those fixtures require CI acceptance on this exact candidate.
+
+- Previous candidate full UI CI exposed an outcome-clearing race: delayed
+  automatic completion metadata could reset the script failure banner.
+  Automatic completion now preserves the query outcome; explicit operations
+  retain their existing status lifecycle.

@@ -11,6 +11,7 @@ import ResultGrid from './ResultGrid.vue'
 import ObjectInspector from './ObjectInspector.vue'
 import {globalInspectorTab,openGlobalInspector,closeGlobalInspector} from '../inspector-preferences'
 import ClickHouseAdminDialog from './ClickHouseAdminDialog.vue'
+import ClickHouseFileWizard from './ClickHouseFileWizard.vue'
 const props=defineProps<{session:SessionInfo;node:ExplorerNode;active:boolean;initialTab?:string;requestedTab?:string;tabRequest?:number}>()
 const emit=defineEmits<{busyChange:[boolean];updateSession:[SessionInfo];disconnect:[];tabChange:['data'|'structure'|'management'];dirtyChange:[boolean]}>()
 const database=props.node.database||'',entity=props.node.entity||''
@@ -28,7 +29,7 @@ const pageSize=ref<number>(pageSizeFor(preferences.value,'clickhouse')),offset=r
 const sort=ref<SortRule[]>([]),filter=ref<{field:string;value:string}>(),filterDraft=ref<{field:string;value:string}>()
 const importRows=ref<SqlRow[]>(),importText=ref('')
 const adminDraft=ref<ClickHouseChange['kind']>(),adminBusy=ref(false),adminFields=ref<Record<string,string>[]>([])
-const transferFormat=ref<ClickHouseTransferFormat>('csv'),backupId=ref(''),backupResult=ref<OperationResult>()
+const fileWizard=ref<'import'|'export'>(),backupId=ref(''),backupResult=ref<OperationResult>()
 const backupNotice=ref('')
 const canInsert=computed(()=>props.session.writable&&!props.node.readOnly&&database!=='system')
 const target={database,entity}
@@ -42,13 +43,11 @@ async function openAdmin(kind:ClickHouseChange['kind']){
 function closeAdmin(){adminDraft.value=undefined;emit('dirtyChange',false)}
 function adminSubmitted(value:OperationResult){notice.value=value.message||'ClickHouse 操作已提交，请刷新任务状态；取消不回滚已完成的修改。';if(value.backupId){backupId.value=value.backupId;backupResult.value=undefined;backupNotice.value=value.backupId}}
 async function checkBackup(){await task(async()=>{backupResult.value=await execute({action:'clickhouse.backupStatus',...target,backupId:backupId.value.trim()})})}
-async function transfer(direction:'import'|'export'){
- await task(async()=>{
-  running.value=true
-  try{const output=await window.dbex.clickhouseTransfer(props.session.id,{...target,direction,format:transferFormat.value});if(output)notice.value=''+output.bytes+' bytes · '+t('操作已完成')}
-  finally{running.value=false}
- })
+function openFileWizard(direction:'import'|'export'){
+ if(busy.value||adminBusy.value||direction==='import'&&!canInsert.value)return
+ fileWizard.value=direction
 }
+function closeFileWizard(){const imported=fileWizard.value==='import';fileWizard.value=undefined;emit('busyChange',false);if(imported)void load(offset.value)}
 function adminBusyChanged(value:boolean){adminBusy.value=value;emit('busyChange',value)}
 
 let disposed=false
@@ -131,9 +130,8 @@ onBeforeUnmount(()=>{disposed=true})
 
    </div>
    <div v-if="tab==='data'&&canManage" class="editor-toolbar">
-    <select v-model="transferFormat" :disabled="busy" aria-label="ClickHouse data format"><option value="csv">CSVWithNames</option><option value="jsonl">JSONEachRow</option><option value="parquet">Parquet</option></select>
-    <button class="btn secondary small" :disabled="busy||!canInsert" @click="transfer('import')">{{t('流式导入')}}</button>
-    <button class="btn secondary small" :disabled="busy" @click="transfer('export')">{{t('流式导出整表')}}</button>
+    <button class="btn secondary small" :disabled="busy||!canInsert" @click="openFileWizard('import')">{{t('流式导入向导')}}</button>
+    <button class="btn secondary small" :disabled="busy" @click="openFileWizard('export')">{{t('流式导出向导')}}</button>
    </div>
    <div v-if="tab==='management'" class="editor-toolbar">
     <input v-model="backupId" placeholder="Backup ID" maxlength="160" :disabled="busy" aria-label="Backup ID"/>
@@ -149,6 +147,7 @@ onBeforeUnmount(()=>{disposed=true})
    <ResultGrid v-else-if="tab==='management'&&managementResult" :columns="managementResult.columns" :rows="managementResult.rows" :column-types="managementResult.columnTypes" :null-cells="managementResult.nullCells" relational-kind="clickhouse" :offset="managementOffset" :active="active" />
    <div v-else class="empty-state">{{ t(busy?'正在加载资源…':'无可见对象') }}</div>
    <footer class="result-footer"><span>{{ (tab==='data'?result:tab==='structure'?structure:managementResult)?.rows.length||0 }} {{ t('条记录') }}<template v-if="(tab==='data'?result:tab==='structure'?structure:managementResult)?.truncated"> · {{ t('结果已截断') }}</template></span><div v-if="tab==='data'"><select :value="pageSize" :disabled="busy" @change="load(0,sort,filter,Number(($event.target as HTMLSelectElement).value))"><option v-for="n in [100,200,500]" :value="n" :key="n">{{ n }}</option></select><button class="btn secondary small" :disabled="busy||offset===0" @click="load(Math.max(0,offset-pageSize))">{{ t('上一页') }}</button><button class="btn secondary small" :disabled="busy||result?.nextOffset===undefined" @click="result?.nextOffset!==undefined&&load(result.nextOffset)">{{ t('下一页') }}</button></div><div v-else-if="tab==='management'&&managementView!=='queries'"><button class="btn secondary small" :disabled="busy||managementOffset===0" @click="loadManagement(managementView,Math.max(0,managementOffset-pageSize))">{{ t('上一页') }}</button><button class="btn secondary small" :disabled="busy||managementResult?.nextOffset===undefined" @click="managementResult?.nextOffset!==undefined&&loadManagement(managementView,managementResult.nextOffset)">{{ t('下一页') }}</button></div></footer>
+   <ClickHouseFileWizard v-if="fileWizard&&active" :session="session" :database="database" :entity="entity" :direction="fileWizard" :filter="filter" @busy-change="emit('busyChange',$event)" @close="closeFileWizard"/>
    <ClickHouseAdminDialog v-if="adminDraft" :session="session" :database="database" :entity="entity" :fields="adminFields" :initial-kind="adminDraft" :execute="execute" @busy-change="adminBusyChanged" @submitted="adminSubmitted" @close="closeAdmin" @cancel="cancel"/>
    <div v-if="importRows" class="modal-backdrop"><section class="dialog" role="dialog" :aria-label="t('导入预览')"><header class="dialog-header"><h2>{{ t('导入预览') }}</h2></header><div class="dialog-body"><p class="helper">{{ database }}.{{ entity }} · {{ importRows.length }} · MergeTree</p><p v-if="error" role="alert">{{ localize(error) }}</p><textarea v-model="importText" rows="12" spellcheck="false" :disabled="busy"/></div><footer class="dialog-footer"><button class="btn secondary" :disabled="busy" @click="closeImport">{{ t('取消') }}</button><button class="btn primary" :disabled="busy||!canInsert" @click="insert">{{ t('审阅并保存') }}</button></footer></section></div>
   </section>
