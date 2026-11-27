@@ -10,6 +10,15 @@ export const qRefinementTraditional:Record<string,string>={
 }
 
 const followupPairs:Record<string,[string,string]>={
+ '切换执行目标':['Switch execution target','切換執行目標'],
+ '执行连接':['Execution connection','執行連線'],
+ '执行数据库':['Execution database','執行資料庫'],
+ '执行目标已断开':['Execution target disconnected','執行目標已中斷'],
+ '保存位置':['Saved location','儲存位置'],
+ '仅改变执行、补全及查询历史的目标；原查询的保存位置不变。不会自动运行语句。':['Change execution, completion and history scope only. The saved query stays in its original location. Statements will not run automatically.','僅變更執行、補全及查詢歷史的目標；原查詢的儲存位置不變。不會自動執行陳述式。'],
+ '编辑查询记录':['Edit query record','編輯查詢記錄'],
+ '仅修改完整单表结果中的可编辑字段；保存时核对完整原始记录。':['Edit only supported fields in complete single-table results; saving checks the entire original row.','僅修改完整單表結果中的可編輯欄位；儲存時核對完整原始記錄。'],
+ 'QUERY_EDIT: 查询结果无法安全编辑':['QUERY_EDIT: Query result cannot be safely edited.','QUERY_EDIT: 查詢結果無法安全編輯。'],
  '查询执行历史':['Query execution history','查詢執行歷史'],
  '搜索查询':['Search queries','搜尋查詢'],
  '执行状态':['Execution status','執行狀態'],

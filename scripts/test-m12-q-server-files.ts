@@ -10,6 +10,8 @@ import {newConnectionConfig} from '../src/shared/connection-form'
 import {createTransport} from '../src/main/connections/transport'
 import {loadConnectionTls} from '../src/main/connections/tls-material'
 import {openMysqlClient} from '../src/main/connections/mysql-client'
+import {MysqlOperations} from '../src/main/operations/mysql'
+import {canEditSqlRow,prepareSqlResultEdit,sqlResultTarget} from '../src/shared/sql-result-edit'
 import {openMongoClient} from '../src/main/connections/mongo-client'
 import type {ConnectionConfig,DatabaseKind} from '../src/shared/types'
 const kind=process.env.DBEX_M11_ENGINE as DatabaseKind,port=Number(process.env.DBEX_M11_PORT),password=process.env.DBEX_M11_PASSWORD,tlsDir=process.env.DBEX_M11_TLS_DIR
@@ -73,6 +75,39 @@ try{
    assert.equal(replaced.state,'completed',JSON.stringify(replaced));assert.equal(replaced.committed,1001)
    const [after]=await client.query('SELECT * FROM '+table('copy')+' ORDER BY id');assert.deepEqual(a,after)
    console.log('Q5 real '+kind+' mTLS/SOCKS JSONL round trip: 1001 rows, exact UInt64/DECIMAL/binary/NULL, rollback and replace')
+   // Use two independent fixture sessions, exactly as isolated query reads
+   // and the original explorer's explicit writes are routed in the app.
+   const editTable=table('edit_records'),editDDL=' (id BIGINT UNSIGNED PRIMARY KEY,amount DECIMAL(30,8) NOT NULL,note VARCHAR(100) NOT NULL) ENGINE=InnoDB'
+   await client.query('CREATE TABLE '+editTable+editDDL)
+   await client.execute('INSERT INTO '+editTable+' VALUES (?,?,?)',['18446744073709551615','12345678901234567890.12345678','original'])
+   const readerClient=await openMysqlClient(config,route,tls)
+   try{
+    const dialect=kind==='mariadb'?'mariadb':'mysql'
+    const reader=new MysqlOperations(readerClient,dialect),writer=new MysqlOperations(client,dialect)
+    const read={writable:false,confirmed:false},write={writable:true,confirmed:true}
+    const sql='SELECT * FROM '+editTable+' WHERE id=?',scope=sqlResultTarget(sql,database,kind)!
+    assert.deepEqual(scope,{database,entity:'edit_records'})
+    const query={action:'mysql.query' as const,database,sql,parameters:['18446744073709551615']}
+    const structure=await writer.execute({action:'mysql.structure',...scope},read)
+    const original=await reader.execute(query,read)
+    assert(canEditSqlRow(original,structure,0))
+    const edit=prepareSqlResultEdit(original,structure,kind,0,{note:'updated'})!
+    const operation={action:'mysql.updateBatch' as const,...scope,queryResult:true as const,edits:[edit],confirmed:true}
+    assert.equal((await writer.execute(operation,write)).gridBatch?.completed,1)
+    const changed=await reader.execute(query,read)
+    assert.equal(changed.rawRows?.[0]?.note,'updated')
+    assert.equal(String(changed.rawRows?.[0]?.id),'18446744073709551615')
+    assert.equal(String(changed.rawRows?.[0]?.amount),'12345678901234567890.12345678')
+    await assert.rejects(writer.execute(operation,write),/EDIT_CONFLICT/)
+    await client.query('CREATE TEMPORARY TABLE '+editTable+editDDL)
+    try{
+     await client.execute('INSERT INTO '+editTable+' VALUES (?,?,?)',['18446744073709551615','12345678901234567890.12345678','updated'])
+     const shadow=prepareSqlResultEdit(changed,structure,kind,0,{note:'must not write'})!
+     await assert.rejects(writer.execute({...operation,edits:[shadow]},write),/QUERY_EDIT/)
+    }finally{await client.query('DROP TEMPORARY TABLE '+editTable)}
+    assert.equal((await reader.execute(query,read)).rawRows?.[0]?.note,'updated')
+    console.log('Q1 real '+kind+' isolated query edit: exact large key/decimal, optimistic conflict and temporary-table shadow rejection')
+   }finally{readerClient.destroy()}
   }finally{await client.query('DROP DATABASE '+q(database)).catch(()=>{});client.destroy()}
  }
 }finally{await service.closeAll();await route.close();await rm(folder,{recursive:true,force:true})}

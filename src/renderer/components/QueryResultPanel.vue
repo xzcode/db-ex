@@ -8,7 +8,7 @@ import {csvFromRows} from '../data-format'
 import ResultGrid from './ResultGrid.vue'
 import BsonDocumentTree from './BsonDocumentTree.vue'
 import FieldValueDialog from './FieldValueDialog.vue'
-const props=defineProps<{result?:OperationResult;kind:DatabaseKind;offset:number;queryText:string;busy:boolean;active:boolean;error:string;notice:string;canBack:boolean;canFirst:boolean;canNext:boolean;canRefresh?:boolean;editable?:(index:number)=>boolean;canAdd?:boolean;runId:number;sourceLabel:string}>()
+const props=defineProps<{result?:OperationResult;kind:DatabaseKind;offset:number;queryText:string;busy:boolean;active:boolean;error:string;notice:string;canBack:boolean;canFirst:boolean;canNext:boolean;canRefresh?:boolean;editable?:(index:number)=>boolean;canAdd?:boolean;canRemove?:boolean;runId:number;sourceLabel:string}>()
 const emit=defineEmits<{page:[direction:'first'|'prev'|'next'|'refresh'];edit:[index:number];add:[];remove:[index:number];draft:[index:number,action:'duplicate'|'null'|'empty',field?:string];collapse:[]}>()
 type Snapshot={id:number;data:OperationResult;offset:number;queryText:string;sourceLabel:string;time:number}
 const pins=ref<Snapshot[]>([]),pinId=ref<number>(),tab=ref<'messages'|'summary'|'data'>('data'),view=ref<'grid'|'tree'|'json'>('grid')
@@ -97,7 +97,7 @@ function edit(index:number){if(!pinned.value&&props.editable?.(index))emit('edit
     <button class="btn secondary small" :disabled="selected<0" @click="viewRow(selected)">{{t('查看记录')}}</button>
     <button class="btn secondary small" :disabled="!canEdit" @click="edit(selected)">{{t('编辑')}}</button>
     <button class="btn secondary small" :disabled="!canAdd" @click="emit('add')">{{t('新增')}}</button>
-    <button class="btn secondary small danger-text" :disabled="!canEdit" @click="emit('remove',selected)">{{t('删除')}}</button>
+    <button class="btn secondary small danger-text" :disabled="!canEdit||canRemove===false" @click="emit('remove',selected)">{{t('删除')}}</button>
     <span class="toolbar-spacer"/>
     <button class="btn secondary small" :class="{selected:colors}" :aria-pressed="colors" @click="colors=!colors">{{t('类型配色')}}</button>
     <button class="btn secondary small" :disabled="!data?.rows.length" :title="t('复制当前记录')" @click="copy">{{t('复制')}}</button>

@@ -81,3 +81,47 @@ upsert. These are results for the previous commit, not the new candidate.
   candidate. Remaining mixed write scripts, raw SQL browse filter and
   general Excel/SQL/Parquet file formats are still outstanding. Full exact
   candidate CI is required before merging or publishing.
+
+## SQL single-table result editing — follow-up
+
+Recovered local groundwork from `3c13098` and integrated it with the applied
+query/result identity. Supports MySQL, MariaDB and SQLite ordinary
+transactional tables with a complete primary key, exact full-row originals
+and a conservative single-table SELECT * shape. No projection, join, view,
+aggregate, batch, pinned snapshot, active transaction, system table, or
+lossy binary preview is editable. A native write confirmation and existing
+atomic optimistic-concurrency update batch are required. MySQL-family
+query-result writes additionally reject temporary-table shadowing. On save,
+refresh only the originally applied read, never the changed editor buffer.
+No insert/delete or direct SQL grid-wide writes are added in this batch.
+
+Local evidence: 13 focused unit/real SQLite tests passed, one focused browser
+interaction test passed (write unlock, immutable pinned result, buffer change,
+exact write target and refresh, projection rejection). Typecheck and
+production build passed. MySQL/MariaDB real acceptance is still required.
+
+## Explicit execution target switching
+
+- The query header exposes an explicit connection/database selector. Choose
+  an already-connected session of the same engine and one of its visible
+  databases; no automatic connect, query execution or change to the saved
+  query's home connection/database, name or recovery key.
+- Editor buffer and parameters stay intact. Current results, paging, applied
+  operations, edit eligibility and completion metadata are invalidated on
+  switching. Pinned read-only snapshots retain their original source label.
+- Execution, metadata, history, confirmation, cancellation, transaction
+  controls and record updates use the selected live session. A disconnected
+  target never silently redirects a query to the home connection. Selection
+  is transient and cannot change while a transaction is active or a task is
+  running. Cross-engine retargeting is deliberately not enabled.
+- The original and target workspace busy states track the active task.
+  Detailed controls are translated into English and both Chinese variants;
+  the existing English fallback applies elsewhere.
+
+Focused browser coverage passed for query target switching, preservation of
+saved-query home scope and pinned results, target-specific history and
+record edits, disconnection without fallback, explicit return to the home
+connection, plus existing history and single-table edit cases. Added a
+real isolated SQL-family fixture to the existing M12 workflow for exact
+UInt64/DECIMAL query editing, stale row rejection and temporary-table
+shadow protection; results are pending CI.

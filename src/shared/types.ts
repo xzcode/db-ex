@@ -158,7 +158,7 @@ export type MysqlOperation =
   | ({ action: 'mysql.browse'; filter: BrowseFilter; countOnly?: boolean; limit?: number; offset?: number } & Entity)
   | ({ action: 'mysql.insert'; values: SqlRow } & Entity & Confirmed)
   | ({ action: 'mysql.update'; key: SqlRow; original: SqlRow; changes: SqlRow } & Entity & Confirmed)
-  | ({action:'mysql.updateBatch';edits:SqlGridEdit[]} & Entity & Confirmed)
+  | ({action:'mysql.updateBatch';edits:SqlGridEdit[];queryResult?:true} & Entity & Confirmed)
   | ({ action: 'mysql.delete'; key: SqlRow; original: SqlRow } & Entity & Confirmed)
   | ({ action: 'mysql.import'; rows: SqlRow[] } & Entity & Confirmed)
   | ({ action: 'mysql.begin' | 'mysql.commit' | 'mysql.rollback' } & Confirmed)

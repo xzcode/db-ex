@@ -112,6 +112,11 @@ async function installBridge(page: Page) {
 
         if(op.action==='mongo.createDatabase'||op.action==='mysql.createDatabase'){additionalDbs[id]=[...(additionalDbs[id]||[]),op.database];return {columns:[],rows:[],message:'数据库已创建'}}
         if(op.action==='mongo.dropDatabase'||op.action==='mysql.dropDatabase'){additionalDbs[id]=(additionalDbs[id]||[]).filter(name=>name!==op.database);return {columns:[],rows:[],message:'数据库已删除'}}
+        if (op.action === 'mysql.structure' && (window as any).__dbexQueryEditFixture) return {...grid([{name:'id',type:'BIGINT',key:'PRI',extra:''},{name:'name',type:'VARCHAR(50)',key:'',extra:''},{name:'email',type:'VARCHAR(100)',key:'',extra:''}]),primaryKeys:['id'],objectCapabilities:{insert:true,update:true,delete:true,import:true,transactional:true}}
+        if (op.action === 'mysql.query' && (window as any).__dbexQueryEditFixture) {
+          const values=id==='sql2'?[{id:'2',name:'Grace',email:'grace@example.test'}]:rows
+          return {...grid(values),rawRows:values,queryReadOnly:true,columnTypes:['BIGINT','VARCHAR','VARCHAR'],durationMs:4}
+        }
         if (op.action === 'mysql.structure' && (window as any).__dbexTemporalFixture) return { ...grid([{name:'id',type:'bigint',key:'PRI'},{name:'name',type:'varchar(255)',key:''},{name:'stamp',type:'DATETIME(6)',key:''}]),primaryKeys:['id']}
         if (op.action === 'mysql.browse' && !op.countOnly && (window as any).__dbexTemporalFixture) {const values=[{id:'1',name:'Ada',stamp:'2024-02-29 12:34:56.123456'}];return {...grid(values),rawRows:values,columnTypes:['BIGINT','VARCHAR','DATETIME'],nullCells:[[]]}}
         if(op.action==='mysql.query'&&op.sql?.includes('history_failure'))throw new Error('SQL_POLICY: fixture failure')
@@ -123,6 +128,10 @@ async function installBridge(page: Page) {
           if (op.sql?.includes('slow_query')) await new Promise(resolve => setTimeout(resolve, 400))
           const values = (window as any).__dbexLargeGrid ? Array.from({ length: 500 }, (_, index) => ({ id: String(index + 1), name: 'User ' + (index + 1), email: 'user' + (index + 1) + '@example.test' })) : id === 'sql2' ? [{ id: '2', name: 'Grace', email: 'grace@example.test' }] : rows
           return { ...grid(values), rawRows: values, columnTypes: ['BIGINT','VARCHAR','VARCHAR'], nullCells: values.map(() => []), durationMs: 4, transaction: false, nextOffset: op.action === 'mysql.browse' && (op.offset || 0) < 500 ? (op.offset || 0) + op.limit : undefined }
+        }
+        if(op.action==='mysql.updateBatch'&&op.queryResult&&(window as any).__dbexQueryEditFixture){
+          const edit=op.edits[0];if((window as any).__dbexQueryEditConflict)throw Error('EDIT_CONFLICT: fixture conflict')
+          if(id==='sql')Object.assign(rows[0],edit.changes)
         }
         if(op.action==='mysql.updateBatch'||op.action==='mongo.replaceBatch')return {columns:[],rows:[],affectedRows:op.edits.length,gridBatch:{total:op.edits.length,completed:op.edits.length,atomic:op.action==='mysql.updateBatch'}}
         if (op.action === 'mysql.begin') return { columns: [], rows: [], transaction: true }
@@ -1933,4 +1942,101 @@ test('Q fields: datetime precision stages safely and binary result opens exact h
  await expect(field.locator('textarea')).toHaveValue('00 ff 01')
  await expect(field.locator('textarea')).toHaveAttribute('readonly','')
  await expect(field.getByRole('button',{name:'暂存修改',exact:true})).toHaveCount(0)
+})
+
+
+test('Q SQL result edit: explicit save targets the applied full-row query; projections and snapshots cannot write',async({page})=>{
+ await page.evaluate(()=>{(window as any).__dbexQueryEditFixture=true})
+ await connect(page,'MySQL Local')
+ await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ await page.locator('[data-object-kind="query-folder"]').click()
+ await page.locator('.object-list-panel:visible').getByRole('button',{name:/新建查询/}).click()
+ const editor=page.locator('.saved-query-editor:visible'),input='.saved-query-editor:visible .query-editor .monaco-editor'
+ const panel=editor.locator('.query-result-panel'),edit=panel.getByRole('button',{name:'编辑',exact:true})
+ await replaceEditor(page,input,'SELECT * FROM users WHERE id=1')
+ await editor.getByRole('button',{name:'运行选中 / 全部',exact:true}).click()
+ await expect(panel.locator('.data-table')).toContainText('Ada')
+ await expect(edit).toBeDisabled()
+ await editor.getByRole('button',{name:'只读 · 启用写入',exact:true}).click()
+ await expect(edit).toBeEnabled()
+ await expect(panel.getByRole('button',{name:'删除',exact:true})).toBeDisabled()
+ await panel.getByRole('button',{name:'固定结果',exact:true}).click()
+ await expect(edit).toBeDisabled()
+ await panel.getByRole('button',{name:'结果 1',exact:true}).click()
+ await replaceEditor(page,input,'SELECT * FROM different_table')
+ await edit.click()
+ const dialog=page.getByRole('dialog',{name:'编辑查询记录'})
+ await expect(dialog).toContainText('app.users')
+ await expect(dialog.getByLabel('id',{exact:true})).toHaveCount(0)
+ await dialog.getByLabel('name',{exact:true}).fill('Alicia')
+ await dialog.getByRole('button',{name:'保存修改',exact:true}).click()
+ await expect(dialog).toHaveCount(0)
+ await expect(panel.locator('.data-table')).toContainText('Alicia')
+ const calls=await page.evaluate(()=> (window as any).__dbexCalls)
+ expect(calls.filter((x:any)=>x.action==='mysql.updateBatch').at(-1)).toMatchObject({sessionId:'sql',database:'app',entity:'users',queryResult:true,confirmed:true,edits:[{key:{id:'1'},original:{id:'1',name:'Ada',email:'ada@example.test'},changes:{name:'Alicia'}}]})
+ expect(calls.filter((x:any)=>x.action==='mysql.query').at(-1).sql).toBe('SELECT * FROM users WHERE id=1')
+ await replaceEditor(page,input,'SELECT id,name FROM users')
+ await editor.getByRole('button',{name:'运行选中 / 全部',exact:true}).click()
+ await expect(edit).toBeDisabled()
+})
+
+test('Q query target switch: explicit same-engine target, no auto-run, original save scope and pinned result provenance',async({page})=>{
+ await page.evaluate(()=>{(window as any).__dbexQueryEditFixture=true})
+ await connect(page,'MySQL Other')
+ await connect(page,'MySQL Local')
+ await page.locator('[data-resource-session="sql"] [data-object-kind="database"]').first().click()
+ await page.locator('[data-resource-session="sql"] [data-object-kind="query-folder"]').click()
+ await page.locator('.object-list-panel:visible').getByRole('button',{name:/新建查询/}).click()
+ const editor=page.locator('.saved-query-editor:visible'),input='.saved-query-editor:visible .query-editor .monaco-editor'
+ const panel=editor.locator('.query-result-panel'),run=editor.getByRole('button',{name:'运行选中 / 全部',exact:true})
+ await editor.getByLabel('名称',{exact:true}).fill('Scoped query')
+ await replaceEditor(page,input,'SELECT * FROM users')
+ await run.click()
+ await expect(panel.locator('.data-table')).toContainText('Ada')
+ await panel.getByRole('button',{name:'固定结果',exact:true}).click()
+ const before=await page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.query').length)
+ await editor.getByRole('button',{name:'切换执行目标',exact:true}).click()
+ const dialog=page.getByRole('dialog',{name:'切换执行目标'})
+ await dialog.getByLabel('执行连接',{exact:true}).selectOption('sql2')
+ await expect(dialog.getByLabel('执行数据库',{exact:true})).toHaveValue('other')
+ await dialog.getByRole('button',{name:'切换执行目标',exact:true}).click()
+ await expect(dialog).toHaveCount(0)
+ await expect(editor.locator('.query-context-label')).toContainText('MySQL Other / other')
+ await expect(editor.locator('.query-context-label')).toContainText('MySQL Local / app')
+ expect(await page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.query').length)).toBe(before)
+ await panel.getByRole('button',{name:'结果 1',exact:true}).click()
+ await expect(panel.getByRole('button',{name:'编辑',exact:true})).toBeDisabled()
+ await run.click()
+ await expect(panel.locator('.data-table')).toContainText('Grace')
+ expect(await page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.query').at(-1))).toMatchObject({sessionId:'sql2',database:'other',sql:'SELECT * FROM users'})
+ await panel.getByRole('button',{name:/固定结果 1/}).click()
+ await expect(panel.locator('.data-table')).toContainText('Ada')
+ await panel.getByRole('button',{name:'摘要',exact:true}).click()
+ await expect(panel.locator('.query-result-text')).toContainText('MySQL Local / app')
+ await editor.getByRole('button',{name:'保存',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='saveQueryObject').at(-1)?.item)).toMatchObject({connectionId:'sql',database:'app',name:'Scoped query'})
+ await editor.getByRole('button',{name:'查询执行历史',exact:true}).click()
+ const history=page.getByRole('dialog',{name:'查询执行历史'})
+ await expect(history.locator('tbody tr')).toHaveCount(1)
+ await history.getByRole('button',{name:'关闭',exact:true}).last().click()
+ await panel.getByRole('button',{name:'结果 1',exact:true}).click()
+ await editor.getByRole('button',{name:'只读 · 启用写入',exact:true}).click()
+ await panel.getByRole('button',{name:'编辑',exact:true}).click()
+ const editDialog=page.getByRole('dialog',{name:'编辑查询记录'})
+ await expect(editDialog).toContainText('other.users')
+ await editDialog.getByLabel('name',{exact:true}).fill('Grace II')
+ await editDialog.getByRole('button',{name:'保存修改',exact:true}).click()
+ await expect(editDialog).toHaveCount(0)
+ expect(await page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.updateBatch').at(-1))).toMatchObject({sessionId:'sql2',database:'other',entity:'users',queryResult:true,edits:[{key:{id:'2'},changes:{name:'Grace II'}}]})
+ await page.locator('[data-connection-id="sql2"]').click({button:'right'})
+ await page.locator('.connection-context-menu').getByRole('button',{name:'断开连接',exact:true}).click()
+ await expect(editor.locator('.query-context-label')).toContainText('执行目标已断开')
+ await expect(run).toBeDisabled()
+ await editor.getByRole('button',{name:'切换执行目标',exact:true}).click()
+ await expect(dialog.getByLabel('执行连接',{exact:true})).toHaveValue('sql')
+ await expect(dialog.getByLabel('执行数据库',{exact:true})).toHaveValue('app')
+ await dialog.getByRole('button',{name:'切换执行目标',exact:true}).click()
+ await run.click()
+ await expect(panel.locator('.data-table')).toContainText('Ada')
+ expect(await page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.query').at(-1))).toMatchObject({sessionId:'sql',database:'app'})
 })

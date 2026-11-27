@@ -36,7 +36,7 @@ import { useConfirmation } from './composables/useConfirmation'
 import type { ConnectionAppearancePatch, ConnectionDraft, ExplorerNode, SavedConnection, SessionInfo } from '../shared/types'
 
 interface ObjectTab {node:ExplorerNode;tab?:WorkbenchTab;requestedTab?:WorkbenchTab;tabRequest?:number;busy?:boolean;dirty?:boolean;mounted?:boolean}
-interface ExplorerState { roots: ExplorerNode[]; children: Record<string, ExplorerNode[]>; expanded: string[]; selected?: ExplorerNode; tab?:WorkbenchTab; busy: boolean; loading: Set<string>; tabs:ObjectTab[]; activeObject?:string; catalog?:ExplorerNode; catalogVisible:boolean; catalogSelection?:ExplorerNode; catalogBusy?:boolean; catalogRevision?:number; baseBusy?:boolean; baseTab?:WorkbenchTab }
+interface ExplorerState { roots: ExplorerNode[]; children: Record<string, ExplorerNode[]>; expanded: string[]; selected?: ExplorerNode; tab?:WorkbenchTab; busy: boolean; loading: Set<string>; tabs:ObjectTab[]; activeObject?:string; catalog?:ExplorerNode; catalogVisible:boolean; catalogSelection?:ExplorerNode; catalogBusy?:boolean; catalogRevision?:number; baseBusy?:boolean; externalQueryTasks?:Set<string>; baseTab?:WorkbenchTab }
 const connections = ref<SavedConnection[]>([])
 const sessions = ref<SessionInfo[]>([])
 const explorers = reactive<Record<string, ExplorerState>>({})
@@ -98,7 +98,7 @@ function workspaceSnapshot(){
 }
 function persistWorkspace(){if(restoringWorkspace)return;try{localStorage.setItem(workspaceKey,JSON.stringify(workspaceSnapshot()))}catch{}}
 watch(workspaceSnapshot,persistWorkspace,{deep:true})
-function ordinarySessionBusy(state?:ExplorerState){return !!state&&(state.busy||state.loading.size>0||!!state.baseBusy||state.tabs.some(tab=>tab.busy))}
+function ordinarySessionBusy(state?:ExplorerState){return !!state&&(state.busy||state.loading.size>0||!!state.baseBusy||!!state.externalQueryTasks?.size||state.tabs.some(tab=>tab.busy))}
 function sessionBusy(state?:ExplorerState){return ordinarySessionBusy(state)||!!state?.catalogBusy}
 function catalogInspectorBlocked(id:string){return busy.value||ordinarySessionBusy(explorers[id])||!!dbDialog.value||!!nativeDialog.value||!!cliDialog.value||!!objectDialog.value||!!migrationDialog.value||dbMenu.value?.sessionId===id}
 function selectCatalogObject(id:string,node?:ExplorerNode){const state=explorers[id];if(state)state.catalogSelection=node}
@@ -111,6 +111,12 @@ function workbenchBusyChanged(id:string,value:boolean,objectId?:string){
  const state=explorers[id];if(!state)return
  if(objectId){const item=state.tabs.find(x=>x.node.id===objectId);if(item)item.busy=value}
  else state.baseBusy=value
+}
+function workbenchExternalQueryBusy(owner:string,objectId:string,target:string,value:boolean){
+ const state=explorers[target];if(!state)return
+ const key=JSON.stringify([owner,objectId])
+ if(value){state.externalQueryTasks??=new Set();state.externalQueryTasks.add(key)}
+ else state.externalQueryTasks?.delete(key)
 }
 function workbenchDirtyChanged(id:string,value:boolean,objectId:string){const item=explorers[id]?.tabs.find(x=>x.node.id===objectId);if(item)item.dirty=value}
 function showCatalog(state:ExplorerState,node=state.catalog){
@@ -600,7 +606,7 @@ onBeforeUnmount(() => { stopResize?.(); window.removeEventListener('pointerdown'
     <DatabaseWorkbench v-if="session.kind!=='clickhouse'" v-show="!explorers[session.id]?.catalogVisible&&!explorers[session.id]?.activeObject" :session="session" :node="session.kind==='redis'?explorers[session.id]?.selected:undefined" :initial-tab="explorers[session.id]?.baseTab" :active="session.id===current&&!explorers[session.id]?.catalogVisible&&!explorers[session.id]?.activeObject" @tab-change="workbenchTabChanged(session.id,$event)" @busy-change="workbenchBusyChanged(session.id,$event)" @update-session="updateSession" @disconnect="removeSession(session.id)" @refresh-tree="refreshRoots(session.id)" />
     <template v-for="item in explorers[session.id]?.tabs||[]" :key="item.node.id">
     <template v-if="item.mounted">
-      <SavedQueryEditor v-if="item.node.kind==='saved-query'" v-show="explorers[session.id]?.activeObject===item.node.id" :session="session" :node="item.node" :active="session.id===current&&explorers[session.id]?.activeObject===item.node.id" :table-suggestions="Object.values(explorers[session.id]?.children||{}).flat().filter(n=>(n.kind==='table'||n.kind==='view')&&n.database===item.node.database).map(n=>n.label)" @saved="querySaved(session.id,item.node.id,$event)" @busy-change="workbenchBusyChanged(session.id,$event,item.node.id)" @dirty-change="workbenchDirtyChanged(session.id,$event,item.node.id)" @update-session="updateSession" @disconnect="removeSession(session.id)" />
+      <SavedQueryEditor v-if="item.node.kind==='saved-query'" v-show="explorers[session.id]?.activeObject===item.node.id" :session="session" :available-sessions="sessions" :node="item.node" :active="session.id===current&&explorers[session.id]?.activeObject===item.node.id" :table-suggestions="Object.values(explorers[session.id]?.children||{}).flat().filter(n=>(n.kind==='table'||n.kind==='view')&&n.database===item.node.database).map(n=>n.label)" @saved="querySaved(session.id,item.node.id,$event)" @busy-change="workbenchBusyChanged(session.id,$event,item.node.id)" @dirty-change="workbenchDirtyChanged(session.id,$event,item.node.id)" @update-session="updateSession" @execution-busy="(id,value)=>workbenchExternalQueryBusy(session.id,item.node.id,id,value)" @disconnect="removeSession($event)" />
     <ClickHouseWorkbench v-else-if="session.kind==='clickhouse'" v-show="explorers[session.id]?.activeObject===item.node.id" :session="session" :node="item.node" :active="session.id===current&&explorers[session.id]?.activeObject===item.node.id" :initial-tab="item.tab" :requested-tab="item.requestedTab" :tab-request="item.tabRequest" @tab-change="workbenchTabChanged(session.id,$event,item.node.id)" @busy-change="workbenchBusyChanged(session.id,$event,item.node.id)" @dirty-change="workbenchDirtyChanged(session.id,$event,item.node.id)" @update-session="updateSession" @disconnect="removeSession(session.id)" />
     <DatabaseWorkbench v-else v-show="explorers[session.id]?.activeObject===item.node.id"  :session="session" :node="item.node" :initial-tab="item.tab" :requested-tab="item.requestedTab" :tab-request="item.tabRequest" :active="session.id===current&&explorers[session.id]?.activeObject===item.node.id" :table-suggestions="Object.values(explorers[session.id]?.children || {}).flat().filter(n=>(n.kind==='table'||n.kind==='view')&&n.database===item.node.database).map(n=>n.label)" @tab-change="workbenchTabChanged(session.id,$event,item.node.id)" @busy-change="workbenchBusyChanged(session.id,$event,item.node.id)" @dirty-change="workbenchDirtyChanged(session.id,$event,item.node.id)" @update-session="updateSession" @disconnect="removeSession(session.id)" @refresh-tree="refreshRoots(session.id)" />
     </template>

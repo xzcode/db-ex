@@ -149,7 +149,7 @@ export class SqliteOperations {
               const list=indexFields.get(column.name)||[];list.push(indexName+(index.unique_index?' (unique)':''));indexFields.set(column.name,list)
             }
           }
-          return {columns:['name','type','nullable','key','extra','default','indexes'],rows:fields.slice(0,500).map(f=>({name:f.name,type:f.type,nullable:f.notnull?'NO':'YES',key:f.pk?'PRI':'',extra:f.hidden?'GENERATED/HIDDEN':'',default:displayCell(f.dflt_value),indexes:displayCell((indexFields.get(f.name)||[]).join(', '))})),primaryKeys:this.keys(fields),truncated:fields.length>500||indexes.length>500}
+          return {columns:['name','type','nullable','key','extra','default','indexes'],rows:fields.slice(0,500).map(f=>({name:f.name,type:f.type,nullable:f.notnull?'NO':'YES',key:f.pk?'PRI':'',extra:f.hidden?'GENERATED/HIDDEN':'',default:displayCell(f.dflt_value),indexes:displayCell((indexFields.get(f.name)||[]).join(', '))})),primaryKeys:this.keys(fields),objectCapabilities:(()=>{const row=this.statement('SELECT type FROM pragma_table_list WHERE schema=? AND name=?').get(op.database,op.entity);const table=row?.type==='table',key=this.keys(fields).length>0;return {insert:table,update:table&&key,delete:table&&key,import:table,transactional:table}})(),truncated:fields.length>500||indexes.length>500}
         }
         case 'mysql.inspect':{
           const row=this.object(op.database,op.entity),fields=this.fields(op.database,op.entity)
@@ -176,6 +176,10 @@ export class SqliteOperations {
         case 'mysql.updateBatch':{
           if(!Array.isArray(op.edits)||!op.edits.length||op.edits.length>500||Buffer.byteLength(JSON.stringify(op.edits))>MAX_BYTES)throw new Error('LIMIT_EXCEEDED: 单批编辑最多 500 行和 2 MiB')
           const fields=this.writableFields(op.database,op.entity),keys=this.keys(fields),seen=new Set<string>()
+          if(op.queryResult===true){
+            const row=this.statement('SELECT type FROM pragma_table_list WHERE schema=? AND name=?').get(op.database,op.entity)
+            if(this.transaction||row?.type!=='table'||/^sqlite_/i.test(op.entity))throw new Error('QUERY_EDIT: 查询结果无法安全编辑')
+          }
           const edits=op.edits.map(item=>{
             const key=sqlRow(item.key,'主键'),original=sqlRow(item.original,'原始记录'),changes=sqlRow(item.changes,'修改记录')
             if(!Object.keys(changes).length||Object.keys(changes).some(k=>keys.includes(k)))throw new Error('INVALID_INPUT: 批量编辑不能修改主键')

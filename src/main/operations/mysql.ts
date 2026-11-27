@@ -3,7 +3,7 @@ import type { Connection as CoreConnection, FieldPacket, ResultSetHeader } from 
 import type { MysqlOperation, OperationResult, SqlRow, SqlValue } from '../../shared/types'
 import { checkAborted, databaseError, displayCell, emptyResult, MAX_BYTES, MAX_ROWS, MAX_VALUE_BYTES, page, requireWrite, resourceName, sqlRow, TIMEOUT_MS, type OperationContext } from './common'
 import { mysqlObjectCapabilities } from '../../shared/relational-capabilities'
-import { validateDatabaseName } from '../../shared/database-admin'
+import { validateDatabaseName, protectedDatabase } from '../../shared/database-admin'
 import { compileMysqlFilter } from '../../shared/browse-filter'
 import { metric, metrics, mysqlFieldType, type ObjectInspection } from '../../shared/object-inspection'
 import { inspectSql, quoteIdentifier } from './sql-policy'
@@ -375,6 +375,14 @@ export class MysqlOperations {
     this.assertRecordWrite(structure,'update')
     if(!mysqlObjectCapabilities(structure.tableType,structure.engine,structure.primaryKeys.length>0).update)throw new Error('READ_ONLY: 只读对象')
     const atomic=structure.engine.toUpperCase()==='INNODB',existing=this.transaction
+    if(operation.queryResult===true){
+      if(existing||!atomic||protectedDatabase(this.kind,operation.database))throw new Error('QUERY_EDIT: 查询结果无法安全编辑')
+      // An isolated query must never be written to a temporary table that
+      // shadows the same qualified permanent name on the explorer session.
+      const ddl=await this.query('SHOW CREATE TABLE '+quoteIdentifier(operation.database)+'.'+quoteIdentifier(operation.entity),[],signal,1)
+      const definition=String(ddl.values[0]?.[1]??'')
+      if(ddl.truncated||!/^CREATE\s+TABLE\b/i.test(definition))throw new Error('QUERY_EDIT: 查询结果无法安全编辑')
+    }
     if(existing&&!atomic)throw new Error('TRANSACTION_REQUIRED: 非事务表不能参与批量事务编辑')
     const identities=new Set<string>()
     const edits=operation.edits.map(item=>{
