@@ -10,11 +10,15 @@ import { pathToFileURL } from 'node:url'
 import type { ConnectionConfig, DatabaseOperation, FileImport, QuerySnippet } from '../shared/types'
 import { ConnectionStore } from './connections/store'
 import {MigrationService} from './migration/service'
+import {FileTransferService} from './file-transfer/service'
+import {normalizeFileTransfer,type FileTransferRequest} from '../shared/file-transfer'
 import {MigrationHistory} from './migration/history'
 import {migrationPolicyLabel,type MigrationJob} from '../shared/migration'
 import { SessionManager } from './connections/manager'
 import { validateId } from './connections/validation'
 import { SnippetStore } from './storage/snippets'
+import {BrowseProfileStore} from './storage/browse-profiles'
+import type {BrowseProfile} from '../shared/browse-profile'
 import { SavedQueryStore } from './storage/saved-queries'
 import { decrypt,encrypt,readJson,writeJson,SerialWrites } from './storage/secure-json'
 import { normalizeQueryScope,queryModeFor,portableQuery,readPortableQuery,type QueryMode,type SavedQuery,type QuerySave } from '../shared/saved-query'
@@ -39,6 +43,10 @@ const migrations=new MigrationService(id=>store.get(id),modulePath=>{
  const child=utilityProcess.fork(modulePath,[],{stdio:'ignore',serviceName:'DB EX SQLite migration'})
  return {send:message=>child.postMessage(message),onMessage:callback=>{child.on('message',callback)},onExit:callback=>{child.once('exit',callback)},onError:callback=>{child.on('error',callback)},kill:()=>{child.kill()}}
 },app.isPackaged?join(process.resourcesPath,'app.asar.unpacked','dist-electron','sqlite-worker.cjs'):join(__dirname,'sqlite-worker.cjs'),migrationHistory)
+const fileTransfers=new FileTransferService(modulePath=>{
+ const child=utilityProcess.fork(modulePath,[],{stdio:'ignore',serviceName:'DB EX file transfer'})
+ return {send:message=>child.postMessage(message),onMessage:callback=>{child.on('message',callback)},onExit:callback=>{child.once('exit',callback)},onError:callback=>{child.on('error',callback)},kill:()=>{child.kill()}}
+},app.isPackaged?join(process.resourcesPath,'app.asar.unpacked','dist-electron','sqlite-worker.cjs'):join(__dirname,'sqlite-worker.cjs'))
 const sessions = new SessionManager(modulePath=>{
   const child=utilityProcess.fork(modulePath,[],{stdio:'ignore',serviceName:'DB EX SQLite'})
   return {send:message=>child.postMessage(message),onMessage:callback=>{child.on('message',callback)},onExit:callback=>{child.once('exit',callback)},onError:callback=>{child.on('error',callback)},kill:()=>{child.kill()}}
@@ -53,6 +61,15 @@ const savedQueries=new SavedQueryStore({
   },
   write:values=>writeJson('saved-queries.secure.json',{version:1,encrypted:encrypt(values)})
 })
+const browseProfiles=new BrowseProfileStore({
+ async read(){const f=await readJson<{version:number;encrypted:string}>('browse-profiles.secure.json');if(!f)return [];if(f.version!==1||typeof f.encrypted!=='string')throw new Error('INVALID_PROFILE: 浏览配置文件无效');return decrypt<BrowseProfile[]>(f.encrypted)},
+ write:values=>writeJson('browse-profiles.secure.json',{version:1,encrypted:encrypt(values)})
+})
+function browseScope(id:string,database:string,entity:string){
+ const scope=savedQueryScope(id,database)
+ if(typeof entity!=='string'||!entity||entity.length>200||/[\u0000-\u001f]/.test(entity))throw new Error('INVALID_PROFILE: 浏览配置无效')
+ return {...scope,entity}
+}
 function savedQueryScope(id:string,database:string){
   const info=sessions.info(id)
   return normalizeQueryScope({connectionId:info.connectionId,kind:info.kind,database})
@@ -138,6 +155,31 @@ async function saveText(win: BrowserWindow, name: string, content: string, forma
   return true
 }
 function registerIpc(): void {
+  ipcMain.handle('file-transfer:pick',sessionHandler(async(win,id,format:unknown,delimiter:unknown)=>{
+    const result=await dialog.showOpenDialog(win,{properties:['openFile'],filters:[{name:'CSV / JSONL',extensions:['csv','jsonl','ndjson','txt']}]})
+    if(result.canceled||!result.filePaths[0])return null
+    assertOwner(win,id)
+    return fileTransfers.pick(win.webContents.id,id,result.filePaths[0],format,delimiter)
+  }))
+  ipcMain.handle('file-transfer:job',handler(win=>fileTransfers.list(win.webContents.id)))
+  ipcMain.handle('file-transfer:cancel',handler((win,id:string)=>fileTransfers.cancel(win.webContents.id,id)))
+  ipcMain.handle('file-transfer:start',sessionHandler(async(win,id,input:unknown)=>{
+    const info=sessions.info(id),request=normalizeFileTransfer(input,info.kind),owner=win.webContents.id
+    const writing=request.direction==='import'
+    if(writing&&!info.writable)throw new Error('READ_ONLY: 请先启用当前会话的写入权限')
+    if(info.transaction)throw new Error('SESSION_BUSY: 请先提交或回滚当前事务')
+    let output:string|undefined,filename:string
+    if(writing)filename=fileTransfers.importPreview(owner,id,request).preview.name
+    else{
+      const result=await dialog.showSaveDialog(win,{defaultPath:request.entity.replace(/[^A-Za-z0-9_-]/g,'_')+'.'+request.format,filters:[{name:request.format.toUpperCase(),extensions:[request.format]}]})
+      if(result.canceled||!result.filePath)return null
+      output=result.filePath;filename=basename(output)
+    }
+    const detail=info.name+' · '+info.displayHost+'\n'+request.database+'.'+request.entity+'\n'+filename+'\n'+(writing?request.policy+'\n'+(request.preserveDocuments?'完整 EJSON 文档':request.mapping!.map(m=>m.source+' → '+m.target+' ('+m.conversion+')').join('\n')):'导出全部匹配记录，不覆盖现有文件。CSV 为文本格式；在电子表格中打开前注意公式风险。')
+    await confirm(win,writing?(request.policy==='replace'?'确认清空目标表并重新传输？':'确认导入文件？'):'确认导出文件？',detail+(writing?'\n'+tr(info.kind==='mongodb'?'MongoDB 分批写入，失败或取消时可能部分完成。':'关系型目标在独立事务中导入；提交结果不确定时请核对。'):''))
+    assertOwner(win,id)
+    return fileTransfers.start(owner,id,request,output,work=>sessions.external(id,writing,work))
+  }))
   ipcMain.handle('migration:catalog',handler((win,id:unknown,database?:unknown)=>migrations.catalog(win.webContents.id,id,database)))
   ipcMain.handle('migration:preview',handler((win,request:unknown)=>migrations.preview(win.webContents.id,request)))
   ipcMain.handle('migration:jobs',handler(win=>migrations.list(win.webContents.id)))
@@ -246,16 +288,19 @@ function registerIpc(): void {
     if (enabled && !info.writable) await confirm(win, tr('允许修改 {0} 的数据？', [info.name]), `${tr('地址：')} ${info.displayHost}\n${tr('本会话将允许执行写操作，断开连接后恢复只读。数据库账号权限仍然有效。')}`, '解锁此会话')
     return sessions.setWriteAccess(id, enabled)
   }))
-  ipcMain.handle('sessions:execute', sessionHandler(async (win, id: string, operation: DatabaseOperation) => {
+  const executeHandler=(isolated:boolean)=>sessionHandler(async (win, id: string, operation: DatabaseOperation) => {
     const info = sessions.info(id)
     if (writes(operation, info.writable, info.kind)) {
       if (!info.writable || !('confirmed' in operation) || operation.confirmed !== true) throw new Error('WRITE_CONFIRMATION_REQUIRED: 请先解锁会话，并主动确认写入')
       await confirm(win, operation.action === 'mongo.dropDatabase' || operation.action === 'mysql.dropDatabase' ? '确认永久删除整个数据库？' : operation.action==='mongo.dropCollection'?'确认永久删除集合？':operation.action==='mongo.clearCollection'?'确认清空集合全部文档？':operation.action==='mongo.scriptWrite'&&['deleteOne','deleteMany','findOneAndDelete'].includes(operation.method)?'确认删除符合筛选条件的文档？':'确认执行数据库写操作？', operationDetail(id, operation))
     }
     const start=Date.now()
-    try { const result=await sessions.execute(id,operation);diagnostic(operation.action,'ok',Date.now()-start);return result }
+    try { const result=await (isolated?sessions.executeQuery(id,operation):sessions.execute(id,operation));diagnostic(operation.action,'ok',Date.now()-start);return result }
     catch(error){diagnostic(operation.action,'error',Date.now()-start);throw error}
-  }))
+  })
+  ipcMain.handle('sessions:execute',executeHandler(false))
+  ipcMain.handle('sessions:execute-query',executeHandler(true))
+  ipcMain.handle('sessions:cancel-query',sessionHandler((_win,id)=>sessions.cancelQuery(id)))
   ipcMain.handle('clipboard:copy-text', handler((_win, value: unknown) => {
     if (typeof value !== 'string' || Buffer.byteLength(value, 'utf8') > 2 * 1024 * 1024) throw new Error('LIMIT_EXCEEDED: 剪贴板文本过大')
     clipboard.writeText(value)
@@ -333,6 +378,9 @@ function registerIpc(): void {
     return sessions.clickhouseTransfer(id,input,path)
   }))
   ipcMain.handle('sessions:cancel', sessionHandler((_win, id: string) => disconnectOwned(id)))
+  ipcMain.handle('browse-profiles:list',sessionHandler((_win,id,database:string,entity:string)=>browseProfiles.list(browseScope(id,database,entity))))
+  ipcMain.handle('browse-profiles:save',sessionHandler((_win,id,database:string,entity:string,draft:unknown,profileId?:string)=>browseProfiles.save(browseScope(id,database,entity),draft,profileId)))
+  ipcMain.handle('browse-profiles:delete',sessionHandler((_win,id,database:string,entity:string,profileId:string)=>browseProfiles.remove(browseScope(id,database,entity),profileId)))
   ipcMain.handle('query-objects:list',sessionHandler((_win,id:string,database:string,mode:QueryMode)=>savedQueries.list(savedQueryScope(id,database),mode)))
   ipcMain.handle('query-objects:get',sessionHandler((_win,id:string,database:string,queryId:string)=>savedQueries.get(savedQueryScope(id,database),queryId)))
   ipcMain.handle('query-objects:save',sessionHandler((_win,id:string,database:string,input:QuerySave)=>savedQueries.save(savedQueryScope(id,database),input)))
@@ -387,7 +435,7 @@ function createWindow(id=PRIMARY_WORKSPACE,bounds?:WorkspaceWindow['bounds']): v
   windows.add(contentsId);windowIds.set(contentsId,id)
   win.on('move',scheduleWindows);win.on('resize',scheduleWindows)
   win.on('close',()=>{if(!quitting&&windows.size===1)void persistWindows().catch(()=>{})})
-  win.webContents.once('destroyed', () => {windows.delete(contentsId);windowIds.delete(contentsId);void closeWindowSessions(contentsId);void migrations.closeOwner(contentsId);if(!quitting&&windowRestoreStarted)void persistWindows().catch(()=>{})})
+  win.webContents.once('destroyed', () => {windows.delete(contentsId);windowIds.delete(contentsId);void closeWindowSessions(contentsId);void migrations.closeOwner(contentsId);void fileTransfers.closeOwner(contentsId);if(!quitting&&windowRestoreStarted)void persistWindows().catch(()=>{})})
   win.once('ready-to-show', () => win.show())
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   win.webContents.on('will-navigate', event => event.preventDefault())
@@ -424,5 +472,5 @@ app.on('before-quit', event => {
   event.preventDefault(); quitting = true
   if(windowSaveTimer)clearTimeout(windowSaveTimer)
   for(const cli of nativeClis.values())cli.stop()
-  void Promise.allSettled([persistWindows(),sessions.closeAll(),migrations.closeAll(),...nativeCliJobs.values()]).finally(() => app.quit())
+  void Promise.allSettled([persistWindows(),sessions.closeAll(),migrations.closeAll(),fileTransfers.closeAll(),...nativeCliJobs.values()]).finally(() => app.quit())
 })

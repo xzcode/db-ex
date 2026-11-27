@@ -57,9 +57,9 @@ export class SqliteOperations {
     const stmt=this.statement(sql),columns=stmt.columns().map(c=>c.name)
     if(new Set(columns).size!==columns.length)throw new Error('INVALID_INPUT: SQL 查询请为重复字段设置别名')
     const rows:Record<string,string>[]=[],rawRows:SqlRow[]=[],sqliteTypes:string[][]=[],nullCells:number[][]=[]
-    let bytes=0,exact=true,more=false
+    let bytes=0,exact=true,more=false,reason:OperationResult['truncationReason']
     for(const row of stmt.iterate(...args)){
-      if(rows.length>=limit){more=true;break}
+      if(rows.length>=limit){more=true;reason='page';break}
       const display:Record<string,string>=Object.create(null),raw:SqlRow=Object.create(null),types:string[]=[],nulls:number[]=[]
       let rowExact=true
       for(const [i,col] of columns.entries()){
@@ -73,10 +73,10 @@ export class SqliteOperations {
         else raw[col]=value
       }
       const size=Buffer.byteLength(JSON.stringify(display))+Buffer.byteLength(JSON.stringify(raw))
-      if(bytes+size>MAX_BYTES){more=true;break}
+      if(bytes+size>MAX_BYTES){more=true;reason=size>MAX_BYTES?'document':'bytes';break}
       bytes+=size;rows.push(display);rawRows.push(raw);sqliteTypes.push(types);nullCells.push(nulls);exact=exact&&rowExact
     }
-    return {columns,rows,rawRows:exact?rawRows:undefined,sqliteTypes,nullCells,nextOffset:more&&rows.length?offset+rows.length:undefined,truncated:more}
+    return {columns,rows,rawRows:exact?rawRows:undefined,sqliteTypes,nullCells,nextOffset:more&&rows.length&&reason!=='document'?offset+rows.length:undefined,truncated:more,truncationReason:reason}
   }
   private atomic<T>(fn:()=>T):T{
     this.db.exec('SAVEPOINT dbex_row')

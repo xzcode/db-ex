@@ -62,3 +62,5 @@ jobs:
         run: node --import tsx scripts/test-m12-other-engines.ts
       - name: Million-row copy and persistent history
         run: node --import tsx scripts/test-m12-million.ts
+      - name: Q5 streaming file wizard round-trip and guarded writes
+        run: node --import tsx scripts/test-m12-q-file-transfer.ts

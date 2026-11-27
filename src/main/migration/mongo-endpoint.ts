@@ -2,12 +2,15 @@ import {BSON,type MongoClient,type Document,type IndexDescription,type Collectio
 import type {ConnectionConfig} from '../../shared/types'
 import type {MigrationCatalog,MigrationMode,MigrationStep,MigrationCopyOptions} from '../../shared/migration'
 import {migrationName} from '../../shared/migration'
-import {protectedDatabase} from '../../shared/database-admin'
+import {validateManagedCollection,protectedDatabase} from '../../shared/database-admin'
 import {validateConnection} from '../connections/validation'
 import {createTransport,type ConnectionTransport} from '../connections/transport'
 import {openMongoClient} from '../connections/mongo-client'
 import {loadConnectionTls} from '../connections/tls-material'
 import type {SchemaObject,SchemaSnapshot} from './mysql-schema'
+import {parseEjson,validateReadDocument} from '../operations/mongodb'
+import {plainObject} from '../operations/common'
+import type {DataFilePolicy} from '../../shared/file-transfer'
 import {mongoMigrationFilter} from './mongo-condition'
 import {checkedSnapshot,limitObjectNames,requireActive,reviewStep,type MigrationEndpoint,type CopyCallbacks} from './endpoint'
 type SimpleIndex={name:string;key:[string,number][];unique:boolean}
@@ -104,6 +107,56 @@ export class MongoMigrationEndpoint implements MigrationEndpoint{
   const indexes:IndexDescription[]=info.indexes.filter(i=>i.name!=='_id_'&&!existing.some(j=>j.name===i.name)).map(i=>({name:i.name,key:Object.fromEntries(i.key),...(i.unique?{unique:true}:{})}))
   if(step.action==='alter'&&indexes.some(i=>i.unique))throw new Error('MIGRATION_UNSUPPORTED: 当前对象需要人工迁移')
   if(indexes.length)await coll.createIndexes(indexes,this.options())
+ }
+ async *fileRows(database:string,name:string,selected?:string[],filterText?:string){
+  if(protectedDatabase(this.kind,database))throw new Error('FILE_TRANSFER: 不允许操作系统数据库')
+  const list=await this.collections(database,[name])
+  if(!list.some(c=>c.name===name))throw new Error('FILE_TRANSFER: 对象不存在')
+  const filter=plainObject(parseEjson(filterText||'{}','Filter'),'Filter');validateReadDocument(filter)
+  const projection=selected?Object.fromEntries([...selected.map(c=>[c,1]),...(!selected.includes('_id')?[['_id',0]]:[])]):undefined
+  // Field selection in the wizard is deliberately top-level, not an
+  // arbitrary expression/projection sent by the renderer.
+  if(selected?.some(c=>c.startsWith('$')||c.includes('.')))throw new Error('FILE_TRANSFER: 字段映射无效')
+  const cursor=this.client.db(database).collection(name).find(filter,{raw:true,batchSize:32,signal:this.signal,timeoutMS:0,projection})
+  try{for await(const raw of cursor){
+   requireActive(this.signal)
+   if(!Buffer.isBuffer(raw))throw new Error('FILE_TRANSFER: 无法无损读取 BSON')
+   const doc=BSON.deserialize(raw,{promoteValues:false,promoteLongs:false,bsonRegExp:true})
+   if(!Buffer.from(BSON.serialize(doc)).equals(raw))throw new Error('FILE_TRANSFER: 无法无损读取 BSON')
+   yield JSON.parse(BSON.EJSON.stringify(doc,{relaxed:false})) as Record<string,unknown>
+  }}finally{await cursor.close()}
+ }
+ async fileWrite(database:string,name:string,policy:DataFilePolicy,records:AsyncIterable<Record<string,unknown>>,beforeCommit:()=>void,committed:(n:number)=>void){
+  validateManagedCollection(name)
+  if(protectedDatabase(this.kind,database)||policy==='replace')throw new Error('FILE_TRANSFER: 不支持此数据库或操作')
+  const object=(await this.schema(database,[name])).objects[0]
+  if(!shape(object)?.safe)throw new Error('FILE_TRANSFER: 目标结构需要人工审核')
+  const collection=this.client.db(database).collection<Document&{_id:unknown}>(name)
+  let batch:Document[]=[],bytes=0,total=0
+  const flush=async()=>{
+   if(!batch.length)return
+   requireActive(this.signal);beforeCommit()
+   if(policy==='upsert'){
+    const result=await collection.bulkWrite(batch.map(doc=>({replaceOne:{filter:{_id:{$eq:doc._id}},replacement:doc,upsert:true}})),{ordered:true,writeConcern:{w:1},timeoutMS:30000})
+    if(result.matchedCount+result.upsertedCount!==batch.length)throw new Error('FILE_TRANSFER: 写入结果或警告与预期不一致')
+   }else{
+    const result=await collection.insertMany(batch as (Document&{_id:unknown})[],{ordered:true,writeConcern:{w:1},...this.options()})
+    if(!result.acknowledged||result.insertedCount!==batch.length)throw new Error('FILE_TRANSFER: 写入结果或警告与预期不一致')
+   }
+   total+=batch.length;committed(batch.length);batch=[];bytes=0
+  }
+  for await(const row of records){
+   requireActive(this.signal)
+   const doc=plainObject(BSON.EJSON.parse(JSON.stringify(row),{relaxed:false}),'Document')
+   validateReadDocument(doc)
+   if(policy==='upsert'&&!Object.hasOwn(doc,'_id'))throw new Error('FILE_TRANSFER: 插入更新需要映射全部主键')
+   const size=BSON.serialize(doc).length
+   if(size>16*1024*1024)throw new Error('FILE_TRANSFER: 单条文件记录过大')
+   if(batch.length&&(batch.length>=100||bytes+size>4*1024*1024))await flush()
+   batch.push(doc);bytes+=size
+  }
+  await flush()
+  if(!total)throw new Error('FILE_TRANSFER: 没有可导入的记录')
  }
  async copyFrom(source:MigrationEndpoint,sourceDb:string,targetDb:string,object:SchemaObject,options:MigrationCopyOptions,...[read,pending,commitStart,committed]:CopyCallbacks){
   if(!(source instanceof MongoMigrationEndpoint))throw new Error('MIGRATION_UNSUPPORTED: 当前数据库类型尚不支持此操作')

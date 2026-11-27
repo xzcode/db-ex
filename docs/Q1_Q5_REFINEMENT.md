@@ -1,0 +1,24 @@
+# Q1–Q5 workspace refinements — candidate implementation
+
+Based on the Navicat comparison, this batch improves existing features; it does not claim complete Navicat parity.
+
+## Implemented
+
+- Q1: shared grid cell focus, arrow/Tab navigation, Shift rectangular selection, TSV clipboard copy/paste, current-page find/replace, explicit field editor, persisted column visibility/order/pins/widths, and atomic staging followed by explicit save-all. Original primary-key/whole-document optimistic concurrency checks still apply.
+- Q2: long-value text/JSON/EJSON editors, JSON formatting, BSON binary hex and image preview (PNG/JPEG/GIF), existing record form and document tree entry points. Full unprojected BSON documents can stage a canonical EJSON field change. Original identity is retained. Read-only previews are not used to reconstruct unavailable full fields.
+- Q3: encrypted per-connection/object named browse profiles, create/update/delete/apply, filters/sorting/layout/view/page size; custom 1–500 row page size; visited-page offsets. For ordinary bounded MySQL SELECT, aggregate byte truncation permits continuation at the actual offset without discarding the connection. Per-record oversize, cancellation and time limits still protect the driver.
+- Q4: dialect-specific function vocabulary and signatures; multi-table/alias and explicit qualified table metadata; on-demand MongoDB field sampling and nested field paths; current SQL statement execution; typed positional/named parameter form; independent read query cancellation. Write operations, explicit transactions and recognized session-sensitive SQL retain the original session. They may require explicit disconnect to cancel.
+- Q5: CSV and JSONL/EJSON wizard for MySQL, MariaDB, SQLite and MongoDB: 20-row preview, explicit field mappings/conversion, append/upsert, relational replace, conversion-error reporting, filtered/field-selective streaming export, row/byte progress, cancellation, atomic non-overwriting export. Files are streamed in the main process; relational writes are transactional, MongoDB writes are acknowledged in batches and partial/uncertain outcomes remain visible. The file itself is not transferred into the renderer.
+
+## Boundaries
+
+This is a substantial Q1–Q5 implementation batch, not a claim all planned features are done. Ordinary query previews remain bounded (500 rows, byte/row limits); full export/import are separate streaming jobs with no total row limit. CSV is text and explicit mapping/conversion is needed for exact types; typed JSONL carries DB EX relational value wrappers and MongoDB canonical EJSON. UTF-8 only. Existing ClickHouse native file transfer and Redis-specific operations remain separate. The wizard reports up to 200 conversion errors and total count; it does not skip database constraint errors automatically. No automatic retry for uncertain writes. Complex target schemas and unsupported MongoDB topology/options remain guarded.
+
+Remaining work: multi-statement execution and multiple result sets; switch query connection/database in-place; direct editable SQL query results; complete CTE/version-sensitive metadata and execution history; continuous append browsing and primary-key/ObjectId locator; full direct nested-node CRUD and SQL binary/date-specialized widgets; Excel/SQL/Parquet import in the general wizard, additional encodings, named import/export presets, full error report and explicit selected-row export. Full engine and packaged desktop compatibility are subject to CI. Do not publish v1.1.0 from this batch until those required release gates pass.
+
+## Local evidence
+
+- 27 focused tests passed: grid identity/types, column layouts, browse profile scope, SQL lexical boundaries and metadata, typed file parsing, page byte limits and previous query features.
+- Ten focused Playwright tests passed, including both previously failing color regressions, selection/paste/save-all, extended BSON editor, persistent columns, named browse profile, custom page size, typed parameters, current statement execution, independent cancellation and file wizard.
+- Isolated real SQLite database: export and import of 50,001 records, 6,616,788 bytes, approximately 2.6 seconds combined in the development fixture; exact Int64, BLOB, REAL storage type and NULL. Duplicate rollback, mapped CSV replacement including multiline/doubled quotes, upsert with conversion-error reporting, non-clobber output. Real recursive read query cancelled and original session verified reusable.
+- No live customer databases or credentials were used. MySQL/MariaDB/MongoDB file endpoints need dedicated real engine CI coverage.

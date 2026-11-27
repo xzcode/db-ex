@@ -17,7 +17,7 @@ async function receive(message:Request){
       migration=new SqliteMigrationWorkerEngine(message.path);send({id:message.id,ok:true,value:migration.identity});return
     }
     if(message.kind==='migration'){
-      if(!migration||!message.method||!['catalog','schema','sourceSnapshot','prepareTarget','apply','beginTarget','beginRead','batch','insertBatch','commit'].includes(message.method))throw new Error('INVALID_OPERATION: SQLite migration')
+      if(!migration||!message.method||!['catalog','schema','sourceSnapshot','prepareTarget','apply','beginTarget','beginRead','beginFileRead','fileFields','batch','insertBatch','commit'].includes(message.method))throw new Error('INVALID_OPERATION: SQLite migration')
       const fn=migration[message.method as keyof SqliteMigrationWorkerEngine]
       if(typeof fn!=='function')throw new Error('INVALID_OPERATION: SQLite migration')
       const value=await (fn as (...args:unknown[])=>unknown).apply(migration,message.args||[])
@@ -30,7 +30,7 @@ async function receive(message:Request){
     if(!operations)throw new Error('SESSION_CLOSED: SQLite')
     const value=message.kind==='children'?operations.children():message.kind==='backup'?await operations.backupTo(message.path!):message.kind==='execute'?operations.execute(message.operation!,{writable:message.writable===true,confirmed:message.confirmed===true}):undefined
     send({id:message.id,ok:true,value,transaction:operations.transactionActive})
-  }catch(error){send({id:message.id,ok:false,error:error instanceof Error&&/^MIGRATION_[A-Z_]+:/.test(error.message)?error.message:databaseError(error).message,transaction:operations?.transactionActive})}
+  }catch(error){send({id:message.id,ok:false,error:error instanceof Error&&/^(?:MIGRATION_[A-Z_]+|FILE_TRANSFER):/.test(error.message)?error.message:databaseError(error).message,transaction:operations?.transactionActive})}
   finally{busy=false}
 }
 if(utilityPort)utilityPort.on('message',event=>{void receive(event.data)})

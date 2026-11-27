@@ -21,6 +21,7 @@ interface LiveSession {
   transport: ConnectionTransport
   tls: TlsConnectionOptions
   controller?: AbortController
+  isolatedRead?:boolean
 }
 export class SessionManager {
   private readonly sessions = new Map<string, LiveSession>()
@@ -140,6 +141,50 @@ export class SessionManager {
     const session=this.session(id),driver=session.driver
     if(session.info.kind!=='clickhouse'||!driver.transfer)throw new Error('INVALID_OPERATION: ClickHouse transfer')
     return this.external(id,input.direction==='import',(_config,signal)=>driver.transfer!(input,path,{writable:session.info.writable,confirmed:true,signal}))
+  }
+  /** Saved read-only query execution uses its own authenticated transport.
+   * Cancelling or timing out the temporary query never destroys the explorer's
+   * original connection. Explicit transactions retain their own session. */
+  async executeQuery(id:string,input:DatabaseOperation):Promise<OperationResult>{
+    const session=this.session(id),adapter=databaseAdapter(session.info.kind)
+    if(!input||typeof input!=='object'||!adapterAllowsAction(session.info.kind,input.action)||Buffer.byteLength(JSON.stringify(input))>4*1024*1024)throw new Error('INVALID_OPERATION: 不支持的操作')
+    const eligible=['mysql.query','clickhouse.query','mongo.find','mongo.aggregate','mongo.count','mongo.estimateCount','mongo.indexes'].includes(input.action)
+    const sessionSensitive=input.action==='mysql.query'&&/\b(?:LAST_INSERT_ID|FOUND_ROWS|ROW_COUNT|CONNECTION_ID|GET_LOCK|RELEASE_LOCK|SHOW\s+SESSION|SHOW\s+WARNINGS)\b|@@|(?:^|[^@])@[a-z_]/i.test(input.sql)
+    if(!eligible||sessionSensitive||session.info.transaction||adapter.writes(input,session.info.writable))return this.execute(id,input)
+    return this.external(id,false,async(config,parent)=>{
+      session.isolatedRead=true
+      const signal=AbortSignal.any([parent,AbortSignal.timeout(30000)])
+      let transport:ConnectionTransport|undefined,driver:AdapterSession|undefined
+      let closing:Promise<unknown>|undefined
+      const close=()=>{if(!closing)closing=Promise.allSettled([driver?.close(),transport?.close()]);return closing}
+      const stop=()=>{if(driver)void close();else void transport?.close().catch(()=>{})}
+      signal.addEventListener('abort',stop,{once:true})
+      try{
+        signal.throwIfAborted()
+        transport=await createTransport({ssh:config.ssh,proxy:config.proxy,timeoutMs:config.connectTimeoutMs})
+        signal.throwIfAborted()
+        driver=await adapter.connect({config,transport,tls:session.tls,sqliteProcessFactory:this.sqliteProcessFactory,sqliteModulePath:this.sqliteModulePath})
+        signal.throwIfAborted()
+        const result=await Promise.race([driver.execute(input,{writable:false,confirmed:false,signal}),new Promise<never>((_,reject)=>{
+          signal.addEventListener('abort',()=>reject(new Error('CANCELLED: 查询已停止，原连接保留')),{once:true})
+        })])
+        signal.throwIfAborted()
+        return {...result,disconnected:false}
+      }catch(e){
+        if(signal.aborted)throw new Error(parent.aborted?'CANCELLED: 查询已停止，原连接保留':'TIMEOUT: 查询超时，原连接保留')
+        throw databaseError(e)
+      }finally{
+        signal.removeEventListener('abort',stop)
+        await close()
+        session.isolatedRead=false
+      }
+    })
+  }
+  cancelQuery(id:string):boolean{
+    const session=this.session(id)
+    if(!session.isolatedRead||!session.controller)return false
+    session.controller.abort()
+    return true
   }
   async execute(id: string, input: DatabaseOperation): Promise<OperationResult> {
     if (!input || typeof input !== 'object' || !isKnownDatabaseAction(input.action)) throw new Error('INVALID_OPERATION: 不支持的操作')

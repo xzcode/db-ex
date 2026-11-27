@@ -14,6 +14,7 @@ interface QueryData {
   columnTypes?: string[]
   header?: ResultSetHeader
   truncated: boolean
+  truncationReason?:OperationResult['truncationReason']
 }
 interface ColumnInfo { name: string; type: string; nullable: boolean; key: string; extra: string }
 interface Structure { columns: ColumnInfo[]; primaryKeys: string[]; indexes: Record<string, unknown>[]; engine: string; tableType:string }
@@ -188,11 +189,12 @@ export class MysqlOperations {
       }
       // Direct ORDER BY + LIMIT ensures the selected ordering isn't discarded
       // by a derived-table pagination wrapper.
-      const data = await this.query(compiled.sql + ' LIMIT ' + (limit + 1) + ' OFFSET ' + offset, compiled.parameters, signal, limit + 1)
+      const data = await this.query(compiled.sql + ' LIMIT ' + (limit + 1) + ' OFFSET ' + offset, compiled.parameters, signal, limit + 1,true,true)
       const more = data.values.length > limit
       if (more) data.values.pop()
       const result = this.result(data)
-      result.nextOffset = more ? offset + limit : undefined
+      result.nextOffset = (more||data.truncated)&&data.truncationReason!=='document'&&result.rows.length ? offset + result.rows.length : undefined
+      if(more&&!data.truncated)result.truncationReason='page'
       result.truncated = result.truncated || more
       return result
     } finally {
@@ -218,12 +220,13 @@ export class MysqlOperations {
       const sql = policy.select
         ? `SELECT * FROM (${policy.sql}\n) AS \`dbex_result\` LIMIT ${limit + 1} OFFSET ${offset}`
         : policy.sql
-      const data = await this.query(sql, parameters, signal, policy.select ? limit + 1 : MAX_ROWS)
+      const data = await this.query(sql, parameters, signal, policy.select ? limit + 1 : MAX_ROWS,true,policy.select)
       if (data.header) return emptyResult(`语句已执行${this.transaction ? '（事务尚未提交）' : ''}`, data.header.affectedRows)
       const hasNext = policy.select && data.values.length > limit
       if (hasNext) data.values.pop()
       const result = this.result(data)
-      result.nextOffset = hasNext && result.rows.length ? offset + result.rows.length : undefined
+      result.nextOffset = policy.select&&(hasNext||data.truncated)&&data.truncationReason!=='document'&&result.rows.length ? offset + result.rows.length : undefined
+      if(hasNext&&!data.truncated)result.truncationReason='page'
       result.truncated = result.truncated || hasNext
       return {...result,queryReadOnly:policy.mode==='read'}
     } finally {
@@ -454,13 +457,13 @@ export class MysqlOperations {
       return [key, value]
     })) as SqlRow) : undefined
     return {
-      columns: data.columns, rows, rawRows, columnTypes: data.columnTypes, nullCells: data.values.map(values => values.flatMap((value, index) => value === null || value === undefined ? [index] : [])), truncated: data.truncated,
+      columns: data.columns, rows, rawRows, columnTypes: data.columnTypes, nullCells: data.values.map(values => values.flatMap((value, index) => value === null || value === undefined ? [index] : [])), truncated: data.truncated,truncationReason:data.truncationReason,
       message: data.truncated ? '返回量达到上限；请缩小查询范围后重试' : editable ? undefined : '含二进制字段的结果仅供浏览，避免从编码预览误写数据',
     }
   }
 
   /** Prepared statements, event-by-event rows, strict byte cap, never buffered .toArray(). */
-  private query(sql: string, parameters: SqlValue[], signal: AbortSignal, maxRows: number, prepared = true): Promise<QueryData> {
+  private query(sql: string, parameters: SqlValue[], signal: AbortSignal, maxRows: number, prepared = true, drainBoundedPage=false): Promise<QueryData> {
     checkAborted(signal)
     if (this.closed) return Promise.reject(new Error('SESSION_CLOSED: 请重新连接 MySQL'))
     return new Promise((resolve, reject) => {
@@ -494,8 +497,11 @@ export class MysqlOperations {
         if (settled) return
         if (!Array.isArray(value)) { data.header = value as ResultSetHeader; return }
         const rowBytes = Buffer.byteLength(JSON.stringify(value, (_key, item: unknown) => typeof item === 'bigint' ? item.toString() : item))
+        if(data.truncated&&drainBoundedPage&&rowBytes<=MAX_VALUE_BYTES&&value.length<=500)return
         if (data.values.length >= maxRows || bytes + rowBytes > MAX_BYTES || rowBytes > MAX_VALUE_BYTES || value.length > 500) {
           data.truncated = true
+          data.truncationReason=rowBytes>MAX_VALUE_BYTES||value.length>500?'document':bytes+rowBytes>MAX_BYTES?'bytes':'page'
+          if(drainBoundedPage&&data.truncationReason!=='document')return // Drain only a bounded page of individually bounded rows.
           this.destroy()
           finish()
           return

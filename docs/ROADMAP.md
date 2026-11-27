@@ -314,3 +314,6 @@ real test evidence and remaining scope. Await exact CI before merge/release.
 
 - Shared resizable saved-query editor/result workspace with bottom/right layouts, persisted divider, maximize/collapse, messages/summary, pinned snapshots, result inspection, grid/tree/JSON and current-page export.
 - MongoDB function overloads and parameter hints; typed query options and guarded native-style mutations; complete-find-only result editing. See [query refinement scope and verification](QUERY_REFINEMENT.md).
+
+## Q1–Q5 — workspace refinement batch
+See [Q1–Q5 refinement evidence and remaining scope](Q1_Q5_REFINEMENT.md). Core grid, field editing, browse profiles, query completion/cancellation, and streaming import/export wizard implemented on the M12 candidate. Remaining deeper parity items and full release gates are explicitly tracked there.

@@ -7,6 +7,7 @@ async function installBridge(page: Page) {
 
     const calls: Record<string, unknown>[] = []
     const migrationJobs:any[]=[]
+    let fileJob:any=null
     const sessions: Record<string, any> = {}
     const savedObjects: any[] = []
     const additionalDbs: Record<string,string[]> = {}
@@ -133,6 +134,15 @@ async function installBridge(page: Page) {
         return { columns: [], rows: [], affectedRows: 1, message: '操作已完成' }
       },
       async clickhouseTransfer(id:string,input:any){calls.push({sessionId:id,action:'clickhouseTransfer',...input});return {bytes:1024}},
+      async executeQuery(id:string,op:any){calls.push({action:'isolatedQuery',id});return (window as any).dbex.execute(id,op)},
+      async cancelQuery(id:string){calls.push({action:'cancelQuery',id});return true},
+      async listBrowseProfiles(id:string,database:string,entity:string){return JSON.parse(localStorage.getItem('mock.browse-profiles')||'[]').filter((p:any)=>p.connectionId===id&&p.database===database&&p.entity===entity)},
+      async saveBrowseProfile(id:string,database:string,entity:string,draft:any,profileId?:string){const all=JSON.parse(localStorage.getItem('mock.browse-profiles')||'[]');const item={...draft,id:profileId||crypto.randomUUID(),connectionId:id,database,entity,kind:sessions[id].kind,updatedAt:new Date().toISOString()};localStorage.setItem('mock.browse-profiles',JSON.stringify([item,...all.filter((x:any)=>x.id!==item.id)]));return item},
+      async deleteBrowseProfile(id:string,database:string,entity:string,profileId:string){const all=JSON.parse(localStorage.getItem('mock.browse-profiles')||'[]');localStorage.setItem('mock.browse-profiles',JSON.stringify(all.filter((p:any)=>p.id!==profileId||p.connectionId!==id||p.database!==database||p.entity!==entity)))},
+      async pickDataFile(id:string,format:string,delimiter:string){calls.push({action:'pickDataFile',id,format,delimiter});return {token:crypto.randomUUID(),name:'fixture.'+format,size:120,format,delimiter,fields:['name'],sample:[{name:'New record'}]}},
+      async startFileTransfer(id:string,request:any){calls.push({action:'startFileTransfer',id,request});fileJob={id:'fixture-file-job',direction:request.direction,state:'running',read:0,committed:0,skipped:0,bytes:0,file:'fixture.'+request.format};return {...fileJob}},
+      async getFileTransferJob(){if(fileJob?.state==='running')fileJob={...fileJob,state:'completed',read:501,committed:501,bytes:120};return fileJob},
+      async cancelFileTransfer(id:string){if(fileJob?.id===id)fileJob.state='cancelled'},
       async cancel(id: string) { calls.push({ action: 'cancel', id }) },
       async copyText(value: string) { calls.push({ action: 'copyText', value }) },
       async validateMongoDocument(document: string, original?: string) { calls.push({ action: 'validateMongoDocument', document, original }) },
@@ -1685,4 +1695,99 @@ test('query refinement: immutable pagination and guarded document editing',async
  await replaceEditor(page,input,'db.users.aggregate([])')
  await run.click()
  await expect(panel.getByRole('button',{name:'编辑',exact:true})).toBeDisabled()
+})
+
+
+test('Q1-Q2: range copy and paste, explicit save-all, column layout and field editor',async({page})=>{
+ await connect(page,'Mongo Local');await openUsers(page)
+ const w=page.locator('.workbench:visible'),grid=w.locator('.data-table').first()
+ await w.getByRole('button',{name:'只读 · 启用写入',exact:true}).click()
+ const cell=(i:number,field:string)=>grid.locator('tr[data-row-index="'+i+'"] [data-grid-field="'+field+'"]')
+ await cell(0,'name').click()
+ await cell(1,'name').click({modifiers:['Shift']})
+ await expect(grid.locator('.grid-range-cell')).toHaveCount(2)
+ await w.getByRole('button',{name:'复制选区',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='copyText').at(-1)?.value)).toBe('Ada\nGrace')
+ await w.locator('.grid-scroll').first().focus()
+ await w.locator('.grid-scroll').first().evaluate(el=>{const data=new DataTransfer();data.setData('text/plain','One\nTwo');el.dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}))})
+ await expect(cell(0,'name')).toHaveText('One');await expect(cell(1,'name')).toHaveText('Two')
+ expect(await page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mongo.replaceBatch').length)).toBe(0)
+ await w.getByRole('button',{name:'保存全部修改',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mongo.replaceBatch').at(-1)?.edits.map((x:any)=>JSON.parse(x.document).name))).toEqual(['One','Two'])
+ await cell(0,'nested').click()
+ await w.getByRole('button',{name:'字段编辑器',exact:true}).click()
+ const field=page.getByRole('dialog',{name:'字段编辑器'})
+ await expect(field).toBeVisible();await expect(field.locator('.view-lines')).toContainText('$numberLong')
+ await replaceEditor(page,'.field-value-dialog .monaco-editor','{"values":[{"$numberLong":"9007199254740993"}]}')
+ await field.getByRole('button',{name:'暂存修改',exact:true}).click()
+ await w.getByRole('button',{name:'保存全部修改',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> JSON.parse((window as any).__dbexCalls.filter((x:any)=>x.action==='mongo.replaceBatch').at(-1)?.edits[0]?.document).nested.values[0].$numberLong)).toBe('9007199254740993')
+ await w.getByRole('button',{name:'列管理',exact:true}).click()
+ const columns=page.getByRole('dialog',{name:'列管理'})
+ await columns.getByLabel('显示 nullable',{exact:true}).uncheck()
+ await columns.getByLabel('固定列 name',{exact:true}).check()
+ await columns.getByRole('button',{name:'关闭',exact:true}).click()
+ await expect(grid.locator('thead th[title="nullable"]')).toHaveCount(0)
+ await expect(grid.locator('thead th[title="name"]')).toHaveCSS('position','sticky')
+ await page.reload();await connect(page,'Mongo Local');await openUsers(page)
+ await expect(w.locator('thead th[title="nullable"]')).toHaveCount(0)
+})
+
+test('Q3: named browse profile and custom page size persist and apply explicitly',async({page})=>{
+ await connect(page,'MySQL Local');await openUsers(page)
+ const w=page.locator('.workbench:visible')
+ const custom=w.getByLabel('自定义每页数量',{exact:true})
+ await custom.fill('75');await custom.press('Enter')
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.browse'&&!x.countOnly).at(-1)?.limit)).toBe(75)
+ await w.getByRole('button',{name:'浏览配置',exact:true}).click()
+ const dialog=page.getByRole('dialog',{name:'浏览配置'})
+ await dialog.getByLabel('名称',{exact:true}).fill('Page 75')
+ await dialog.getByRole('button',{name:'另存当前配置',exact:true}).click()
+ await expect(dialog.getByRole('button',{name:/Page 75/})).toBeVisible()
+ await dialog.getByRole('button',{name:'应用配置',exact:true}).click()
+ await expect(dialog).toHaveCount(0)
+ await custom.fill('50');await custom.press('Enter')
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.browse'&&!x.countOnly).at(-1)?.limit)).toBe(50)
+ await w.getByRole('button',{name:'浏览配置',exact:true}).click()
+ await dialog.getByRole('button',{name:/Page 75/}).click()
+ await dialog.getByRole('button',{name:'应用配置',exact:true}).click()
+ await expect(custom).toHaveValue('75')
+})
+
+test('Q4: typed parameters, current SQL statement and independent stop keep the session',async({page})=>{
+ await connect(page,'MySQL Local')
+ await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ await page.locator('[data-object-kind="query-folder"]').click()
+ await page.locator('.object-list-panel:visible').getByRole('button',{name:/新建查询/}).click()
+ const editor=page.locator('.saved-query-editor:visible')
+ await replaceEditor(page,'.saved-query-editor:visible .query-editor .monaco-editor','SELECT 1; SELECT ? AS n')
+ await editor.getByRole('button',{name:'参数编辑器',exact:true}).click()
+ const params=page.getByRole('dialog',{name:'参数编辑器'})
+ await params.getByRole('button',{name:'添加参数',exact:true}).click()
+ await params.getByLabel('参数值',{exact:true}).fill('9223372036854775807')
+ await params.getByRole('button',{name:'应用',exact:true}).click()
+ await expect(editor.getByLabel('SQL 参数 JSON 数组')).toHaveValue('["9223372036854775807"]')
+ await editor.getByRole('button',{name:'运行当前语句',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.query').at(-1))).toMatchObject({sql:'SELECT ? AS n',parameters:['9223372036854775807']})
+ await replaceEditor(page,'.saved-query-editor:visible .query-editor .monaco-editor','SELECT 1 AS slow_query')
+ await editor.getByLabel('SQL 参数 JSON 数组').fill('[]')
+ await editor.getByRole('button',{name:'运行选中 / 全部',exact:true}).click()
+ await editor.getByRole('button',{name:'停止查询',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.some((x:any)=>x.action==='cancelQuery'))).toBe(true)
+ expect(await page.evaluate(()=> (window as any).__dbexCalls.some((x:any)=>x.action==='disconnect'))).toBe(false)
+})
+
+test('Q5: file preview, mapped import and completed job progress',async({page})=>{
+ await connect(page,'MySQL Local');await openUsers(page)
+ const w=page.locator('.workbench:visible')
+ await w.getByRole('button',{name:'流式导入向导',exact:true}).click()
+ const dialog=page.getByRole('dialog',{name:'流式导入向导'})
+ await dialog.getByRole('button',{name:'选择数据文件',exact:true}).click()
+ await expect(dialog.locator('.file-sample')).toContainText('New record')
+ await dialog.getByRole('button',{name:'启用写入',exact:true}).click()
+ await dialog.getByRole('button',{name:'确认执行',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='startFileTransfer').at(-1)?.request)).toMatchObject({direction:'import',entity:'users',mapping:[{source:'name',target:'name',conversion:'auto'}]})
+ await expect(dialog).toContainText('操作已完成')
+ await expect(dialog).toContainText('501')
+ await dialog.getByRole('button',{name:'关闭',exact:true}).click()
 })

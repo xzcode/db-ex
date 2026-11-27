@@ -184,6 +184,6 @@ export function compileMysqlFilter(database:string, entity:string,input:unknown,
 }
 export const MAX_BROWSE_OFFSET=1000000
 export function browseOffset(page:number,size:number):number {
-  if (!Number.isSafeInteger(page)||page<1||![100,200,500].includes(size)||(page-1)*size>MAX_BROWSE_OFFSET) return fail()
+  if (!Number.isSafeInteger(page)||page<1||!Number.isSafeInteger(size)||size<1||size>500||(page-1)*size>MAX_BROWSE_OFFSET) return fail()
   return (page-1)*size
 }

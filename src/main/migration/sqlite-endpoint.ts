@@ -6,6 +6,9 @@ import {validateConnection} from '../connections/validation'
 import type {SchemaObject,SchemaSnapshot} from './mysql-schema'
 import {sqliteShape} from './sqlite-shape'
 import {requireActive,type MigrationEndpoint,type CopyCallbacks} from './endpoint'
+import type {BrowseFilter} from '../../shared/browse-filter'
+import type {DataFilePolicy} from '../../shared/file-transfer'
+import {sqlFileValue} from '../file-transfer/records'
 import type {WireCell} from './sqlite-worker-engine'
 class Worker{
  private pending=new Map<number,{resolve:(v:any)=>void;reject:(e:Error)=>void;timer:ReturnType<typeof setTimeout>}>()
@@ -49,6 +52,35 @@ export class SqliteMigrationEndpoint implements MigrationEndpoint{
  startSourceSnapshot(){return this.worker.call<void>('sourceSnapshot')}
  prepareTarget(){return this.worker.call<void>('prepareTarget')}
  applyStep(step:MigrationStep){return this.worker.call<void>('apply',[step.sql])}
+ async fileFields(database:string,name:string){if(database!=='main')throw new Error('FILE_TRANSFER: 对象不存在');return this.worker.call<string[]>('fileFields',[name])}
+ async *fileRows(database:string,name:string,selected?:string[],filter?:BrowseFilter){
+  await this.startSourceSnapshot()
+  const columns=selected||await this.fileFields(database,name)
+  await this.worker.call('beginFileRead',[name,columns,filter])
+  for(;;){
+   const batch=await this.worker.call<{rows:WireCell[][];bytes:number;done:boolean}>('batch')
+   for(const row of batch.rows)yield Object.fromEntries(columns.map((c,i)=>{const v=row[i]!;return [c,v.t==='null'?null:v.t==='int'?{$dbexInteger:v.v}:v.t==='blob'?{$dbexBinary:v.v}:v.t==='real'?{$dbexReal:String(v.v)}:v.v]}))
+   if(batch.done)break
+  }
+ }
+ async fileWrite(database:string,name:string,columns:string[],policy:DataFilePolicy,records:AsyncIterable<Record<string,unknown>>,beforeCommit:()=>void,committed:(n:number)=>void){
+  const object=(await this.schema(database,[name])).objects[0],info=sqliteShape(object)
+  if(!info?.safe)throw new Error('FILE_TRANSFER: 目标结构需要人工审核')
+  await this.prepareTarget();await this.worker.call('beginTarget',[name,info,policy,columns])
+  let batch:WireCell[][]=[],size=0,total=0
+  async function convert(record:Record<string,unknown>){
+   return columns.map(c=>{const v=sqlFileValue(record[c]);if(v===null)return {t:'null'} as WireCell;if(Buffer.isBuffer(v))return {t:'blob',v:v.toString('base64')} as WireCell;if(typeof v==='bigint')return {t:'int',v:v.toString()} as WireCell;if(typeof v==='number'){const explicitReal=!!record[c]&&typeof record[c]==='object'&&Object.hasOwn(record[c] as object,'$dbexReal');const integral=!explicitReal&&Number.isSafeInteger(v);return {t:integral?'int':'real',v:integral?String(v):v} as WireCell};return {t:'text',v} as WireCell})
+  }
+  const flush=async()=>{if(!batch.length)return;total+=await this.worker.call<number>('insertBatch',[batch]);batch=[];size=0}
+  for await(const record of records){
+   requireActive(this.signal);const row=await convert(record),bytes=Buffer.byteLength(JSON.stringify(row))
+   if(bytes>4*1024*1024)throw new Error('FILE_TRANSFER: 单条文件记录超过目标批次容量')
+   if(batch.length&&(batch.length>=500||size+bytes>4*1024*1024))await flush()
+   batch.push(row);size+=bytes
+  }
+  await flush();if(!total)throw new Error('FILE_TRANSFER: 没有可导入的记录')
+  beforeCommit();await this.worker.call('commit');committed(total)
+ }
  async copyFrom(source:MigrationEndpoint,sourceDb:string,targetDb:string,object:SchemaObject,options:MigrationCopyOptions,...[read,pending,commitStart,committed]:CopyCallbacks){
   const info=sqliteShape(object)
   if(!(source instanceof SqliteMigrationEndpoint)||sourceDb!=='main'||targetDb!=='main'||!info?.safe)throw new Error('MIGRATION_UNSUPPORTED: 当前对象需要人工迁移')

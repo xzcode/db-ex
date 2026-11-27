@@ -12,6 +12,9 @@ import {createTransport,type ConnectionTransport} from '../connections/transport
 import {loadConnectionTls} from '../connections/tls-material'
 import {openMysqlClient} from '../connections/mysql-client'
 import {sqlMigrationCondition} from './condition'
+import {compileMysqlFilter,newBrowseFilter,type BrowseFilter} from '../../shared/browse-filter'
+import type {DataFilePolicy} from '../../shared/file-transfer'
+import {sqlFileRow,sqlFileValue} from '../file-transfer/records'
 import {quoteIdentifier as q} from '../operations/sql-policy'
 import {makeSchemaObject,tableTarget,dataShape,mysqlUpsertKeys,type SchemaObject,type SchemaSnapshot} from './mysql-schema'
 
@@ -167,6 +170,81 @@ export class MysqlMigrationEndpoint implements MigrationEndpoint{
   if(grants.some(g=>/^REVOKE /i.test(g))||!privileges.includes('ALL PRIVILEGES')&&!(privileges.includes('SELECT')&&privileges.includes('TRIGGER')))throw new Error('MIGRATION_DEPENDENCY: 高级写入需要完整元数据权限')
   const inbound=await this.query('SELECT TABLE_NAME FROM information_schema.KEY_COLUMN_USAGE WHERE REFERENCED_TABLE_SCHEMA=? AND REFERENCED_TABLE_NAME=? LIMIT 1',[database,name])
   if(inbound.length)throw new Error('MIGRATION_DEPENDENCY: 目标表存在外部外键引用')
+ }
+ async fileFields(database:string,name:string){
+  if(protectedDatabase(this.kind,database))throw new Error('FILE_TRANSFER: 不允许操作系统数据库')
+  const rows=await this.query('SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? ORDER BY ORDINAL_POSITION LIMIT 1001',[database,name])
+  if(!rows.length||rows.length>1000)throw new Error('FILE_TRANSFER: 无法读取目标字段')
+  return rows.map(r=>String(r.name))
+ }
+ async *fileRows(database:string,name:string,selected?:string[],filter?:BrowseFilter){
+  await this.startSourceSnapshot()
+  const fields=await this.fileFields(database,name),columns=selected||fields
+  if(!columns.length||columns.some(c=>!fields.includes(c)))throw new Error('FILE_TRANSFER: 字段映射无效')
+  const compiled=compileMysqlFilter(database,name,filter||newBrowseFilter())
+  const raw=(this.client as unknown as {connection:import('mysql2').Connection}).connection
+  const sql='SELECT '+columns.map(q).join(',')+compiled.sql.slice('SELECT *'.length)
+  const command=compiled.parameters.length?raw.execute({sql,rowsAsArray:true},compiled.parameters):raw.query({sql,rowsAsArray:true})
+  const stream=addAbortSignal(this.signal,command.stream({highWaterMark:8}))
+  try{for await(const row of stream){abort(this.signal);if(!Array.isArray(row))throw new Error('FILE_TRANSFER: 文件记录格式无效');yield sqlFileRow(columns,row)}}
+  finally{stream.destroy()}
+ }
+ async fileWrite(database:string,name:string,columns:string[],policy:DataFilePolicy,records:AsyncIterable<Record<string,unknown>>,beforeCommit:()=>void,committed:(n:number)=>void){
+  await this.prepareTarget()
+  await this.statement('START TRANSACTION READ WRITE')
+  let committing=false,total=0
+  try{
+   const target=tableTarget(database,name),all=await this.fileFields(database,name)
+   if(!columns.length||columns.some(c=>!all.includes(c)))throw new Error('FILE_TRANSFER: 字段映射无效')
+   await this.query('SELECT '+columns.map(q).join(',')+' FROM '+target+' LIMIT 0')
+   // A normal import must be transactional and must not replay opaque
+   // special-object definitions or trigger-dependent writes.
+   const object=(await this.schema(database,[name])).objects[0]
+   if(!object?.shape?.safe||object.triggerNames.length)throw new Error('FILE_TRANSFER: 目标结构需要人工审核')
+   const shape=object.shape
+   if(columns.some(c=>!shape.columns.some(f=>f.name===c)))throw new Error('FILE_TRANSFER: 字段映射无效')
+   let alias='',conflict=''
+   if(policy!=='append'){
+    await this.checkAdvancedTarget(database,name)
+    if(policy==='replace')await this.statement('DELETE FROM '+target)
+    else{
+     const keys=mysqlUpsertKeys(shape)
+     if(!keys||keys.some(k=>!columns.includes(k)))throw new Error('FILE_TRANSFER: 插入更新需要映射全部主键')
+     const changed=columns.filter(c=>!keys.includes(c)),updates=changed.length?changed:[keys[0]!]
+     if(this.kind==='mariadb')conflict=' ON DUPLICATE KEY UPDATE '+updates.map(c=>q(c)+'=VALUES('+q(c)+')').join(',')
+     else{
+      const version=/^(\d+)\.(\d+)\.(\d+)/.exec(this.version)
+      if(!version||Number(version[1])<8||Number(version[1])===8&&Number(version[2])===0&&Number(version[3])<19)throw new Error('FILE_TRANSFER: 当前版本不支持此写入模式')
+      const incoming=name==='dbex_incoming'?'dbex_incoming_2':'dbex_incoming'
+      alias=' AS '+q(incoming);conflict=' ON DUPLICATE KEY UPDATE '+updates.map(c=>q(c)+'='+q(incoming)+'.'+q(c)).join(',')
+     }
+    }
+   }
+   const packet=Number((await this.query('SELECT @@max_allowed_packet AS n'))[0]?.n),maxBytes=Math.min(BATCH_BYTES,Math.floor(packet/2)),maxRows=Math.min(BATCH_ROWS,Math.floor(60000/columns.length))
+   if(!Number.isFinite(maxBytes)||maxBytes<32768||maxRows<1)throw new Error('FILE_TRANSFER: 目标数据包限制过小')
+   let batch:Cell[][]=[],bytes=0
+   const flush=async()=>{
+    if(!batch.length)return
+    abort(this.signal)
+    const sql='INSERT INTO '+target+' ('+columns.map(q).join(',')+') VALUES '+batch.map(row=>'('+row.map(()=>'?').join(',')+')').join(',')+alias+conflict
+    const [result]=await bounded(this.signal,this.stop,()=>this.client.execute<ResultSetHeader>({sql,timeout:30000},batch.flat()))
+    if((policy==='upsert'?result.affectedRows>batch.length*2:result.affectedRows!==batch.length)||result.warningStatus!==0)throw new Error('FILE_TRANSFER: 写入结果或警告与预期不一致')
+    total+=batch.length;batch=[];bytes=0
+   }
+   for await(const record of records){
+    abort(this.signal)
+    const row=columns.map(c=>{const v=sqlFileValue(record[c]);return typeof v==='bigint'?v.toString():v})
+    const size=row.reduce<number>((n,v)=>n+cellBytes(v),0)
+    if(size>maxBytes)throw new Error('FILE_TRANSFER: 单条文件记录超过目标批次容量')
+    if(batch.length&&(batch.length>=maxRows||bytes+size>maxBytes))await flush()
+    batch.push(row);bytes+=size
+   }
+   await flush()
+   if(!total)throw new Error('FILE_TRANSFER: 没有可导入的记录')
+   abort(this.signal);committing=true;beforeCommit()
+   await bounded(this.signal,this.stop,()=>this.client.query({sql:'COMMIT',timeout:30000}))
+   committing=false;committed(total)
+  }catch(e){if(!committing&&!this.signal.aborted)await bounded(this.signal,this.stop,()=>this.client.query({sql:'ROLLBACK',timeout:5000}),5000).catch(()=>{});throw e}
  }
  async copyFrom(source:MigrationEndpoint,sourceDb:string,targetDb:string,object:SchemaObject,options:MigrationCopyOptions,
   onRead:(rows:number,bytes:number)=>void,onPending:(rows:number)=>void,onCommitStart:()=>void,onCommit:(rows:number)=>void){

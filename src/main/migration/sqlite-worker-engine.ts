@@ -4,6 +4,7 @@ import type {MigrationCatalog,MigrationPolicy,MigrationCondition} from '../../sh
 import type {SchemaObject,SchemaSnapshot} from './mysql-schema'
 import {sqliteQuote as q,safeSqliteField,sqliteShape,sqliteUpsertKeys,type SqliteField,type SqliteShape,type SqliteIndex} from './sqlite-shape'
 import {sqlMigrationCondition} from './condition'
+import {compileMysqlFilter,newBrowseFilter,type BrowseFilter} from '../../shared/browse-filter'
 import {checkedSnapshot,limitObjectNames} from './endpoint'
 
 export type WireCell={t:'int'|'real'|'text'|'blob'|'null';v?:string|number}
@@ -87,11 +88,13 @@ export class SqliteMigrationWorkerEngine{
  sourceSnapshot(){this.db.exec('BEGIN');this.db.prepare('SELECT name FROM main.sqlite_schema LIMIT 1').get()}
  prepareTarget(){if(!this.writable){const next=this.open(false);this.db.close();this.db=next;this.writable=true}}
  apply(sql:string[]){if(!this.writable)throw Error('READ_ONLY');this.db.exec('BEGIN IMMEDIATE');try{for(const statement of sql)this.db.exec(statement);this.db.exec('COMMIT')}catch(e){this.db.exec('ROLLBACK');throw e}}
- beginTarget(name:string,expected:SqliteShape,policy:MigrationPolicy='append'){
+ beginTarget(name:string,expected:SqliteShape,policy:MigrationPolicy='append',columns?:string[]){
   if(!this.writable)throw Error('READ_ONLY')
   this.db.exec('BEGIN IMMEDIATE')
   const actual=sqliteShape(this.schema('main',[name]).objects[0])
   if(!actual?.safe||JSON.stringify(actual)!==JSON.stringify(expected))throw new Error('MIGRATION_STALE: 结构已变化，请重新比较')
+  const selected=columns||expected.fields.map(f=>f.name)
+  if(!selected.length||selected.some(c=>!expected.fields.some(f=>f.name===c)))throw new Error('FILE_TRANSFER: 字段映射无效')
   let conflict=''
   if(policy!=='append'){
    for(const row of this.objects().filter(r=>r.type==='table')){
@@ -100,13 +103,13 @@ export class SqliteMigrationWorkerEngine{
    if(policy==='replace')this.db.exec('DELETE FROM main.'+q(name))
    else if(policy==='upsert'){
     const keys=sqliteUpsertKeys(actual)
-    if(!keys)throw new Error('MIGRATION_DEPENDENCY: 插入更新需要相同的主键')
-    const fields=expected.fields.filter(f=>!keys.includes(f.name)).map(f=>f.name)
+    if(!keys||keys.some(k=>!selected.includes(k)))throw new Error('MIGRATION_DEPENDENCY: 插入更新需要相同的主键')
+    const fields=selected.filter(f=>!keys.includes(f))
     const updates=fields.length?fields:[keys[0]!]
     conflict=' ON CONFLICT ('+keys.map(q).join(',')+') DO UPDATE SET '+updates.map(n=>q(n)+'=excluded.'+q(n)).join(',')
    }else throw new Error('MIGRATION_INPUT: 迁移参数无效')
   }
-  this.insert=this.db.prepare('INSERT INTO main.'+q(name)+' ('+expected.fields.map(f=>q(f.name)).join(',')+') VALUES ('+expected.fields.map(()=>'?').join(',')+')'+conflict)
+  this.insert=this.db.prepare('INSERT INTO main.'+q(name)+' ('+selected.map(q).join(',')+') VALUES ('+selected.map(()=>'?').join(',')+')'+conflict)
  }
  beginRead(name:string,expected:SqliteShape,condition?:MigrationCondition){
   const actual=sqliteShape(this.schema('main',[name]).objects[0])
@@ -115,6 +118,14 @@ export class SqliteMigrationWorkerEngine{
   const stmt=this.db.prepare('SELECT '+expected.fields.map(f=>q(f.name)).join(',')+' FROM main.'+q(name)+filter.where);stmt.setReadBigInts(true)
   this.readColumns=expected.fields.map(f=>f.name);this.iterator=stmt.iterate(...filter.parameters.map(v=>typeof v==='boolean'?BigInt(Number(v)):v))[Symbol.iterator]();this.held=undefined
  }
+ beginFileRead(name:string,columns:string[],filter?:BrowseFilter){
+  const meta=this.query('SELECT name,type FROM pragma_table_xinfo(?,?)',name,'main')
+  if(!columns.length||columns.some(c=>!meta.some(f=>f.name===c)))throw new Error('FILE_TRANSFER: 字段映射无效')
+  const compiled=compileMysqlFilter('main',name,filter||newBrowseFilter(),'sqlite')
+  const stmt=this.db.prepare('SELECT '+columns.map(q).join(',')+compiled.sql.slice('SELECT *'.length));stmt.setReadBigInts(true)
+  this.readColumns=columns;this.iterator=stmt.iterate(...compiled.parameters.map(v=>typeof v==='boolean'?BigInt(Number(v)):v))[Symbol.iterator]();this.held=undefined
+ }
+ fileFields(name:string){return this.query('SELECT name FROM pragma_table_xinfo(?,?)',name,'main').map(r=>String(r.name))}
  batch(){
   if(!this.iterator)return {rows:[],bytes:0,done:true}
   const rows:WireCell[][]=[];let bytes=0,done=false

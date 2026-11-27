@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { t } from '../i18n'
-import { sqlContext,sqlKeywords,sqlFunctions,clickHouseFunctions,sqliteFunctions,mongoSuggestions,redisSuggestions } from '../../shared/editor-completion'
+import { currentSqlStatement } from '../../shared/sql-statements'
+import { sqlContext,sqlKeywords,dialectFunctions,sqlFunctionArgs,mongoSuggestions,redisSuggestions } from '../../shared/editor-completion'
 import {mongoConstructors} from '../../shared/mongo-query-script'
 import {mongoCollectionSignatures,mongoCursorSignatures,type MongoSignature} from '../../shared/mongo-completion'
 import { preferences } from '../preferences'
@@ -25,6 +26,8 @@ const props = withDefaults(defineProps<{
   readonly?: boolean
   suggestions?: string[]
   tableSuggestions?: string[]
+  qualifiedSuggestions?:Record<string,string[]>
+  serverVersion?:string
   completionKind?: 'mongodb'|'redis'
   sqlDialect?: 'mysql'|'mariadb'|'sqlite'|'clickhouse'
 }>(), { language: 'sql', readonly: false, suggestions: () => [] })
@@ -148,9 +151,13 @@ onMounted(() => {
           const context=sqlContext(prefix)
           const quote=(name:string)=>props.sqlDialect==='clickhouse'?'"'+name.replaceAll('\\','\\\\').replaceAll('"','\\"')+'"':props.sqlDialect==='sqlite'?'"'+name.replaceAll('"','""')+'"':'\x60'+name.replaceAll('\x60','\x60\x60')+'\x60'
           add(props.tableSuggestions||[],kinds.Class,context==='table'?'0':'2',quote)
-          add(props.suggestions||[],kinds.Field,context==='field'?'0':'2',quote)
+          const qualifier=/([A-Za-z_][\w$]*)\.[\w$]*$/.exec(prefix)?.[1]
+          add(qualifier&&props.qualifiedSuggestions?.[qualifier]?props.qualifiedSuggestions[qualifier]!:props.suggestions||[],kinds.Field,context==='field'||qualifier?'0':'2',quote)
           add(sqlKeywords,kinds.Keyword,'3')
-          add([...sqlFunctions,...(props.sqlDialect==='clickhouse'?clickHouseFunctions:props.sqlDialect==='sqlite'?sqliteFunctions:[])],kinds.Function,'4',name=>name+'()')
+          for(const name of dialectFunctions(props.sqlDialect,props.serverVersion)){
+           const args=sqlFunctionArgs(name),snippet=name+'('+args.map((a,i)=>'$'+'{'+(i+1)+':'+a+'}').join(', ')+')$0'
+           entries.push({label:{label:name,detail:'('+args.join(', ')+')'},filterText:name,kind:kinds.Function,insertText:snippet,insertTextRules:monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,sortText:'4'+name,range})
+          }
         }else if(language==='dbex-mongo-script'){
           const fullPrefix=model.getValueInRange(new monaco.Range(1,1,position.lineNumber,position.column))
           const collectionPrefix=/\bdb\.([\w$]*)$/.exec(fullPrefix)
@@ -221,6 +228,7 @@ defineExpose({
     const selection = editor?.getSelection()
     return selection && !selection.isEmpty() ? editor?.getModel()?.getValueInRange(selection) || '' : props.modelValue
   },
+  currentStatement:()=>{const model=editor?.getModel(),position=editor?.getPosition();return model&&position?currentSqlStatement(model.getValue(),model.getOffsetAt(position),props.sqlDialect):props.modelValue},
   focus: () => editor?.focus(),
 })
 </script>

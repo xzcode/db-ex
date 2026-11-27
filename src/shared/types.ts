@@ -231,6 +231,10 @@ export interface NativeCliSnapshot {output:string;status:string;running:boolean;
 export interface DbExAPI {
   readonly windowChrome:import('./window-chrome').WindowChrome
   readonly workspaceWindowId:string
+  pickDataFile(id:string,format:import('./file-transfer').DataFileFormat,delimiter:string):Promise<import('./file-transfer').FilePreview|null>
+  startFileTransfer(id:string,request:import('./file-transfer').FileTransferRequest):Promise<import('./file-transfer').FileTransferJob|null>
+  getFileTransferJob():Promise<import('./file-transfer').FileTransferJob|null>
+  cancelFileTransfer(id:string):Promise<void>
   migrationCatalog(id:string,database?:string):Promise<import('./migration').MigrationCatalog>
   previewMigration(request:import('./migration').MigrationRequest):Promise<import('./migration').MigrationPlan>
   runMigration(planId:string,steps:string[]):Promise<import('./migration').MigrationJob>
@@ -274,12 +278,17 @@ export interface DbExAPI {
   preview(sessionId: string, database: string, entity: string, offset?: number): Promise<DataPreview>
   redisKeys(sessionId: string, cursor?: string, pattern?: string): Promise<DataPreview>
   redisValue(sessionId: string, key: string): Promise<DataPreview>
+  executeQuery(id:string,operation:DatabaseOperation):Promise<OperationResult>
+  cancelQuery(id:string):Promise<boolean>
   execute(sessionId: string, operation: DatabaseOperation): Promise<OperationResult>
   clickhouseTransfer(sessionId:string,input:ClickHouseTransfer):Promise<{bytes:number}|null>
   validateMongoDocument(document: string, original?: string): Promise<void>
   copyText(value: string): Promise<void>
   cancel(sessionId: string): Promise<void>
   setWriteAccess(sessionId: string, enabled: boolean): Promise<SessionInfo>
+  listBrowseProfiles(id:string,database:string,entity:string):Promise<import('./browse-profile').BrowseProfile[]>
+  saveBrowseProfile(id:string,database:string,entity:string,draft:import('./browse-profile').BrowseProfileDraft,profileId?:string):Promise<import('./browse-profile').BrowseProfile>
+  deleteBrowseProfile(id:string,database:string,entity:string,profileId:string):Promise<void>
   listSavedQueries(sessionId:string,database:string,mode:import('./saved-query').QueryMode):Promise<import('./saved-query').QuerySummary[]>
   getSavedQuery(sessionId:string,database:string,id:string):Promise<import('./saved-query').SavedQuery>
   saveQueryObject(sessionId:string,database:string,input:import('./saved-query').QuerySave):Promise<import('./saved-query').SavedQuery>

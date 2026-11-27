@@ -15,8 +15,9 @@ import {formatMongoDocument,parseMongoDocumentEditor,mongoDocumentDraft} from '.
 import {parseBsonDocument} from '../../shared/bson-display'
 import {compileMongoScript,mongoPageOperation,legacyMongoScript,type MongoScriptPlan} from '../../shared/mongo-query-script'
 import {formatQuery} from '../../shared/query-format'
+import QueryParameterDialog from './QueryParameterDialog.vue'
 import {useQueryRecovery} from '../composables/useQueryRecovery'
-import {cachedMetadata,rememberMetadata,metadataFields,metadataKey,inferMetadataTable} from '../metadata-completion'
+import {cachedMetadata,rememberMetadata,metadataFields,metadataKey,inferMetadataTable,inferMetadataReferences} from '../metadata-completion'
 const props=defineProps<{session:SessionInfo;node:ExplorerNode;active:boolean;tableSuggestions?:string[]}>()
 const emit=defineEmits<{saved:[value:QuerySummary];busyChange:[value:boolean];dirtyChange:[value:boolean];updateSession:[session:SessionInfo];disconnect:[]}>()
 const database=props.node.database||''
@@ -28,10 +29,12 @@ const layout=ref<QueryLayout>('bottom')
 const executedQuery=ref(''),runId=ref(0),visited=ref<number[]>([])
 const resultEdit=ref<{mode:'insert'|'update';original?:string;index:number;entity:string;text:string;syntax:'typed'|'ejson';error:string}>()
 const result=ref<OperationResult>(),offset=ref(0),limit=ref<number>(pageSizeFor(preferences.value,props.session.kind))
+const disconnectRequired=ref(false)
 const busy=ref(false),running=ref(false),loaded=ref(false),error=ref(''),notice=ref('')
 const targets=ref<ExplorerNode[]>([]),legacy=ref<QuerySnippet[]>([]),legacySelected=ref('')
 const baseline=ref('')
 const editor=ref<InstanceType<typeof CodeEditor>>()
+const parameterDialog=ref(false)
 const saveAsOpen=ref(false),copyName=ref('')
 let disposed=false
 const applied=shallowRef<DatabaseOperation>()
@@ -39,7 +42,10 @@ const appliedMongoPlan=shallowRef<MongoScriptPlan>()
 const appliedPageSize=ref(100)
 const metadataColumns=ref<string[]>([]),metadataTables=ref<string[]>([])
 const sqlTables=computed(()=>[...new Set([...metadataTables.value,...(props.tableSuggestions||[])])])
-const selectedMetadataTable=computed(()=>inferMetadataTable(sql.value,sqlTables.value,database))
+const metadataReferences=computed(()=>inferMetadataReferences(sql.value,sqlTables.value,database))
+const selectedMetadataTable=computed(()=>inferMetadataTable(sql.value,sqlTables.value,database)||metadataReferences.value[0]?.table||'')
+const qualifiedFields=ref<Record<string,string[]>>({})
+const metadataScope=computed(()=>JSON.stringify(metadataReferences.value))
 let metadataTimer:ReturnType<typeof setTimeout>|undefined
 async function refreshMetadataTables(){
  if(mode!=='sql'||props.session.kind==='redis')return
@@ -47,26 +53,53 @@ async function refreshMetadataTables(){
  metadataTables.value=objects.filter(n=>n.kind==='table'||n.kind==='view').map(n=>n.entity||n.label)
 }
 async function loadMetadata(force=false){
- const table=selectedMetadataTable.value
- if(!table||mode!=='sql'||busy.value||!loaded.value||!props.active)return
+ if(!metadataReferences.value.length||mode!=='sql'||busy.value||!loaded.value||!props.active)return
  await task(async()=>{
-  const key=metadataKey(props.session.id,database,table)
-  const cached=force?undefined:cachedMetadata(key)
-  if(cached){metadataColumns.value=cached;return}
+  const refs=[...metadataReferences.value],key=metadataScope.value,fields:Record<string,string[]>=Object.create(null)
   if(force)await refreshMetadataTables()
-  if(!metadataTables.value.includes(table)&&!props.tableSuggestions?.includes(table)){metadataColumns.value=[];return}
-  const result=await window.dbex.execute(props.session.id,{action:clickhouse?'clickhouse.structure':'mysql.structure',database,entity:table})
-  const fields=rememberMetadata(key,metadataFields(props.session.kind,result))
-  if(selectedMetadataTable.value===table)metadataColumns.value=fields
+  for(const ref of refs){
+   if(disposed||metadataScope.value!==key)break
+   const id=metadataKey(props.session.id,ref.database,ref.table)
+   let columns=force?undefined:cachedMetadata(id)
+   if(!columns){
+    try{const response=await window.dbex.execute(props.session.id,{action:clickhouse?'clickhouse.structure':'mysql.structure',database:ref.database,entity:ref.table});columns=rememberMetadata(id,metadataFields(props.session.kind,response))}
+    catch{continue}
+   }
+   fields[ref.alias]=columns;fields[ref.table]=columns
+  }
+  if(metadataScope.value===key){qualifiedFields.value=fields;metadataColumns.value=[...new Set(Object.values(fields).flat())]}
  })
 }
 const sqlFields=computed(()=>[...new Set([...metadataColumns.value,...(result.value?.columns||[])])])
-watch([selectedMetadataTable,loaded,()=>props.active],()=>{
+watch([metadataScope,loaded,()=>props.active],()=>{
  if(metadataTimer)clearTimeout(metadataTimer)
- metadataColumns.value=selectedMetadataTable.value?cachedMetadata(metadataKey(props.session.id,database,selectedMetadataTable.value))||[]:[]
- if(selectedMetadataTable.value&&preferences.value.completion&&props.active&&loaded.value&&!metadataColumns.value.length)metadataTimer=setTimeout(()=>{void loadMetadata()},700)
+ qualifiedFields.value=Object.fromEntries(metadataReferences.value.flatMap(ref=>{const fields=cachedMetadata(metadataKey(props.session.id,ref.database,ref.table));return fields?[[ref.alias,fields],[ref.table,fields]]:[]}));metadataColumns.value=[...new Set(Object.values(qualifiedFields.value).flat())]
+ if(selectedMetadataTable.value&&preferences.value.completion&&props.active&&loaded.value&&metadataReferences.value.some(ref=>!cachedMetadata(metadataKey(props.session.id,ref.database,ref.table))))metadataTimer=setTimeout(()=>{void loadMetadata()},700)
 })
 const mongoFields=ref<string[]>([])
+function collectMongoFields(result:OperationResult){
+ const found=new Set(result.columns||[])
+ function walk(value:unknown,prefix='',depth=0){
+  if(!value||typeof value!=='object'||Array.isArray(value)||depth>5||found.size>=500)return
+  for(const [key,child] of Object.entries(value)){
+   if(key.startsWith('$'))continue
+   const field=prefix?prefix+'.'+key:key;found.add(field)
+   if(found.size>=500)break
+   walk(child,field,depth+1)
+  }
+ }
+ for(const text of result.documents||[])try{walk(JSON.parse(text))}catch{}
+ return [...found]
+}
+async function sampleMongoFields(){
+ if(mode==='sql'||busy.value)return
+ await task(async()=>{
+  const plan=compileMongoScript(script.value,database),entity='entity'in plan.operation?plan.operation.entity:undefined
+  if(!entity||!targets.value.some(n=>(n.entity||n.label)===entity))throw Error('请先选择查询集合')
+  const result=await window.dbex.executeQuery(props.session.id,{action:'mongo.find',database,entity,filter:'{}',projection:'{}',sort:'{}',limit:20,offset:0})
+  mongoCollection.value=entity;mongoFields.value=collectMongoFields(result)
+ })
+}
 const mongoCollection=ref('')
 const fieldSuggestions=computed(()=>{
  if(mode==='sql')return result.value?.columns||[]
@@ -105,7 +138,7 @@ function addResult(){
 }
 async function refreshMongoResult(){
  if(applied.value?.action!=='mongo.find')return
- const next=await window.dbex.execute(props.session.id,applied.value)
+ const next=await window.dbex.executeQuery(props.session.id,applied.value)
  if(next.disconnected){emit('disconnect');return}
  result.value=capMongoPage(next,appliedMongoPlan.value,applied.value);runId.value++;notice.value=next.message||'操作已完成'
 }
@@ -118,7 +151,7 @@ async function saveResultEdit(){
    const document=d.syntax==='typed'?parseMongoDocumentEditor(d.text):JSON.stringify(JSON.parse(d.text))
    await window.dbex.validateMongoDocument(document,d.original)
    const op:DatabaseOperation=d.mode==='update'?{action:'mongo.replace',database,entity:d.entity,original:d.original!,document,confirmed:true}:{action:'mongo.insert',database,entity:d.entity,documents:[document],confirmed:true}
-   const response=await window.dbex.execute(props.session.id,op)
+   const response=await window.dbex.executeQuery(props.session.id,op)
    if(response.disconnected){emit('disconnect');return}
    resultEdit.value=undefined;result.value=undefined;notice.value='操作已完成';try{await refreshMongoResult()}catch(e){fail(e)}
   }catch(e){d.error=e instanceof Error?e.message:String(e)}
@@ -143,7 +176,7 @@ function page(direction:'first'|'prev'|'next'|'refresh'){
  else if(direction==='refresh'&&canRefresh.value){
   const op=applied.value!
   void task(async()=>{
-   const response=await window.dbex.execute(props.session.id,op)
+   const response=await window.dbex.executeQuery(props.session.id,op)
    if(response.disconnected){emit('disconnect');return}
    result.value=capMongoPage(response,appliedMongoPlan.value,op);runId.value++;notice.value=response.message||''
   })
@@ -212,8 +245,9 @@ function shortcut(event:KeyboardEvent){
 }
 onMounted(()=>window.addEventListener('keydown',shortcut,true))
 onBeforeUnmount(()=>{disposed=true;if(metadataTimer)clearTimeout(metadataTimer);window.removeEventListener('keydown',shortcut,true)})
-async function execute(paging?:number,selection=false){
+async function execute(paging?:number,selection=false,current=false){
  if(!loaded.value||busy.value||resultEdit.value)return
+ if(!Number.isInteger(limit.value)||limit.value<1||limit.value>500){fail('INVALID_INPUT: 每页数量必须在 1 至 500 之间');return}
  showResults()
  await task(async()=>{
   let op:DatabaseOperation
@@ -226,7 +260,7 @@ async function execute(paging?:number,selection=false){
    const params:unknown=JSON.parse(parameters.value)
    if(!clickhouse&&(!Array.isArray(params)||params.length>1000||params.some(v=>v!==null&&!['string','number','boolean'].includes(typeof v)||typeof v==='number'&&!Number.isFinite(v))))throw new Error('SQL 参数需要 JSON 数组，仅支持字符串、数字、布尔或 null')
    if(clickhouse&&(!params||typeof params!=='object'||Array.isArray(params)))throw new Error('ClickHouse 参数需要 JSON 对象')
-   const text=selection?editor.value?.selection()||sql.value:sql.value
+   const text=current?editor.value?.currentStatement()||sql.value:selection?editor.value?.selection()||sql.value:sql.value
    executedText=text
    if(!text.trim())throw new Error('SQL_POLICY: SQL 不能为空')
    op=clickhouse?{action:'clickhouse.query',database,sql:text,parameters:params as Record<string,SqlValue>,limit:limit.value,confirmed:props.session.writable}:{action:'mysql.query',database,sql:text,parameters:params as SqlValue[],limit:limit.value,offset:0,confirmed:props.session.writable}
@@ -236,14 +270,14 @@ async function execute(paging?:number,selection=false){
    op=nextPlan.operation
    if('confirmed'in op&&!props.session.writable)throw new Error('READ_ONLY: 请先启用当前会话的写入权限')
   }
-  running.value=true
+  running.value=true;disconnectRequired.value=false
   let next:OperationResult
-  try{next=await window.dbex.execute(props.session.id,op)}finally{running.value=false}
+  try{next=await window.dbex.executeQuery(props.session.id,op)}finally{running.value=false;disconnectRequired.value=false}
   if(disposed)return
   appliedMongoPlan.value=nextPlan
   if(paging===undefined)appliedPageSize.value=limit.value
   next=capMongoPage(next,appliedMongoPlan.value,op)
-  if(op.action==='mongo.find'||op.action==='mongo.aggregate'){mongoFields.value=next.columns;mongoCollection.value=op.entity}
+  if(op.action==='mongo.find'||op.action==='mongo.aggregate'){mongoFields.value=collectMongoFields(next);mongoCollection.value=op.entity}
   const nextOffset='offset'in op?op.offset||0:0
   if(paging===undefined){visited.value=[nextOffset];executedQuery.value=executedText}
   else visited.value=[...new Set([...visited.value,nextOffset])].sort((a,b)=>a-b)
@@ -263,7 +297,9 @@ async function beautify(){
 }
 async function toggleWrite(){await task(async()=>emit('updateSession',await window.dbex.setWriteAccess(props.session.id,!props.session.writable)))}
 async function transaction(action:'mysql.begin'|'mysql.commit'|'mysql.rollback'){await task(async()=>{const next=await window.dbex.execute(props.session.id,{action,confirmed:true});emit('updateSession',{...props.session,transaction:!!next.transaction});notice.value=next.message||''})}
-async function cancel(){try{await window.dbex.cancel(props.session.id);emit('disconnect')}catch(reason){fail(reason)}}
+async function cancel(){
+ try{if(disconnectRequired.value){await window.dbex.cancel(props.session.id);emit('disconnect');return}if(!await window.dbex.cancelQuery(props.session.id)){disconnectRequired.value=true;notice.value='当前操作无法独立停止；再次选择取消并断开将关闭会话。'}}catch(reason){fail(reason)}
+}
 async function exportQuery(format:'json'|'sql'){if(!currentId.value)return;await task(async()=>{if(await window.dbex.exportSavedQuery(props.session.id,database,currentId.value!,format))notice.value='操作已完成'})}
 </script>
 <template>
@@ -283,16 +319,16 @@ async function exportQuery(format:'json'|'sql'){if(!currentId.value)return;await
   <div class="query-object-fields">
    <label class="field"><span>{{ t('名称') }}</span><input v-model="name" :aria-label="t('名称')" maxlength="100" :disabled="busy||!loaded" :placeholder="t('未命名查询')" /></label>
 
-   <label class="field"><span>{{ t('每页') }}</span><select v-model.number="limit" :disabled="busy"><option v-for="n in [100,200,500]" :key="n" :value="n">{{ n }}</option></select></label>
+   <label class="field"><span>{{ t('每页') }}</span><input v-model.number="limit" type="number" min="1" max="500" :aria-label="t('每页')" :disabled="busy"/></label>
   </div>
   <div class="editor-toolbar">
    <button class="btn primary small" :disabled="busy||!loaded" @click="execute(undefined,true)">{{ t('运行选中 / 全部') }}</button>
-   <button v-if="running" class="btn secondary small" @click="cancel">{{ t('取消并断开') }}</button>
+   <button v-if="mode==='sql'" class="btn secondary small" :disabled="busy||!loaded" @click="execute(undefined,false,true)">{{t('运行当前语句')}}</button><button v-if="running" class="btn secondary small" @click="cancel">{{t(disconnectRequired?'取消并断开':'停止查询')}}</button>
    <span class="toolbar-spacer"></span>
    <template v-if="mode==='sql'&&!clickhouse"><button class="btn secondary small" :disabled="busy||!session.writable||session.transaction" @click="transaction('mysql.begin')">{{ t('开始事务') }}</button><button class="btn secondary small" :disabled="busy||!session.transaction" @click="transaction('mysql.commit')">{{ t('提交') }}</button><button class="btn secondary small" :disabled="busy||!session.transaction" @click="transaction('mysql.rollback')">{{ t('回滚') }}</button></template>
    <span class="query-layout-buttons">
    <span v-if="mode==='sql'&&selectedMetadataTable" class="muted-text">{{t('字段补全来源')}}: {{selectedMetadataTable}}</span>
-   <button v-if="mode==='sql'" class="btn secondary small" :disabled="busy||!selectedMetadataTable" @click="loadMetadata(true)">{{t('刷新补全')}}</button>
+   <button v-if="mode==='sql'" class="btn secondary small" :disabled="busy||!selectedMetadataTable" @click="loadMetadata(true)">{{t('刷新补全')}}</button><button v-else class="btn secondary small" :disabled="busy||!loaded" @click="sampleMongoFields">{{t('刷新字段样本')}}</button>
 
    <button v-for="item in [{id:'bottom',label:'结果在下方',symbol:'⊟'},{id:'right',label:'结果在右侧',symbol:'◧'},{id:'editor',label:'仅编辑器',symbol:'□'},{id:'result',label:'仅结果集',symbol:'▣'}]" :key="item.id" type="button" :class="['btn','secondary','small',{selected:layout===item.id}]" :aria-label="t(item.label)" :title="t(item.label)" @click="setLayout(item.id as QueryLayout)">{{item.symbol}}</button></span>
   </div>
@@ -300,13 +336,14 @@ async function exportQuery(format:'json'|'sql'){if(!currentId.value)return;await
   <QuerySplit v-model:layout="layout" :active="active">
    <template #editor>
     <template v-if="mode==='sql'">
-     <div class="query-editor"><CodeEditor ref="editor" v-model="sql" language="sql" :sql-dialect="session.kind==='mongodb'||session.kind==='redis'?undefined:session.kind" :readonly="running||!loaded" :suggestions="sqlFields" :table-suggestions="sqlTables" @execute="execute(undefined,true)" /></div>
-     <label class="parameter-line">{{ t('参数') }}<input v-model="parameters" :aria-label="clickhouse?t('ClickHouse 参数 JSON 对象'):t('SQL 参数 JSON 数组')" spellcheck="false" :disabled="busy||!loaded" /></label>
+     <div class="query-editor"><CodeEditor ref="editor" v-model="sql" language="sql" :sql-dialect="session.kind==='mongodb'||session.kind==='redis'?undefined:session.kind" :readonly="running||!loaded" :suggestions="sqlFields" :qualified-suggestions="qualifiedFields" :server-version="session.serverVersion" :table-suggestions="sqlTables" @execute="execute(undefined,true)" /></div>
+     <label class="parameter-line">{{ t('参数') }}<input v-model="parameters" :aria-label="clickhouse?t('ClickHouse 参数 JSON 对象'):t('SQL 参数 JSON 数组')" spellcheck="false" :disabled="busy||!loaded" /><button class="btn secondary small" :disabled="busy||!loaded" @click="parameterDialog=true">{{t('参数编辑器')}}</button></label>
     </template>
     <div v-else class="query-editor native-mongo-editor"><CodeEditor ref="editor" v-model="script" language="dbex-mongo-script" completion-kind="mongodb" :readonly="busy||!loaded" :table-suggestions="targets.map(item=>item.entity||item.label)" :suggestions="fieldSuggestions" @execute="execute(undefined,true)" /></div>
    </template>
    <template #result><QueryResultPanel :result="result" :kind="session.kind" :offset="offset" :query-text="executedQuery" :busy="busy" :active="active" :error="error" :notice="notice" :can-back="!clickhouse&&canPageBack" :can-first="!clickhouse&&canPageBack" :can-next="!clickhouse&&result?.nextOffset!==undefined" :can-refresh="canRefresh" :editable="canEditResult" :can-add="canAddResult" :run-id="runId" :source-label="sourceLabel" @page="page" @edit="editResult" @add="addResult" @remove="removeResult" @draft="draftResult" @collapse="setLayout('editor')"/></template>
   </QuerySplit>
+  <QueryParameterDialog v-if="parameterDialog&&active" :model-value="parameters" :named="clickhouse" @close="parameterDialog=false" @apply="value=>{parameters=value;parameterDialog=false}"/>
   <Teleport to="body"><div v-if="resultEdit&&active" class="modal-backdrop"><section class="dialog query-result-edit" role="dialog" :aria-label="t(resultEdit.mode==='insert'?'新增文档':'编辑文档')">
    <header class="dialog-header"><div><span class="eyebrow">{{sourceLabel}} / {{resultEdit.entity}}</span><h2>{{t(resultEdit.mode==='insert'?'新增文档':'编辑文档')}}</h2></div><button class="icon-button" :disabled="busy" @click="resultEdit=undefined">×</button></header>
    <p v-if="resultEdit.error" class="inline-message error">{{localize(resultEdit.error)}}</p>
