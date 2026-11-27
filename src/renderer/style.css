@@ -653,7 +653,7 @@ html[dir=rtl] .tree-chevron:not(.expanded) { transform: rotate(180deg); }
  --accent:#93b8ff;--accent-bg:#43536d;--accent-button:#4269ab;--selected:#3b4c68;
  --danger:#ffa2a2;--danger-bg:#4b3034;--warning:#e8c58a;--success:#9bd8b6;--shadow:0 18px 70px #0008;
  --sidebar-bg:#2d3034;--chrome-bg:#3b3e44;--tabs-bg:#35383e;--toolbar-bg:#33353a;
- --header-bg:#3d4046;--inspector-bg:#27292e;--menu-bg:#3a3d43;--editor-bg:#292b2f;
+ --header-bg:#3d4046;--inspector-bg:#27292e;--menu-bg:#3a3d43;--editor-bg:#24262b;
 }
 :root[data-theme='black'] {
  color-scheme:dark;

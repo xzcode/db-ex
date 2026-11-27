@@ -63,9 +63,12 @@ the unfinished M12 migration work. Do not renumber M13 data synchronization.
 - Focused policy/i18n/native-tools/preferences tests: 26 passed.
 - Initial complete browser suite was interrupted by local resource pressure
   after 31 passing cases; do not claim a full pass based on those results.
-  Four additional browser regression cases cover global inspector/catalog
-  preview, width persistence and shared object menu, category menus and
-  explicit destructive confirmation, and three new themes.
+  All four additional browser regression cases passed in focused runs:
+  global inspector/catalog preview, actual pointer drag and keyboard column
+  resizing with persisted widths and shared object menu, category menus and
+  explicit destructive confirmation, and three new themes. The final gray
+  editor surface was separated from the content background and the affected
+  resize/theme cases passed together (2/2).
 - Final exact-commit integrated UI, database and packaged desktop CI are
   mandatory before merging or publishing a new version.
 
