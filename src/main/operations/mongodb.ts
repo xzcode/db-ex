@@ -3,7 +3,7 @@ import type { MongoOperation, OperationResult } from '../../shared/types'
 import type { BsonTypeBranch } from '../../shared/bson-types'
 import { describeBsonDocument, newTypeBudget } from './bson-metadata'
 import { metric, metrics, type ObjectInspection } from '../../shared/object-inspection'
-import { validateDatabaseName, validateInitialCollection } from '../../shared/database-admin'
+import { validateDatabaseName, validateInitialCollection,validateManagedCollection } from '../../shared/database-admin'
 import { mongoDefinition } from './mongo-definition'
 import { boundedText, checkAborted, databaseError, displayCell, emptyResult, MAX_BYTES, MAX_ROWS, MAX_VALUE_BYTES, page, plainObject, requireWrite, resourceName, TIMEOUT_MS, type OperationContext } from './common'
 
@@ -156,6 +156,34 @@ export class MongoOperations {
       }
       await db.dropDatabase({ timeoutMS: TIMEOUT_MS })
       return emptyResult('数据库已删除')
+    }
+    if(operation.action==='mongo.createCollection'||operation.action==='mongo.renameCollection'||operation.action==='mongo.dropCollection'||operation.action==='mongo.clearCollection'){
+      requireWrite(context)
+      validateDatabaseName('mongodb',database)
+      const entity=validateManagedCollection(operation.entity),db=this.client.db(database)
+      const current=(await db.listCollections({name:entity},{nameOnly:false,batchSize:1,timeoutMS:TIMEOUT_MS,signal}).toArray())[0]
+      checkAborted(signal)
+      if(operation.action==='mongo.createCollection'){
+        if(current)throw new Error('INVALID_INPUT: 集合名称已存在')
+        await db.createCollection(entity,{timeoutMS:TIMEOUT_MS})
+        return emptyResult('集合已创建')
+      }
+      if(!current||current.type!=='collection'||current.options?.capped===true||current.options?.timeseries||current.options?.clusteredIndex)throw new Error('INVALID_DATABASE: 不支持此集合的通用维护')
+      const collection=db.collection(entity)
+      if(operation.action==='mongo.renameCollection'){
+        const next=validateManagedCollection(operation.newName)
+        if(next===entity||(await db.listCollections({name:next},{nameOnly:true,timeoutMS:TIMEOUT_MS,signal}).toArray()).length)throw new Error('INVALID_INPUT: 集合名称已存在')
+        checkAborted(signal)
+        await collection.rename(next,{dropTarget:false,timeoutMS:TIMEOUT_MS})
+        return emptyResult('集合已重命名')
+      }
+      if(operation.action==='mongo.dropCollection'){
+        await collection.drop({timeoutMS:TIMEOUT_MS})
+        return emptyResult('集合已删除')
+      }
+      const result=await collection.deleteMany({}, {timeoutMS:TIMEOUT_MS})
+      if(!result.acknowledged)throw new Error('DATABASE_ERROR: MongoDB')
+      return emptyResult('集合已清空',result.deletedCount)
     }
     const entity = resourceName(operation.entity, '集合')
     const collection = this.client.db(database).collection(entity)

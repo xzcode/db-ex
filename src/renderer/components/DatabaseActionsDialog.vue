@@ -6,7 +6,7 @@ import { validateDatabaseName, validateInitialCollection } from '../../shared/da
 import { newBrowseFilter } from '../../shared/browse-filter'
 import { sqlRowsFromFile, csvFromRows } from '../data-format'
 type DatabaseActionMode = 'create'|'drop'|'search'|'import'|'export'|'schema'
-const props=defineProps<{session:SessionInfo;database:string;mode:DatabaseActionMode;existing:string[]}>()
+const props=defineProps<{session:SessionInfo;database:string;mode:DatabaseActionMode;existing:string[];initialEntity?:string}>()
 const emit=defineEmits<{close:[];changed:[database:string];select:[node:ExplorerNode];session:[session:SessionInfo]}>()
 const mongo=computed(()=>props.session.kind==='mongodb')
 const name=ref(''), initial=ref(''), confirmation=ref('')
@@ -41,6 +41,7 @@ async function loadObjects(){
    const views=mongo.value&&props.mode!=='import'?await window.dbex.children(props.session.id,props.database,'views'):[]
    if(disposed)return
    objects.value=[...values,...views].filter(item=>item.entity&&(props.mode!=='import'||!item.readOnly))
+   if(props.initialEntity)entity.value=objects.value.find(item=>item.entity===props.initialEntity)?.id||''
  })
 }
 async function unlock(){

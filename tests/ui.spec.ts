@@ -33,6 +33,7 @@ async function installBridge(page: Page) {
       workspaceWindowId:localStorage.getItem('mock.workspace-window')||'primary',
       async newWorkspaceWindow(){calls.push({action:'newWorkspaceWindow'});return true},
       async restoreWorkspaceWindows(restore:boolean){calls.push({action:'restoreWorkspaceWindows',restore})},
+      async runNativeTool(id:string,task:string,database:string,entity?:string){calls.push({action:'runNativeTool',id,task,database,entity});return true},
       async startNativeCli(id:string,database:string){calls.push({action:'startNativeCli',id,database})},
       async readNativeCli(){return {output:'fixture SQL result',status:'ready',running:false,closed:false}},
       async sendNativeCli(id:string,sql:string){calls.push({action:'sendNativeCli',id,sql})},
@@ -105,7 +106,7 @@ async function installBridge(page: Page) {
         if (op.action === 'mysql.commit' || op.action === 'mysql.rollback') return { columns: [], rows: [], transaction: false }
         if (op.action === 'mongo.find' || op.action === 'mongo.aggregate') return { columns: ['_id', 'name', 'createdAt', 'score', 'nullable', 'nested'], rows: [{ _id: '64b000000000000000000001', name: 'Ada', createdAt: 'date', score: '7', nullable: 'NULL', nested: '{...}' }, { _id: '64b000000000000000000002', name: 'Grace', score: '7', nullable: 'NULL' }, { _id: '64b000000000000000000003', name: 'Lin', score: '7' }], documents: [document, secondDocument, thirdDocument], bsonTypes: mongoMetadata, durationMs: 3, nextOffset: op.action === 'mongo.find' && (op.offset || 0) < 400 ? (op.offset || 0) + op.limit : undefined }
         if (op.action === 'mysql.inspect') return { columns: [], rows: [], inspection: { kind: 'table', metrics: [{ label: '存储引擎', value: 'InnoDB' }, { label: '记录数（估算）', value: '1234', format: 'estimate' }, { label: '数据大小', value: '32768', format: 'bytes' }], definition: 'CREATE TABLE users (id BIGINT PRIMARY KEY, name VARCHAR(255));' } }
-        if (op.action === 'mongo.inspect') return { columns: [], rows: [], inspection: { kind: 'collection', metrics: [{ label: '文档数', value: '3' }, { label: '已固定', value: 'false', format: 'boolean' }, { label: '存储大小', value: '32768', format: 'bytes' }], definition: 'db.getSiblingDB("app").createCollection("users");\n\ndb.getSiblingDB("app").getCollection("users").createIndex({ "score": Int32("1") }, { "name": "score_1" });' } }
+        if (op.action === 'mongo.inspect') return { columns: [], rows: [], inspection: { kind: 'collection', metrics: [{ label: '文档数', value: '3' }, { label: '已固定', value: 'false', format: 'boolean' }, { label: '存储大小', value: '32768', format: 'bytes' }], definition: 'db.getSiblingDB("app").createCollection('+JSON.stringify(op.entity)+');\n\ndb.getSiblingDB("app").getCollection('+JSON.stringify(op.entity)+').createIndex({ "score": Int32("1") }, { "name": "score_1" });' } }
         if (op.action === 'redis.inspect') return { columns: [], rows: [], inspection: { kind: 'key', metrics: [{ label: '类型', value: 'string' }, { label: 'TTL（秒）', value: '-1' }, { label: '内存占用', value: '72', format: 'bytes' }], definition: JSON.stringify(['TYPE', op.key]) + '\n' + JSON.stringify(['TTL', op.key]), definitionNote: 'Redis 没有 DDL；以下是只读 Key 检查命令，不是数据备份。' } }
         if (op.action === 'mongo.indexes') return grid([{ name: '_id_', key: '{"_id":1}' }])
         if (op.action === 'redis.nodes') return grid([{ id: '127.0.0.1:6379', host: '127.0.0.1', port: '6379', role: 'master' }, { id: '127.0.0.2:6379', host: '127.0.0.2', port: '6379', role: 'master' }])
@@ -1086,11 +1087,11 @@ test('macOS integrated title bar reserves native controls and keeps preferences 
  await prefs.locator('[data-preference="theme"]').selectOption('light')
  await prefs.locator('[data-action="save-preferences"]').click()
  await expect(root).toHaveAttribute('data-theme','light')
- await expect(bar).toHaveCSS('background-color','rgb(255, 255, 255)')
+ await expect(bar).toHaveCSS('background-color','rgb(232, 237, 244)')
  await settings.click()
  await prefs.locator('[data-preference="theme"]').selectOption('dark')
  await prefs.locator('[data-action="save-preferences"]').click()
- await expect(bar).toHaveCSS('background-color','rgb(29, 34, 43)')
+ await expect(bar).toHaveCSS('background-color','rgb(36, 43, 54)')
  // Physical left reservation must remain valid when locale direction is RTL.
  await page.evaluate(()=>document.documentElement.dir='rtl')
  await expect(bar).toHaveCSS('direction','ltr')
@@ -1398,4 +1399,111 @@ test('shared preferences update other workspaces without reloading',async({page}
  await expect(page.locator('html')).toHaveAttribute('lang','ar')
  await expect(page.locator('html')).toHaveAttribute('dir','rtl')
  await expect(page.locator('html')).toHaveAttribute('data-theme','light')
+})
+
+
+test('UI refinement: catalog selection previews metadata and DDL without opening a data tab; inspector follows global state',async({page})=>{
+ await page.evaluate(()=>{(window as any).__dbexCatalogFixture=true})
+ await connect(page,'Mongo Local')
+ await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ await page.locator('[data-object-category="collections"]').click()
+ const list=page.locator('.object-list-panel:visible'),panel=page.locator('.object-inspector:visible'),tabs=page.locator('.object-tabbar:visible')
+ await expect(panel).toBeVisible()
+ await list.locator('tbody tr').filter({hasText:'audit'}).click()
+ await expect(panel.locator('.inspector-object-header strong')).toHaveText('audit')
+ await expect(panel.locator('.object-metrics')).toContainText('文档数')
+ await expect(tabs.locator('.object-tab')).toHaveCount(0)
+ await panel.getByRole('button',{name:'DDL',exact:true}).click()
+ await expect(panel.locator('.inspector-definition')).toContainText('createCollection')
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((c:any)=>c.action==='mongo.inspect').at(-1)?.entity)).toBe('audit')
+ await list.locator('tbody tr').filter({hasText:'users'}).click()
+ await expect(panel.locator('.inspector-object-header strong')).toHaveText('users')
+ await expect(panel.locator('.inspector-definition')).toContainText('createCollection')
+ await panel.getByRole('button',{name:'关闭',exact:true}).click()
+ await expect(panel).toHaveCount(0)
+ await list.locator('tbody tr').filter({hasText:'audit'}).dblclick()
+ await expect(page.locator('.workbench:visible .data-table')).toContainText('Ada')
+ await expect(panel).toHaveCount(0)
+ await page.locator('.workbench:visible').getByRole('button',{name:'对象信息',exact:true}).click()
+ await expect(panel.locator('.object-metrics')).toContainText('文档数')
+ await tabs.getByRole('button',{name:'对象',exact:true}).click()
+ await list.locator('tbody tr').filter({hasText:'users'}).dblclick()
+ await expect(panel.locator('.inspector-object-header strong')).toHaveText('users')
+ await expect(panel).toBeVisible()
+ await expect(page.locator('.workbench:visible .data-table th').last()).toHaveCSS('user-select','none')
+ await expect(page.locator('.resource-node[data-object-category="collections"]')).toHaveCSS('user-select','none')
+ await panel.getByRole('button',{name:'关闭',exact:true}).click()
+ await page.reload()
+ await connect(page,'Mongo Local')
+ await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ await page.locator('[data-object-category="collections"]').click()
+ await expect(panel).toHaveCount(0)
+})
+test('UI refinement: catalog columns resize and remember width; object menu is shared by list and tree',async({page})=>{
+ await page.evaluate(()=>{(window as any).__dbexCatalogFixture=true})
+ await connect(page,'Mongo Local')
+ await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ await page.locator('[data-object-category="collections"]').click()
+ const list=page.locator('.object-list-panel:visible'),menu=page.locator('.database-context-menu')
+ const grip=list.getByRole('separator',{name:'调整列宽: 存储大小',exact:true})
+ const start=Number(await grip.getAttribute('aria-valuenow'))
+ await grip.focus();await grip.press('ArrowRight');await grip.press('ArrowRight')
+ await expect(grip).toHaveAttribute('aria-valuenow',String(start+24))
+ const row=list.locator('tbody tr').filter({hasText:'users'})
+ await row.click({button:'right'})
+ await expect(menu.getByRole('button',{name:'打开集合',exact:true})).toBeVisible()
+ await expect(menu.getByRole('button',{name:'MongoDump…',exact:true})).toBeVisible()
+ await menu.getByRole('button',{name:'DDL',exact:true}).click()
+ await expect(page.locator('.object-inspector:visible .inspector-definition')).toContainText('createCollection')
+ const tree=page.locator('.resource-node[data-object-kind="collection"]').filter({hasText:'users'})
+ await tree.click({button:'right'})
+ await expect(menu.getByRole('button',{name:'打开集合',exact:true})).toBeVisible()
+ await menu.getByRole('button',{name:'MongoExport…',exact:true}).click()
+ const native=page.getByRole('dialog',{name:'外部工具'})
+ await expect(native.locator('select').first()).toHaveValue('mongo-export')
+ await expect(native.locator('input[readonly]')).toHaveValue('users')
+ await native.getByRole('button',{name:'确认执行',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.find((c:any)=>c.action==='runNativeTool'))).toMatchObject({task:'mongo-export',database:'app',entity:'users'})
+ await native.getByRole('button',{name:'关闭',exact:true}).click()
+ await page.reload()
+ await connect(page,'Mongo Local')
+ await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ await page.locator('[data-object-category="collections"]').click()
+ await expect(grip).toHaveAttribute('aria-valuenow',String(start+24))
+})
+test('UI refinement: MongoDB category menus are type-specific and destructive maintenance is explicitly gated',async({page})=>{
+ await connect(page,'Mongo Local');await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ const menu=page.locator('.database-context-menu')
+ const expected:Record<string,string>={collections:'打开集合列表',views:'打开视图列表',functions:'打开函数列表',indexes:'打开索引列表',pipelines:'打开聚合管道列表',gridfs:'打开存储桶列表',queries:'打开查询列表'}
+ for(const [category,label] of Object.entries(expected)){
+  await page.locator('[data-object-category="'+category+'"]').click({button:'right'})
+  await expect(menu.getByRole('button',{name:label,exact:true})).toBeVisible()
+  await expect(menu.getByRole('button',{name:'新建集合',exact:true})).toHaveCount(category==='collections'?1:0)
+  await page.keyboard.press('Escape')
+ }
+ await page.locator('[data-object-category="collections"]').click()
+ await page.locator('.object-list-panel:visible tbody tr').filter({hasText:'users'}).click({button:'right'})
+ await menu.getByRole('button',{name:'清空集合',exact:true}).click()
+ const dialog=page.getByRole('dialog',{name:'清空集合'})
+ const run=dialog.getByRole('button',{name:'确认执行',exact:true})
+ await expect(run).toBeDisabled()
+ await dialog.getByRole('button',{name:'启用写入',exact:true}).click()
+ await dialog.getByLabel('输入集合名称以确认').fill('wrong')
+ await expect(run).toBeDisabled()
+ await dialog.getByLabel('输入集合名称以确认').fill('users')
+ await run.click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.find((c:any)=>c.action==='mongo.clearCollection'))).toMatchObject({database:'app',entity:'users',confirmed:true})
+ await expect(dialog).toHaveCount(0)
+})
+test('UI refinement: three additional themes persist and use distinct semantic surfaces',async({page})=>{
+ const root=page.locator('html'),settings=page.locator('.topbar').getByRole('button',{name:'偏好设置',exact:true}),prefs=page.getByRole('dialog',{name:'偏好设置'})
+ for(const theme of ['gray','black','soft-light']){
+  await settings.click();await prefs.locator('[data-preference="theme"]').selectOption(theme);await prefs.locator('[data-action="save-preferences"]').click()
+  await expect(root).toHaveAttribute('data-theme',theme)
+  const surfaces=await root.evaluate(el=>{const s=getComputedStyle(el);return ['--bg','--sidebar-bg','--chrome-bg','--header-bg','--inspector-bg','--menu-bg','--editor-bg'].map(k=>s.getPropertyValue(k).trim())})
+  expect(new Set(surfaces).size).toBe(7)
+  if(theme==='black')expect(surfaces[0]).toBe('#000000')
+  if(theme==='soft-light'){expect(surfaces[0]).not.toBe('#ffffff');await expect(root).toHaveCSS('color-scheme','light')}
+ }
+ await page.reload();await expect(root).toHaveAttribute('data-theme','soft-light')
 })

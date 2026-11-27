@@ -279,3 +279,12 @@ MySQL/MongoDB 集成测试用 `DB_EX_INTEGRATION=1` 显式开启，连接 `MYSQL
 - M11 exact candidate `96288fe`: 15/15 specialist jobs, 171 integrated tests, 48 UI cases, all three native package/launch jobs and macOS ad-hoc smoke passed. Both MySQL 8.0 native tool and ClickHouse replica restart regressions passed on real fixtures.
 - PR #20 merged at `599a123`; M0–M11 implementation and defined acceptance are complete.
 - Prepare v1.0.0 as the first stable application release within the documented compatibility limits. Publish only after the same master release SHA passes the complete integrated/native and M11 workflows, including upgrade from the actual published v0.7.1; verify all eight release assets. Keep prior tags/assets unchanged.
+
+### Desktop UI refinement (2026-11-27)
+
+Independent candidate from v1.0.0, not a change to M12 migration or M13
+data-difference synchronization. Addresses reported header selection,
+global inspector state, catalog preview/resize, shared object and category
+context menus, MongoDB ordinary collection maintenance and three distinct
+new themes. See [UI refinement](UI_REFINEMENT.md) for implementation,
+real test evidence and remaining scope. Await exact CI before merge/release.

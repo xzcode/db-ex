@@ -636,3 +636,55 @@ html[dir=rtl] .tree-chevron:not(.expanded) { transform: rotate(180deg); }
 .temporary-session-row .ghost-icon { width:21px; }
 
 .grid-batch-editor input{flex:1;min-width:100px}.grid-save:not(:disabled){color:var(--success)}.grid-discard:not(:disabled){color:var(--danger)}.grid-pending-indicator{flex:none;color:var(--warning);font-size:11px;max-width:175px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* Independent semantic surfaces: do not use one undifferentiated panel color. */
+:root {
+ --sidebar-bg:#1b2029;--chrome-bg:#242b36;--tabs-bg:#202733;--toolbar-bg:#1d232d;
+ --header-bg:#252d39;--inspector-bg:#1c222c;--menu-bg:#262e39;--editor-bg:#1e1e1e;
+}
+:root[data-theme='light'] {
+ --sidebar-bg:#edf1f6;--chrome-bg:#e8edf4;--tabs-bg:#e6ebf2;--toolbar-bg:#f0f3f7;
+ --header-bg:#e8edf4;--inspector-bg:#f3f5f8;--menu-bg:#ffffff;--editor-bg:#ffffff;
+}
+:root[data-theme='gray'] {
+ color-scheme:dark;
+ --bg:#292b2f;--panel:#303237;--panel-raised:#3a3d43;--input:#24262a;
+ --border:#50535a;--border-soft:#41444a;--text:#e2e3e6;--muted:#b1b4bc;
+ --accent:#93b8ff;--accent-bg:#43536d;--accent-button:#4269ab;--selected:#3b4c68;
+ --danger:#ffa2a2;--danger-bg:#4b3034;--warning:#e8c58a;--success:#9bd8b6;--shadow:0 18px 70px #0008;
+ --sidebar-bg:#2d3034;--chrome-bg:#3b3e44;--tabs-bg:#35383e;--toolbar-bg:#33353a;
+ --header-bg:#3d4046;--inspector-bg:#27292e;--menu-bg:#3a3d43;--editor-bg:#292b2f;
+}
+:root[data-theme='black'] {
+ color-scheme:dark;
+ --bg:#000000;--panel:#090a0c;--panel-raised:#17191d;--input:#08090b;
+ --border:#33373e;--border-soft:#25282e;--text:#e8e9eb;--muted:#9fa5af;
+ --accent:#8fb9ff;--accent-bg:#162c4d;--accent-button:#315da8;--selected:#172943;
+ --danger:#ff9fa8;--danger-bg:#311b22;--warning:#edc27a;--success:#8ad8ae;--shadow:0 18px 70px #000b;
+ --sidebar-bg:#101216;--chrome-bg:#171a1f;--tabs-bg:#12151a;--toolbar-bg:#0e1013;
+ --header-bg:#191c22;--inspector-bg:#0d0f12;--menu-bg:#1a1d23;--editor-bg:#050607;
+}
+:root[data-theme='soft-light'] {
+ color-scheme:light;
+ --bg:#efeee9;--panel:#f6f5f0;--panel-raised:#e7e5df;--input:#faf9f5;
+ --border:#cbc8bf;--border-soft:#dedbd2;--text:#353b40;--muted:#656d74;
+ --accent:#315d9c;--accent-bg:#d9e4f2;--accent-button:#38629c;--selected:#dce6f3;
+ --danger:#a93240;--danger-bg:#f4e2e2;--warning:#805917;--success:#2d7258;--shadow:0 18px 70px #413b322e;
+ --sidebar-bg:#e9e7e1;--chrome-bg:#e0ded7;--tabs-bg:#e6e4dd;--toolbar-bg:#eeece6;
+ --header-bg:#e5e3dc;--inspector-bg:#eeece7;--menu-bg:#f5f3ee;--editor-bg:#f6f4ef;
+}
+.topbar{background:var(--chrome-bg)}
+.sidebar{background:var(--sidebar-bg)}
+.tabbar,.object-tabbar{background:var(--tabs-bg)}
+.workbench-header,.workbench-tabs,.subtabs,.editor-toolbar,.object-list-toolbar,.inspector-tabs,.statusbar{background:var(--toolbar-bg)}
+.data-table th,.object-list-table th{background:var(--header-bg)}
+.object-inspector{position:relative;background:var(--inspector-bg);flex:0 0 min(var(--inspector-width,310px),48%);max-width:100%}
+.object-inspector.inspector-expanded{flex-basis:58%}
+.inspector-resizer{position:absolute;inset-block:0;inset-inline-start:0;width:6px;z-index:5;cursor:col-resize;touch-action:none}
+.inspector-resizer:hover,.inspector-resizer:focus-visible{background:var(--accent)}
+.connection-context-menu,.grid-column-menu,.document-context-menu{background:var(--menu-bg)}
+/* Labels are UI controls, not document text. Preserve selection in actual
+   data cells, SQL/JSON editors, copyable definition and diagnostic text. */
+.topbar,.tabbar,.object-tabbar,.workbench-tabs,.subtabs,.data-table th,.object-list-table th,.resource-node,.connection-context-menu,.inspector-tabs,button{
+ user-select:none;-webkit-user-select:none;
+}
