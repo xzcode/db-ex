@@ -6,6 +6,8 @@ import type {ConnectionConfig} from '../../shared/types'
 import type {FilePreview,FileTransferJob,FileTransferRequest,DataFileFormat} from '../../shared/file-transfer'
 import {dataFileFormat,dataFileDelimiter,dataFileEncoding} from '../../shared/file-transfer'
 import {inspectFile,sameFile,readFileRecords,mapRecord,sqlFileValue,csvLine,RECORD_BYTES,type FileIdentity} from './records'
+import {sqlInsertLine} from './sql-records'
+import {writeXlsxRecords} from './xlsx-records'
 import {MysqlMigrationEndpoint} from '../migration/mysql-endpoint'
 import {MongoMigrationEndpoint} from '../migration/mongo-endpoint'
 import {SqliteMigrationEndpoint} from '../migration/sqlite-endpoint'
@@ -32,15 +34,28 @@ export class FileTransferService{
  constructor(private readonly factory?:SqliteProcessFactory,private readonly workerPath?:string){}
  async pick(owner:number,id:string,path:string,formatValue:unknown,delimiterValue:unknown,encodingValue?:unknown):Promise<FilePreview>{
   if(this.active.has(owner))throw new Error('FILE_TRANSFER: 当前已有文件传输任务')
-  const format=dataFileFormat(formatValue),delimiter=dataFileDelimiter(delimiterValue),encoding=dataFileEncoding(encodingValue),info=await inspectFile(path,format,delimiter,encoding)
-  const preview={token:randomUUID(),name:basename(path),size:info.identity.size,format,delimiter,encoding,fields:info.fields,sample:info.sample}
+  const format=dataFileFormat(formatValue),delimiter=dataFileDelimiter(delimiterValue),encoding=dataFileEncoding(encodingValue)
+  if(format==='xlsx'&&encoding!=='utf-8')throw Error('FILE_TRANSFER: 不支持的文件编码')
+  const info=await inspectFile(path,format,delimiter,encoding,undefined,true)
+  const preview:FilePreview={token:randomUUID(),name:basename(path),size:info.identity.size,format,delimiter,encoding,fields:info.fields,sample:info.sample,worksheet:info.worksheet,worksheets:info.worksheets,previewError:info.previewError}
   if(this.closed.has(owner))throw new Error('CANCELLED: 已取消操作')
   this.previews.set(owner,{id,path,stamp:info.identity,preview})
+  return structuredClone(preview)
+ }
+ async previewSheet(owner:number,id:string,token:unknown,worksheet:unknown):Promise<FilePreview>{
+  const stored=this.previews.get(owner)
+  if(this.active.has(owner)||this.closed.has(owner)||!stored||stored.id!==id||stored.preview.token!==token||stored.preview.format!=='xlsx'||typeof worksheet!=='string'||worksheet!=='*'&&!stored.preview.worksheets?.includes(worksheet))throw Error('FILE_TRANSFER: Excel 工作表无效')
+  const info=await inspectFile(stored.path,'xlsx',stored.preview.delimiter,'utf-8',worksheet,true)
+  if(!sameFile(info.identity,stored.stamp)||this.previews.get(owner)!==stored||this.closed.has(owner)||this.active.has(owner))throw Error('FILE_TRANSFER: 文件已变化，请重新预览')
+  const preview:FilePreview={...stored.preview,token:randomUUID(),fields:info.fields,sample:info.sample,worksheet:info.worksheet,worksheets:info.worksheets,previewError:info.previewError}
+  this.previews.set(owner,{...stored,preview})
   return structuredClone(preview)
  }
  importPreview(owner:number,id:string,request:FileTransferRequest){
   const stored=this.previews.get(owner)
   if(!stored||stored.id!==id||stored.preview.token!==request.token||stored.preview.format!==request.format||stored.preview.delimiter!==request.delimiter||dataFileEncoding(stored.preview.encoding)!==dataFileEncoding(request.encoding))throw new Error('FILE_TRANSFER: 文件已变化，请重新预览')
+  if(stored.preview.previewError)throw Error(stored.preview.previewError)
+  if(request.worksheet!==undefined&&request.worksheet!==stored.preview.worksheet)throw Error('FILE_TRANSFER: Excel 工作表无效')
   if(request.mapping?.some(m=>!stored.preview.fields.includes(m.source)))throw new Error('FILE_TRANSFER: 字段映射无效')
   return stored
  }
@@ -80,22 +95,28 @@ export class FileTransferService{
      // publication still guards a concurrent creator of the same path.
      try{await lstat(path);throw new Error('OUTPUT_EXISTS: 目标文件已存在，不会覆盖')}catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e}
      const columns=request.fields||(endpoint instanceof MongoMigrationEndpoint?undefined:await endpoint.fileFields(target,entity))
-     if(request.format==='csv'&&!columns?.length)throw new Error('FILE_TRANSFER: CSV 导出需要指定字段')
+     if((request.format==='csv'||request.format==='sql'||request.format==='xlsx')&&!columns?.length)throw new Error('FILE_TRANSFER: CSV 导出需要指定字段')
      const folder=await mkdtemp(join(dirname(path),'.dbex-file-')),staged=join(folder,'data')
      try{
-      const handle=await open(staged,'wx',0o600)
-      try{
-       if(request.format==='csv'){const header=csvLine(columns!,request.delimiter);await handle.writeFile(header);job.bytes+=Buffer.byteLength(header)}
-       const rows=endpoint instanceof MongoMigrationEndpoint?endpoint.fileRows(target,entity,columns,request.mongoFilter):endpoint.fileRows(target,entity,columns,request.filter)
-       for await(const row of rows){
-        checkAborted(signal)
-        const line=request.format==='csv'?csvLine(columns!.map(c=>Object.hasOwn(row,c)?row[c]:null),request.delimiter):JSON.stringify(row)+'\n'
-        const length=Buffer.byteLength(line);if(length>RECORD_BYTES)throw new Error('FILE_TRANSFER: 单条文件记录过大')
-        await handle.writeFile(line);job.bytes+=length;job.read++
-       }
-       await handle.sync()
-      }finally{await handle.close()}
-      await publishNewFile(staged,path,signal,request.format==='jsonl');job.committed=job.read
+      const rows=endpoint instanceof MongoMigrationEndpoint?endpoint.fileRows(target,entity,columns,request.mongoFilter):endpoint.fileRows(target,entity,columns,request.filter)
+      if(request.format==='xlsx'){
+       await writeXlsxRecords(staged,columns!,rows,signal,bytes=>{job.read++;job.bytes=bytes})
+       job.bytes=(await lstat(staged)).size
+      }else{
+       const handle=await open(staged,'wx',0o600)
+       try{
+        if(request.format==='csv'){const header=csvLine(columns!,request.delimiter);await handle.writeFile(header);job.bytes+=Buffer.byteLength(header)}
+        if(request.format==='sql'){const header='-- DB EX data-only INSERT export\n';await handle.writeFile(header);job.bytes+=Buffer.byteLength(header)}
+        for await(const row of rows){
+         checkAborted(signal)
+         const line=request.format==='csv'?csvLine(columns!.map(c=>Object.hasOwn(row,c)?row[c]:null),request.delimiter):request.format==='sql'?sqlInsertLine(target,entity,columns!,row,config.kind==='sqlite'?'sqlite':'mysql'):JSON.stringify(row)+'\n'
+         const length=Buffer.byteLength(line);if(length>RECORD_BYTES)throw new Error('FILE_TRANSFER: 单条文件记录过大')
+         await handle.writeFile(line);job.bytes+=length;job.read++
+        }
+        await handle.sync()
+       }finally{await handle.close()}
+      }
+      await publishNewFile(staged,path,signal,request.format==='jsonl'||request.format==='sql');job.committed=job.read
      }finally{await rm(folder,{recursive:true,force:true})}
     }else{
      const file=await open(path,'r')
@@ -103,7 +124,7 @@ export class FileTransferService{
       if(!sameFile(await file.stat(),preview!.stamp))throw new Error('FILE_TRANSFER: 文件已变化，请重新预览')
       const mongo=endpoint instanceof MongoMigrationEndpoint
       const records=(async function*(){
-       for await(const row of readFileRecords(file,request.format,request.delimiter,signal,n=>{job.bytes+=n},dataFileEncoding(request.encoding))){
+       for await(const row of readFileRecords(file,request.format,request.delimiter,signal,n=>{job.bytes+=n},dataFileEncoding(request.encoding),preview!.preview.worksheet)){
         checkAborted(signal);job.read++
         let record:Record<string,unknown>
         try{

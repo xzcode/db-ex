@@ -13,7 +13,7 @@ import type { ConnectionConfig, DatabaseOperation, FileImport, QuerySnippet } fr
 import { ConnectionStore } from './connections/store'
 import {MigrationService} from './migration/service'
 import {FileTransferService} from './file-transfer/service'
-import {normalizeFileTransfer,type FileTransferRequest} from '../shared/file-transfer'
+import {normalizeFileTransfer,dataFileFormat,type FileTransferRequest} from '../shared/file-transfer'
 import {MigrationHistory} from './migration/history'
 import {migrationPolicyLabel,type MigrationJob} from '../shared/migration'
 import { SessionManager } from './connections/manager'
@@ -167,11 +167,15 @@ async function saveText(win: BrowserWindow, name: string, content: string, forma
 }
 function registerIpc(): void {
   ipcMain.handle('file-transfer:pick',sessionHandler(async(win,id,format:unknown,delimiter:unknown,encoding?:unknown)=>{
-    const result=await dialog.showOpenDialog(win,{properties:['openFile'],filters:[{name:'CSV / JSONL',extensions:['csv','jsonl','ndjson','txt']}]})
+    const selected=dataFileFormat(format)
+    if(selected==='sql'&&sessions.info(id).kind==='mongodb')throw Error('FILE_TRANSFER: 不支持此数据库或操作')
+    const extensions=selected==='xlsx'?['xlsx']:selected==='sql'?['sql']:selected==='csv'?['csv','txt']:['jsonl','ndjson','txt']
+    const result=await dialog.showOpenDialog(win,{properties:['openFile'],filters:[{name:selected.toUpperCase(),extensions}]})
     if(result.canceled||!result.filePaths[0])return null
     assertOwner(win,id)
     return fileTransfers.pick(win.webContents.id,id,result.filePaths[0],format,delimiter,encoding)
   }))
+  ipcMain.handle('file-transfer:sheet',sessionHandler((win,id,token:unknown,sheet:unknown)=>fileTransfers.previewSheet(win.webContents.id,id,token,sheet)))
   ipcMain.handle('file-presets:list',sessionHandler((_win,id,database:string,entity:string,direction:unknown)=>filePresets.list(presetScope(id,database,entity,direction))))
   ipcMain.handle('file-presets:save',sessionHandler((_win,id,database:string,entity:string,direction:unknown,input:unknown,presetId?:string)=>filePresets.save(presetScope(id,database,entity,direction),input,presetId)))
   ipcMain.handle('file-presets:remove',sessionHandler((_win,id,database:string,entity:string,direction:unknown,presetId:string)=>filePresets.remove(presetScope(id,database,entity,direction),presetId)))
@@ -188,7 +192,10 @@ function registerIpc(): void {
     if(writing&&!info.writable)throw new Error('READ_ONLY: 请先启用当前会话的写入权限')
     if(info.transaction)throw new Error('SESSION_BUSY: 请先提交或回滚当前事务')
     let output:string|undefined,filename:string
-    if(writing)filename=fileTransfers.importPreview(owner,id,request).preview.name
+    if(writing){
+      const preview=fileTransfers.importPreview(owner,id,request).preview
+      filename=preview.name+(preview.worksheet?' · '+(preview.worksheet==='*'?tr('全部工作表（表头相同）'):preview.worksheet):'')
+    }
     else{
       const result=await dialog.showSaveDialog(win,{defaultPath:request.entity.replace(/[^A-Za-z0-9_-]/g,'_')+'.'+request.format,filters:[{name:request.format.toUpperCase(),extensions:[request.format]}]})
       if(result.canceled||!result.filePath)return null

@@ -52,6 +52,18 @@ try{
    const upsert=await run({...base,entity:'copy',direction:'import',token:retry.token,preserveDocuments:true,policy:'upsert'})
    assert.equal(upsert.state,'completed',JSON.stringify(upsert));assert.equal(upsert.committed,1001);assert.equal(await b.countDocuments(),1001)
    console.log('Q5 real MongoDB mTLS/SOCKS EJSON round trip: 1001 records, byte-exact BSON and explicit upsert')
+   const excelCollection=await db.createCollection<Document&{_id:unknown}>('xlsx_copy')
+   const excelFields=['_id','wide','decimal','payload','nested','label']
+   const excelPath=join(folder,'mongo.xlsx')
+   const excelOut=await run({...base,format:'xlsx',entity:'records',direction:'export',fields:excelFields,mongoFilter:JSON.stringify({_id:{$oid:'64b000000000000000000001'}})},excelPath,source)
+   assert.equal(excelOut.state,'completed',JSON.stringify(excelOut));assert.equal(excelOut.committed,1)
+   const excelPreview=await service.pick(owner,'fixture',excelPath,'xlsx',',')
+   const excelIn=await run({...base,format:'xlsx',entity:'xlsx_copy',direction:'import',token:excelPreview.token,worksheet:excelPreview.worksheet,mapping:excelFields.map(field=>({source:field,target:field,conversion:field==='label'?'string':'ejson'}))})
+   assert.equal(excelIn.state,'completed',JSON.stringify(excelIn));assert.equal(excelIn.committed,1)
+   const excelRaw=await excelCollection.findOne({_id:doc._id},{raw:true})
+   assert(Buffer.isBuffer(excelRaw)&&original.equals(excelRaw))
+   console.log('Q5 real MongoDB XLSX explicit EJSON mappings: byte-exact selected document')
+
   }finally{await db.dropDatabase().catch(()=>{});await client.close()}
  }else{
   const client=await openMysqlClient(config,route,tls),q=(name:string)=>'`'+name+'`',table=(name:string)=>q(database)+'.'+q(name)
@@ -76,6 +88,24 @@ try{
    assert.equal(replaced.state,'completed',JSON.stringify(replaced));assert.equal(replaced.committed,1001)
    const [after]=await client.query('SELECT * FROM '+table('copy')+' ORDER BY id');assert.deepEqual(a,after)
    console.log('Q5 real '+kind+' mTLS/SOCKS JSONL round trip: 1001 rows, exact UInt64/DECIMAL/binary/NULL, rollback and replace')
+   await client.query('CREATE TABLE '+table('copy_sql')+ddl)
+   await client.query('CREATE TABLE '+table('copy_xlsx')+ddl)
+   await client.execute('UPDATE '+table('records')+' SET note=? WHERE id=1',["O'Reilly "+String.fromCharCode(92)+'中文'])
+   const predicate={join:'and' as const,groups:[],sort:[{field:'id',direction:1 as const}],raw:{text:'id IN (1,18446744073709551615) AND (note IS NULL OR note LIKE ?)',parameters:['O%']}}
+   const [expected]=await client.query('SELECT * FROM '+table('records')+' WHERE id IN (1,18446744073709551615) ORDER BY id')
+   for(const format of ['sql','xlsx'] as const){
+    const path=join(folder,'filtered.'+format)
+    const exported=await run({...base,format,entity:'records',direction:'export',filter:predicate},path,source)
+    assert.equal(exported.state,'completed',JSON.stringify(exported));assert.equal(exported.committed,2)
+    const picked=await service.pick(owner,'fixture',path,format,',')
+    const fieldMapping=picked.fields.map(field=>({source:field,target:field,conversion:format==='sql'?'auto' as const:field==='payload'?'binary' as const:field==='id'?'integer' as const:'string' as const}))
+    const imported=await run({...base,format,entity:'copy_'+format,direction:'import',token:picked.token,worksheet:picked.worksheet,mapping:fieldMapping})
+    assert.equal(imported.state,'completed',JSON.stringify(imported));assert.equal(imported.committed,2)
+    const [got]=await client.query('SELECT * FROM '+table('copy_'+format)+' ORDER BY id')
+    assert.deepEqual(got,expected)
+   }
+   console.log('Q3/Q5 real '+kind+' filtered SQL/XLSX round trip: exact UInt64/DECIMAL/binary/NULL and escaped text')
+
    // Use two independent fixture sessions, exactly as isolated query reads
    // and the original explorer's explicit writes are routed in the app.
    const editTable=table('edit_records'),editDDL=' (id BIGINT UNSIGNED PRIMARY KEY,amount DECIMAL(30,8) NOT NULL,note VARCHAR(100) NOT NULL) ENGINE=InnoDB'

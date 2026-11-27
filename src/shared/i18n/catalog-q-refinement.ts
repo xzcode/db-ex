@@ -10,6 +10,20 @@ export const qRefinementTraditional:Record<string,string>={
 }
 
 const followupPairs:Record<string,[string,string]>={
+ 'Excel 工作表':['Excel worksheet','Excel 工作表'],
+ '全部工作表（表头相同）':['All worksheets (matching headers)','所有工作表（表頭相同）'],
+ 'Excel 使用首行表头；大整数及高精度小数可保存为文本，二进制使用 Base64，NULL 使用空值标记。导入不执行公式；导出超过单工作表容量时自动分表。':['Excel uses the first row as headers. Large integers and exact decimals can be text, binary uses Base64, and NULL uses a null marker. Formulas are not executed. Exports split automatically at the worksheet row limit.','Excel 使用首列資料列作為表頭；大整數及高精度小數可儲存為文字，二進位使用 Base64，NULL 使用空值標記。匯入不執行公式；超過單一工作表容量時自動分表。'],
+ 'SQL 数据文件仅解析单表、带字段列表的 INSERT VALUES；不会执行 DDL、DELETE 或任意 SQL。标准字符串使用双单引号转义。':['SQL data files parse single-table INSERT VALUES with explicit columns; DDL, DELETE and arbitrary SQL are not executed. Strings use doubled single quotes.','SQL 資料檔案僅解析單表、含欄位清單的 INSERT VALUES；不執行 DDL、DELETE 或任意 SQL。標準字串使用雙單引號跳脫。'],
+ 'FILE_TRANSFER: SQL 文件仅支持带字段列表的 INSERT VALUES 数据语句':['FILE_TRANSFER: SQL files support INSERT VALUES with explicit columns only.','FILE_TRANSFER: SQL 檔案僅支援含欄位清單的 INSERT VALUES 資料陳述式。'],
+ 'FILE_TRANSFER: Excel 工作簿或单元格格式无效':['FILE_TRANSFER: Invalid Excel workbook or cell.','FILE_TRANSFER: Excel 活頁簿或儲存格格式無效。'],
+ 'FILE_TRANSFER: Excel 工作表无效':['FILE_TRANSFER: Invalid Excel worksheet.','FILE_TRANSFER: Excel 工作表無效。'],
+ 'FILE_TRANSFER: Excel 导入不执行公式，请先将公式转换为值':['FILE_TRANSFER: Convert Excel formulas to values before import.','FILE_TRANSFER: 匯入前請將 Excel 公式轉換為值。'],
+ 'FILE_TRANSFER: Excel 导入不支持错误值单元格':['FILE_TRANSFER: Excel error cells are not supported.','FILE_TRANSFER: Excel 匯入不支援錯誤值儲存格。'],
+ 'FILE_TRANSFER: Excel 单元格超过格式容量或包含无效字符':['FILE_TRANSFER: Excel cell exceeds format limits or contains invalid characters.','FILE_TRANSFER: Excel 儲存格超出格式容量或含無效字元。'],
+ 'FILE_TRANSFER: 所选 Excel 工作表的表头不一致':['FILE_TRANSFER: Selected Excel worksheets have different headers.','FILE_TRANSFER: 所選 Excel 工作表的表頭不一致。'],
+ 'SQL 条件':['SQL predicate','SQL 條件'],
+ 'INVALID_FILTER: SQL 条件无效或包含不支持的语法':['INVALID_FILTER: Invalid SQL predicate or unsupported syntax.','INVALID_FILTER: SQL 條件無效或包含不支援的語法。'],
+ '仅输入 WHERE 后的条件；支持括号、常用比较、IN、BETWEEN、LIKE、NULL 和常用函数。排序使用列标题菜单。':['Enter the predicate after WHERE only. Parentheses, comparisons, IN, BETWEEN, LIKE, NULL and common functions are supported. Sort via column headers.','僅輸入 WHERE 後的條件；支援括號、常用比較、IN、BETWEEN、LIKE、NULL 及常用函式。排序使用欄標題選單。'],
  '批量编辑':['Bulk edit','批次編輯'],
  '请取消修改并刷新结果后重试。':['Discard changes and refresh results before retrying.','請取消修改並重新整理結果後重試。'],
  '执行目标已断开，未保存的查询结果修改已丢弃。':['Execution target disconnected; unsaved query-result edits were discarded.','執行目標已中斷，未儲存的查詢結果修改已捨棄。'],

@@ -690,3 +690,9 @@ html[dir=rtl] .tree-chevron:not(.expanded) { transform: rotate(180deg); }
 }
 
 .continuous-bar{display:flex;gap:8px;align-items:center;padding:5px 8px;flex:none;border-top:1px solid var(--border);background:var(--toolbar-bg);color:var(--muted);font-size:12px}
+
+.sql-browse-filter{display:flex;flex-direction:column;gap:8px;padding:10px 12px}
+.sql-browse-filter-fields{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:10px}
+.sql-browse-filter-fields label{display:flex;flex-direction:column;gap:5px;color:var(--muted);font-size:12px}
+.sql-browse-filter textarea{min-width:0;resize:vertical;font:12px ui-monospace,monospace}
+.sql-browse-filter-actions{display:flex;align-items:center;gap:8px}.sql-browse-filter-actions .muted-text{flex:1}

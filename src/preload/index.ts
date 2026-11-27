@@ -6,6 +6,7 @@ const api: DbExAPI = {
   windowChrome:windowChromeForPlatform(process.platform),
   workspaceWindowId:process.argv.find(x=>x.startsWith('--dbex-workspace='))?.slice('--dbex-workspace='.length)||'primary',
   pickDataFile:(id,format,delimiter,encoding)=>ipcRenderer.invoke('file-transfer:pick',id,format,delimiter,encoding),
+  selectFileWorksheet:(id,token,sheet)=>ipcRenderer.invoke('file-transfer:sheet',id,token,sheet),
   startFileTransfer:(id,request)=>ipcRenderer.invoke('file-transfer:start',id,request),
   listFilePresets:(id,database,entity,direction)=>ipcRenderer.invoke('file-presets:list',id,database,entity,direction),
   saveFilePreset:(id,database,entity,direction,draft,presetId)=>ipcRenderer.invoke('file-presets:save',id,database,entity,direction,draft,presetId),

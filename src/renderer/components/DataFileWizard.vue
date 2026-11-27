@@ -20,7 +20,8 @@ const conversions:FieldConversion[]=['auto','string','integer','decimal','double
 const autoFields=computed(()=>mongo.value&&format.value==='jsonl'&&preserve.value)
 const selectedFields=computed(()=>mongo.value?fieldText.value.split(/\r?\n/).map(v=>v.trim()).filter(Boolean):exportFields.value)
 const effectiveMapping=computed(()=>mapping.value.filter(m=>m.target.trim()))
-const canStart=computed(()=>!busy.value&&!running.value&&fileTransferSupported(props.session.kind)&&(props.direction==='import'?!!preview.value&&writable.value&&(autoFields.value||effectiveMapping.value.length>0&&new Set(effectiveMapping.value.map(m=>m.target)).size===effectiveMapping.value.length):format.value==='jsonl'&&allFields.value||selectedFields.value.length>0))
+const textFormat=computed(()=>format.value!=='xlsx')
+const canStart=computed(()=>!busy.value&&!running.value&&fileTransferSupported(props.session.kind)&&(props.direction==='import'?!!preview.value&&!preview.value.previewError&&writable.value&&(autoFields.value||effectiveMapping.value.length>0&&new Set(effectiveMapping.value.map(m=>m.target)).size===effectiveMapping.value.length):format.value==='jsonl'&&allFields.value||selectedFields.value.length>0))
 const sampleRows=computed(()=>preview.value?.sample.map(row=>Object.fromEntries(Object.entries(row).map(([key,v])=>[key,v===null?null:typeof v==='string'?v:JSON.stringify(v)])))||[])
 const canFilter=computed(()=>!!props.filter||!!props.mongoFilter&&props.mongoFilter!=='{}')
 async function act(fn:()=>Promise<void>){if(busy.value||running.value)return;busy.value=true;error.value='';try{await fn()}catch(e){error.value=e instanceof Error?e.message:String(e)}finally{busy.value=false}}
@@ -46,7 +47,7 @@ function loadPreset(){
 }
 async function savePreset(update=false){
  await act(async()=>{
-  const {token,database,entity,direction,filter,mongoFilter,...options}=request()
+  const {token,worksheet,database,entity,direction,filter,mongoFilter,...options}=request()
   const saved=await window.dbex.saveFilePreset(props.session.id,props.database,props.entity,props.direction,{name:presetName.value,options,useCurrentFilter:filterEnabled.value},update?presetId.value:undefined)
   await reloadPresets();presetId.value=saved.id;presetName.value=saved.name
  })
@@ -57,10 +58,20 @@ async function exportReport(){
  await act(async()=>{await window.dbex.exportFileTransferReport(job.value!.id)})
 }
 async function chooseFile(){await act(async()=>{const file=await window.dbex.pickDataFile(props.session.id,format.value,delimiter.value,encoding.value);if(file){preview.value=file;mapFields();step.value=2}})}
+async function changeWorksheet(event:Event){
+ const sheet=(event.target as HTMLSelectElement).value
+ if(!preview.value||preview.value.format!=='xlsx'||sheet===preview.value.worksheet)return
+ await act(async()=>{
+  const file=await window.dbex.selectFileWorksheet(props.session.id,preview.value!.token,sheet)
+  preview.value=file;mapFields();step.value=2
+ })
+ // Keep the actual preview selection after any rejected request.
+ ;(event.target as HTMLSelectElement).value=preview.value?.worksheet||''
+}
 async function unlock(){await act(async()=>{const s=await window.dbex.setWriteAccess(props.session.id,true);writable.value=s.writable;emit('session',s)})}
 function request():FileTransferRequest{
  const base={direction:props.direction,database:props.database,entity:props.entity,format:format.value,delimiter:delimiter.value,encoding:props.direction==='import'?encoding.value:'utf-8' as const}
- if(props.direction==='import')return {...base,token:preview.value!.token,policy:policy.value,preserveDocuments:autoFields.value,mapping:autoFields.value?undefined:effectiveMapping.value,skipInvalid:skipInvalid.value}
+ if(props.direction==='import')return {...base,token:preview.value!.token,...(preview.value?.worksheet?{worksheet:preview.value.worksheet}:{}),policy:policy.value,preserveDocuments:autoFields.value,mapping:autoFields.value?undefined:effectiveMapping.value,skipInvalid:skipInvalid.value}
  return {...base,fields:allFields.value&&format.value==='jsonl'?undefined:selectedFields.value,...(filterEnabled.value?{filter:props.filter,mongoFilter:props.mongoFilter}:{})}
 }
 async function start(){await act(async()=>{const next=await window.dbex.startFileTransfer(props.session.id,request());if(next){job.value=next;step.value=3}})}
@@ -73,6 +84,7 @@ async function poll(){
  catch(e){if(!disposed)error.value=e instanceof Error?e.message:String(e)}finally{polling=false}
 }
 function back(){step.value=1;preview.value=undefined;job.value=undefined;notified=false}
+watch(format,v=>{if(v==='xlsx')encoding.value='utf-8'})
 watch([format,delimiter,encoding],()=>{preview.value=undefined;mapping.value=[];if(props.direction==='import')step.value=1})
 watch(policy,p=>{if(p==='replace')skipInvalid.value=false})
 onMounted(async()=>{await act(async()=>{await initialize();await reloadPresets()});timer=setInterval(()=>void poll(),500)})
@@ -85,10 +97,14 @@ onBeforeUnmount(()=>{disposed=true;if(timer)clearInterval(timer);if(running.valu
   <div v-if="error" class="inline-message error" role="alert">{{localize(error)}}</div>
   <div v-if="step!==3" class="file-wizard-body">
    <div v-if="canPersist" class="file-preset-toolbar"><select v-model="presetId" :aria-label="t('文件传输配置')" :disabled="busy" @change="presetName=presets.find(p=>p.id===presetId)?.name||''"><option value="">{{t('文件传输配置')}}</option><option v-for="p in presets" :key="p.id" :value="p.id">{{p.name}}</option></select><button class="btn secondary small" :disabled="busy||!presetId" @click="loadPreset">{{t('应用配置')}}</button><input v-model="presetName" :aria-label="t('配置名称')" :placeholder="t('配置名称')"/><button class="btn secondary small" :disabled="busy||!presetName.trim()||direction==='import'&&!preview" @click="savePreset()">{{t('另存当前配置')}}</button><button class="btn secondary small" :disabled="busy||!presetId||!presetName.trim()||direction==='import'&&!preview" @click="savePreset(true)">{{t('更新配置')}}</button><button class="btn secondary small danger-text" :disabled="busy||!presetId" @click="removePreset">{{t('删除')}}</button></div>
-   <div class="file-wizard-options"><label class="field">{{t('格式')}}<select v-model="format" :disabled="busy"><option value="jsonl">JSONL / EJSON</option><option value="csv">CSV</option></select></label><label v-if="format==='csv'" class="field">{{t('分隔符')}}<select v-model="delimiter" :disabled="busy"><option value=",">,</option><option value=";">;</option><option :value="'\t'">Tab</option><option value="|">|</option></select></label><label v-if="direction==='import'" class="field">{{t('文件编码')}}<select v-model="encoding" :aria-label="t('文件编码')" :disabled="busy"><option v-for="e in dataFileEncodings" :key="e">{{e}}</option></select></label><span v-else class="muted-text">UTF-8</span><button v-if="direction==='import'" class="btn secondary" :disabled="busy" @click="chooseFile">{{t('选择数据文件')}}</button><span v-if="preview" class="muted-text">{{preview.name}} · {{(preview.size/1048576).toFixed(2)}} MiB</span></div>
-   <p class="compact-help">{{t('按批次流式处理，不限制文件总行数。CSV 为文本格式，JSONL 保留扩展类型；大整数请使用字符串或扩展 JSON。')}}</p>
+   <div class="file-wizard-options"><label class="field">{{t('格式')}}<select v-model="format" :aria-label="t('格式')" :disabled="busy"><option value="jsonl">JSONL / EJSON</option><option value="csv">CSV</option><option value="xlsx">Excel (.xlsx)</option><option v-if="!mongo" value="sql">SQL INSERT (.sql)</option></select></label><label v-if="format==='csv'" class="field">{{t('分隔符')}}<select v-model="delimiter" :disabled="busy"><option value=",">,</option><option value=";">;</option><option :value="'\t'">Tab</option><option value="|">|</option></select></label><label v-if="direction==='import'&&textFormat" class="field">{{t('文件编码')}}<select v-model="encoding" :aria-label="t('文件编码')" :disabled="busy"><option v-for="e in dataFileEncodings" :key="e">{{e}}</option></select></label><span v-else-if="textFormat" class="muted-text">UTF-8</span><button v-if="direction==='import'" class="btn secondary" :disabled="busy" @click="chooseFile">{{t('选择数据文件')}}</button><span v-if="preview" class="muted-text">{{preview.name}} · {{(preview.size/1048576).toFixed(2)}} MiB</span></div>
+   <p v-if="format==='xlsx'" class="compact-help">{{t('Excel 使用首行表头；大整数及高精度小数可保存为文本，二进制使用 Base64，NULL 使用空值标记。导入不执行公式；导出超过单工作表容量时自动分表。')}}</p>
+   <p v-else-if="format==='sql'" class="compact-help">{{t('SQL 数据文件仅解析单表、带字段列表的 INSERT VALUES；不会执行 DDL、DELETE 或任意 SQL。标准字符串使用双单引号转义。')}}</p>
+   <p v-else class="compact-help">{{t('按批次流式处理，不限制文件总行数。CSV 为文本格式，JSONL 保留扩展类型；大整数请使用字符串或扩展 JSON。')}}</p>
    <template v-if="direction==='import'&&preview">
-    <section class="file-sample"><strong>{{t('文件数据预览')}} · {{preview.sample.length}}</strong><ResultGrid :columns="preview.fields" :rows="sampleRows" resize-all/></section>
+    <label v-if="preview.format==='xlsx'&&preview.worksheets?.length" class="field file-worksheet">{{t('Excel 工作表')}}<select :value="preview.worksheet" :aria-label="t('Excel 工作表')" :disabled="busy" @change="changeWorksheet"><option v-for="sheet in preview.worksheets" :key="sheet" :value="sheet">{{sheet}}</option><option v-if="preview.worksheets.length>1" value="*">{{t('全部工作表（表头相同）')}}</option></select></label>
+    <p v-if="preview.previewError" class="inline-message error" role="alert">{{localize(preview.previewError)}}</p>
+    <section v-else class="file-sample"><strong>{{t('文件数据预览')}} · {{preview.sample.length}}</strong><ResultGrid :columns="preview.fields" :rows="sampleRows" resize-all/></section>
     <div class="file-wizard-options"><label v-if="mongo&&format==='jsonl'" class="migration-check"><input v-model="preserve" type="checkbox"/>{{t('保留完整文档（包括未出现在样本中的字段）')}}</label><label class="field">{{t('写入模式')}}<select v-model="policy"><option value="append">{{t('追加数据，冲突时停止')}}</option><option value="upsert">{{t('按主键插入或更新')}}</option><option v-if="!mongo" value="replace">{{t('清空目标表后传输')}}</option></select></label><label v-if="policy!=='replace'"><input v-model="skipInvalid" type="checkbox"/>{{t('跳过转换失败的记录')}}</label></div>
     <p v-if="policy!=='append'" class="inline-message error">{{t(policy==='replace'?'将清空目标表，请先备份。':'将更新匹配主键的记录，请确认字段映射。')}}</p>
     <div v-if="!autoFields" class="file-mapping"><table><thead><tr><th>{{t('源字段')}}</th><th>{{t('目标字段')}}</th><th>{{t('类型转换')}}</th></tr></thead><tbody><tr v-for="item in mapping" :key="item.source"><td>{{item.source}}</td><td><input v-if="mongo" v-model="item.target"/><select v-else v-model="item.target"><option value="">{{t('不导入')}}</option><option v-for="f in targetFields" :key="f" :value="f">{{f}}</option></select></td><td><select v-model="item.conversion"><option v-for="c in conversions" :key="c" :value="c">{{c}}</option></select></td></tr></tbody></table></div>
@@ -96,7 +112,7 @@ onBeforeUnmount(()=>{disposed=true;if(timer)clearInterval(timer);if(running.valu
    <template v-else-if="direction==='export'">
     <label v-if="canFilter"><input v-model="filterEnabled" type="checkbox"/>{{t('仅导出当前筛选匹配记录')}}</label>
     <label v-if="format==='jsonl'"><input v-model="allFields" type="checkbox"/>{{t('全部字段')}}</label>
-    <template v-if="!allFields||format==='csv'"><label v-if="mongo" class="field">{{t('导出字段（每行一个）')}}<textarea v-model="fieldText" rows="8" spellcheck="false"/></label><div v-else class="file-mapping"><label v-for="field in targetFields" :key="field"><input type="checkbox" v-model="exportFields" :value="field"/>{{field}}</label></div></template>
+    <template v-if="!allFields||format!=='jsonl'"><label v-if="mongo" class="field">{{t('导出字段（每行一个）')}}<textarea v-model="fieldText" rows="8" spellcheck="false"/></label><div v-else class="file-mapping"><label v-for="field in targetFields" :key="field"><input type="checkbox" v-model="exportFields" :value="field"/>{{field}}</label></div></template>
     <p class="compact-help">{{t('导出全部匹配记录，而不是当前页；完成后原子发布新文件，不覆盖已有文件。')}}</p>
    </template>
    <button v-if="direction==='import'&&!writable" class="btn secondary" :disabled="busy" @click="unlock">{{t('启用写入')}}</button>
@@ -111,5 +127,5 @@ onBeforeUnmount(()=>{disposed=true;if(timer)clearInterval(timer);if(running.valu
   <footer class="dialog-footer"><button v-if="running" class="btn secondary danger-text" @click="cancel">{{t('取消任务')}}</button><button v-else-if="step!==1" class="btn secondary" :disabled="busy" @click="back">{{t('重新配置')}}</button><span class="toolbar-spacer"/><button class="btn secondary" :disabled="busy||running" @click="emit('close')">{{t('关闭')}}</button><button v-if="step!==3" class="btn primary" :disabled="!canStart" @click="start">{{t('确认执行')}}</button></footer>
  </section></div></Teleport>
 </template>
-<style scoped>.data-file-wizard{width:min(980px,94vw);height:min(760px,92vh);display:flex;flex-direction:column}.file-wizard-steps{display:flex;gap:20px;padding:12px 16px;border-bottom:1px solid var(--border);color:var(--muted)}.file-wizard-steps .active{color:var(--accent);font-weight:600}.file-wizard-body{flex:1;min-height:0;overflow:auto;padding:12px 16px;display:flex;flex-direction:column;gap:12px}.file-wizard-options{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.file-wizard-options .field{display:flex;align-items:center;gap:7px}.file-sample{display:flex;flex-direction:column;height:210px;min-height:100px;border:1px solid var(--border);padding:6px;gap:4px}.file-mapping{overflow:auto;min-height:120px;max-height:320px;border:1px solid var(--border)}.file-mapping table{width:100%;border-collapse:collapse}.file-mapping th,.file-mapping td{padding:6px 9px;text-align:start;border-bottom:1px solid var(--border-soft)}.file-mapping th{position:sticky;top:0;background:var(--header-bg)}.file-mapping>label{display:flex;padding:5px;gap:6px}.file-job-metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.file-job-metrics>div{display:flex;flex-direction:column;gap:7px;background:var(--panel-raised);padding:12px}.file-job-metrics strong{font-size:20px}.file-job-metrics small{color:var(--muted)}.file-job-progress{width:100%;height:10px;accent-color:var(--accent)}.file-preset-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding-bottom:8px;border-bottom:1px solid var(--border)}.file-preset-toolbar input{min-width:110px;flex:1}.file-preset-toolbar select{max-width:220px}
+<style scoped>.data-file-wizard{width:min(980px,94vw);height:min(760px,92vh);display:flex;flex-direction:column}.file-wizard-steps{display:flex;gap:20px;padding:12px 16px;border-bottom:1px solid var(--border);color:var(--muted)}.file-wizard-steps .active{color:var(--accent);font-weight:600}.file-wizard-body{flex:1;min-height:0;overflow:auto;padding:12px 16px;display:flex;flex-direction:column;gap:12px}.file-wizard-options{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.file-wizard-options .field{display:flex;align-items:center;gap:7px}.file-sample{display:flex;flex-direction:column;height:210px;min-height:100px;border:1px solid var(--border);padding:6px;gap:4px}.file-mapping{overflow:auto;min-height:120px;max-height:320px;border:1px solid var(--border)}.file-mapping table{width:100%;border-collapse:collapse}.file-mapping th,.file-mapping td{padding:6px 9px;text-align:start;border-bottom:1px solid var(--border-soft)}.file-mapping th{position:sticky;top:0;background:var(--header-bg)}.file-mapping>label{display:flex;padding:5px;gap:6px}.file-job-metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.file-job-metrics>div{display:flex;flex-direction:column;gap:7px;background:var(--panel-raised);padding:12px}.file-job-metrics strong{font-size:20px}.file-job-metrics small{color:var(--muted)}.file-job-progress{width:100%;height:10px;accent-color:var(--accent)}.file-preset-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding-bottom:8px;border-bottom:1px solid var(--border)}.file-preset-toolbar input{min-width:110px;flex:1}.file-preset-toolbar select{max-width:220px}.file-worksheet{display:flex;align-items:center;gap:10px}.file-worksheet select{max-width:420px}
 </style>

@@ -2,6 +2,8 @@ import {open,type FileHandle} from 'node:fs/promises'
 import type {DataFileFormat,DataFileEncoding,FieldMapping,FileTransferRequest} from '../../shared/file-transfer'
 import {dataFileName} from '../../shared/file-transfer'
 import {checkAborted} from '../operations/common'
+import {sqlDataRecords} from './sql-records'
+import {XlsxRecords} from './xlsx-records'
 export const RECORD_BYTES=32*1024*1024 // per record, not whole-file size
 export interface FileIdentity{dev:number;ino:number;size:number;mtimeMs:number}
 export function identity(s:FileIdentity):FileIdentity{return {dev:s.dev,ino:s.ino,size:s.size,mtimeMs:s.mtimeMs}}
@@ -41,8 +43,14 @@ function checkedRecord(value:unknown):Record<string,unknown>{
  walk(value)
  return value as Record<string,unknown>
 }
-export async function* readFileRecords(file:FileHandle,format:DataFileFormat,delimiter:string,signal?:AbortSignal,onBytes?:(n:number)=>void,encoding:DataFileEncoding='utf-8'){
+export async function* readFileRecords(file:FileHandle,format:DataFileFormat,delimiter:string,signal?:AbortSignal,onBytes?:(n:number)=>void,encoding:DataFileEncoding='utf-8',worksheet?:string){
+ if(format==='xlsx'){
+  const workbook=await XlsxRecords.open(file,signal,onBytes)
+  try{yield*workbook.records(worksheet)}finally{await workbook.close()}
+  return
+ }
  const chunks=textChunks(file,signal,onBytes,encoding)
+ if(format==='sql'){yield*sqlDataRecords(chunks,signal);return}
  if(format==='csv'){
   let headers:string[]|undefined
   for await(const row of csvRecords(chunks,delimiter,signal)){
@@ -62,23 +70,35 @@ export async function* readFileRecords(file:FileHandle,format:DataFileFormat,del
   if(pending.trim())yield checkedRecord(JSON.parse(pending))
  }
 }
-export async function inspectFile(path:string,format:DataFileFormat,delimiter:string,encoding:DataFileEncoding='utf-8'){
+export async function inspectFile(path:string,format:DataFileFormat,delimiter:string,encoding:DataFileEncoding='utf-8',worksheet?:string,allowInvalidSheet=false){
  const file=await open(path,'r')
+ let workbook:XlsxRecords|undefined
  try{
   const stat=await file.stat();if(!stat.isFile()||!stat.size)throw invalid()
   const sample:Record<string,unknown>[]=[],fields=new Set<string>();let bytes=0
-  for await(const row of readFileRecords(file,format,delimiter,undefined,undefined,encoding)){
-   const size=Buffer.byteLength(JSON.stringify(row))
-   if(size>RECORD_BYTES)throw invalid()
-   for(const name of Object.keys(row))fields.add(dataFileName(name))
-   if(bytes+size<=256*1024)sample.push(row)
-   bytes+=size
-   if(sample.length>=20||bytes>256*1024)break
+  if(format==='xlsx')workbook=await XlsxRecords.open(file)
+  const selection=workbook?.selection(worksheet)
+  const records=workbook?workbook.records(selection?.worksheet):readFileRecords(file,format,delimiter,undefined,undefined,encoding)
+  let previewError:string|undefined
+  try{
+   for await(const row of records){
+    const size=Buffer.byteLength(JSON.stringify(row))
+    if(size>RECORD_BYTES)throw invalid()
+    for(const name of Object.keys(row))fields.add(dataFileName(name))
+    if(bytes+size<=256*1024)sample.push(row)
+    bytes+=size
+    if(sample.length>=20||bytes>256*1024)break
+   }
+   if(!fields.size)throw invalid()
+  }catch(e){
+   if(!workbook||!selection||!allowInvalidSheet)throw e
+   const message=e instanceof Error?e.message:''
+   previewError=/^FILE_TRANSFER:/.test(message)?message:'FILE_TRANSFER: Excel 工作簿或单元格格式无效'
+   fields.clear();sample.length=0
   }
-  if(!fields.size)throw invalid()
   const after=await file.stat();if(!sameFile(stat,after))throw new Error('FILE_TRANSFER: 文件已变化，请重新预览')
-  return {identity:identity(stat),fields:[...fields],sample}
- }finally{await file.close()}
+  return {identity:identity(stat),fields:[...fields],sample,...selection,previewError}
+ }finally{try{await workbook?.close()}finally{await file.close()}}
 }
 function canonicalBinary(value:string){if(!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value))throw invalid();return value}
 export function mappedValue(value:unknown,conversion:FieldMapping['conversion'],mongo:boolean):unknown{

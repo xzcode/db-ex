@@ -15,7 +15,7 @@ export class FilePresetStore{
   // Validate the same settings as execution, but never store a path, token,
   // selected rows, filter literals or an executable file reference.
   const request=normalizeFileTransfer({...raw.options,database:scope.database,entity:scope.entity,direction:scope.direction,token:'00000000-0000-0000-0000-000000000000'},scope.kind)
-  const {token,database,entity,direction,filter,mongoFilter,...options}=request
+  const {token,worksheet,database,entity,direction,filter,mongoFilter,...options}=request
   const values=await this.read(),old=id===undefined?undefined:values.find(v=>v.id===id&&matches(v,scope))
   if(id!==undefined&&!old)throw new Error('FILE_TRANSFER: 配置不存在')
   if(values.some(v=>matches(v,scope)&&v.id!==id&&v.name.toLowerCase()===raw.name.trim().toLowerCase()))throw new Error('FILE_TRANSFER: 配置名称已存在')

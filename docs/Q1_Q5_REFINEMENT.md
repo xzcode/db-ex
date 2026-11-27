@@ -166,3 +166,40 @@ mixed scripts, CTE completion, read batches, saved query scope, single row
 edits and execution history. Added a real mixed-script fixture to the
 existing MySQL/MariaDB TLS/SOCKS matrix. Remote acceptance must run on this
 exact candidate before merge/release.
+
+### Advanced predicates and file formats
+
+- Relational browsing accepts an explicit SQL-condition mode (MySQL,
+  MariaDB, SQLite). The shared predicate compiler allows nested boolean
+  expressions, comparisons, arithmetic, selected scalar functions, IN,
+  BETWEEN, LIKE and NULL tests. Literal strings and explicit placeholders
+  are bound, and exact numeric literals are retained. It rejects arbitrary
+  statements, subqueries, comments and unapproved functions. Applied
+  predicates are shared by paging, counts, saved browse profiles and file
+  exports; MongoDB continues using its separate filter syntax.
+- SQL data-file import/export supports a single source table with explicit
+  columns and INSERT VALUES records. Imports parse data and use the
+  existing prepared, transactional write path, never execute the file's
+  SQL. Export preserves wide integers, decimal text, binary, NULL and
+  escaped text. This is not an arbitrary SQL dump or DDL executor.
+- XLSX import/export supports worksheet selection, matching-header
+  multi-sheet import, preview and explicit mappings. Streaming reads use
+  the opened file identity and spill large shared-string tables to private
+  disk storage; streaming exports split at the Excel worksheet row limit.
+  Large numbers are text, binary uses Base64/EJSON mappings and NULL has
+  an escaped marker. Formulas are not evaluated; formula cells on import
+  are rejected and formula-looking exported strings stay literal.
+  Excel cannot recover precision already lost in another spreadsheet.
+  Legacy XLS and Parquet remain outside this increment. MongoDB XLSX
+  conversions are explicit; use JSONL/EJSON for lossless arbitrary BSON.
+- Worksheet changes invalidate the old preview token; file presets omit
+  per-file selection. The existing mapping, cancellation, rollback,
+  diagnostics and no-clobber publication rules remain in effect.
+
+Local evidence: five focused predicate/format tests, two targeted browser
+cases, real isolated SQLite filtered SQL round trip and malicious trailing
+statement rollback, and a 1001-row mapped XLSX round trip. The new
+MySQL/MariaDB/MongoDB TLS/SOCKS acceptance cases are part of the existing
+M12 fixture matrix and require remote execution on this exact candidate.
+Runtime dependency audit reported no known vulnerabilities after retaining
+the DOMPurify override and pinning the transitive UUID dependency.

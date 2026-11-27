@@ -234,6 +234,7 @@ export interface NativeCliSnapshot {output:string;status:string;running:boolean;
 export interface DbExAPI {
   readonly windowChrome:import('./window-chrome').WindowChrome
   readonly workspaceWindowId:string
+  selectFileWorksheet(id:string,token:string,sheet:string):Promise<import('./file-transfer').FilePreview>
   pickDataFile(id:string,format:import('./file-transfer').DataFileFormat,delimiter:string,encoding?:import('./file-transfer').DataFileEncoding):Promise<import('./file-transfer').FilePreview|null>
   startFileTransfer(id:string,request:import('./file-transfer').FileTransferRequest):Promise<import('./file-transfer').FileTransferJob|null>
   listFilePresets(id:string,database:string,entity:string,direction:'import'|'export'):Promise<import('./file-transfer').FileTransferPreset[]>

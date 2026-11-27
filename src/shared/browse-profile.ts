@@ -18,7 +18,7 @@ export function normalizeBrowseProfile(scope:BrowseProfileScope,input:unknown):B
   const parsed=JSON.parse(value);if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw new Error('INVALID_PROFILE: 浏览配置无效')
  }
  if(scope.kind==='mongodb')compileMongoFilter(v.visualFilter)
- else if(['mysql','mariadb','sqlite'].includes(scope.kind)&&v.filterMode==='builder')compileMysqlFilter(scope.database,scope.entity,v.visualFilter,scope.kind==='sqlite'?'sqlite':'mysql')
+ else if(['mysql','mariadb','sqlite'].includes(scope.kind)&&((v.filterMode==='builder'&&v.visualFilter?.raw===undefined)||(v.filterMode==='text'&&v.visualFilter?.raw!==undefined)))compileMysqlFilter(scope.database,scope.entity,v.visualFilter,scope.kind==='sqlite'?'sqlite':'mysql')
  else throw new Error('INVALID_PROFILE: 不支持此浏览配置')
  const layout=v.layout?normalizeGridLayout(v.layout,Array.isArray(v.layout.order)?v.layout.order.filter(x=>typeof x==='string'&&x.length<=200).slice(0,1000):[]):undefined
  return {name:v.name.trim(),filterMode:v.filterMode,visualFilter:JSON.parse(JSON.stringify(v.visualFilter)),mongo,pageSize:v.pageSize,view:v.view,layout}

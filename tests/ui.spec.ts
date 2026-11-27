@@ -163,7 +163,9 @@ async function installBridge(page: Page) {
       async listBrowseProfiles(id:string,database:string,entity:string){return JSON.parse(localStorage.getItem('mock.browse-profiles')||'[]').filter((p:any)=>p.connectionId===id&&p.database===database&&p.entity===entity)},
       async saveBrowseProfile(id:string,database:string,entity:string,draft:any,profileId?:string){const all=JSON.parse(localStorage.getItem('mock.browse-profiles')||'[]');const item={...draft,id:profileId||crypto.randomUUID(),connectionId:id,database,entity,kind:sessions[id].kind,updatedAt:new Date().toISOString()};localStorage.setItem('mock.browse-profiles',JSON.stringify([item,...all.filter((x:any)=>x.id!==item.id)]));return item},
       async deleteBrowseProfile(id:string,database:string,entity:string,profileId:string){const all=JSON.parse(localStorage.getItem('mock.browse-profiles')||'[]');localStorage.setItem('mock.browse-profiles',JSON.stringify(all.filter((p:any)=>p.id!==profileId||p.connectionId!==id||p.database!==database||p.entity!==entity)))},
-      async pickDataFile(id:string,format:string,delimiter:string){calls.push({action:'pickDataFile',id,format,delimiter});return {token:crypto.randomUUID(),name:'fixture.'+format,size:120,format,delimiter,fields:['name'],sample:[{name:'New record'}]}},
+      async pickDataFile(id:string,format:string,delimiter:string){calls.push({action:'pickDataFile',id,format,delimiter});return {token:crypto.randomUUID(),name:'fixture.'+format,size:120,format,delimiter,fields:['name'],sample:[{name:'New record'}],...(format==='xlsx'?{worksheet:'First',worksheets:['First','Second']}:{})}},
+      async selectFileWorksheet(id:string,token:string,sheet:string){calls.push({action:'selectFileWorksheet',id,token,sheet});return {token:crypto.randomUUID(),name:'fixture.xlsx',size:120,format:'xlsx',delimiter:',',encoding:'utf-8',worksheet:sheet,worksheets:['First','Second'],fields:['name'],sample:[{name:'Second sheet record'}]}},
+
       async startFileTransfer(id:string,request:any){calls.push({action:'startFileTransfer',id,request});fileJob={id:'fixture-file-job',direction:request.direction,state:'running',read:0,committed:0,skipped:0,bytes:0,file:'fixture.'+request.format};return {...fileJob}},
       async getFileTransferJob(){if(fileJob?.state==='running')fileJob={...fileJob,state:'completed',read:501,committed:501,bytes:120};return fileJob},
       async cancelFileTransfer(id:string){if(fileJob?.id===id)fileJob.state='cancelled'},
@@ -2133,4 +2135,65 @@ test('Q SQL CTE: qualified output aliases are suggested without executing the qu
  await page.keyboard.press('Control+Space')
  await expect(page.locator('.suggest-widget.visible')).toContainText('output_value')
  expect(await page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.query'))).toEqual([])
+})
+
+
+test('Q3 SQL predicate: bound filter, rejection, named profile and filtered SQL export use applied scope',async({page})=>{
+ await connect(page,'MySQL Local');await openUsers(page)
+ const w=page.locator('.workbench:visible')
+ await w.getByRole('button',{name:'查询条件',exact:true}).click()
+ await w.getByRole('button',{name:'SQL 条件',exact:true}).click()
+ const panel=w.locator('.sql-browse-filter'),predicate=panel.getByLabel('SQL 条件',{exact:true}),parameters=panel.getByLabel('SQL 参数 JSON 数组',{exact:true})
+ const text='LOWER(name) LIKE ? AND id BETWEEN 1 AND 100'
+ await predicate.fill(text);await parameters.fill('["a%"]')
+ await panel.getByRole('button',{name:'查询',exact:true}).click()
+ const raw={text,parameters:['a%']}
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.browse').at(-1)?.filter.raw)).toEqual(raw)
+ await w.getByRole('button',{name:'浏览配置',exact:true}).click()
+ const profile=page.getByRole('dialog',{name:'浏览配置'})
+ await profile.getByLabel('名称',{exact:true}).fill('Advanced SQL')
+ await profile.getByRole('button',{name:'另存当前配置',exact:true}).click()
+ await expect(profile.getByRole('button',{name:/Advanced SQL/})).toBeVisible()
+ await profile.getByRole('button',{name:'关闭',exact:true}).click()
+ const before=await page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.browse').length)
+ await predicate.fill('id = 1; DELETE FROM users')
+ await panel.getByRole('button',{name:'查询',exact:true}).click()
+ await expect(w.locator('.browse-filter-panel [role="alert"]')).toContainText('INVALID_FILTER')
+ expect(await page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.browse').length)).toBe(before)
+ await predicate.fill('id = 2');await parameters.fill('[]')
+ await panel.getByRole('button',{name:'查询',exact:true}).click()
+ await w.getByRole('button',{name:'浏览配置',exact:true}).click()
+ await profile.getByRole('button',{name:/Advanced SQL/}).click()
+ await profile.getByRole('button',{name:'应用配置',exact:true}).click()
+ await expect(predicate).toHaveValue(text)
+ await expect(parameters).toHaveValue('["a%"]')
+ await w.getByRole('button',{name:'流式导出向导',exact:true}).click()
+ const wizard=page.getByRole('dialog',{name:'流式导出向导'})
+ await wizard.getByLabel('格式',{exact:true}).selectOption('sql')
+ await wizard.getByLabel('仅导出当前筛选匹配记录',{exact:true}).check()
+ await wizard.getByRole('button',{name:'确认执行',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='startFileTransfer').at(-1)?.request)).toMatchObject({direction:'export',format:'sql',database:'app',entity:'users',filter:{raw}})
+})
+
+test('Q5 Excel wizard: re-preview worksheet, field mapping and explicit import token',async({page})=>{
+ await connect(page,'MySQL Local');await openUsers(page)
+ const w=page.locator('.workbench:visible')
+ await w.getByRole('button',{name:'流式导入向导',exact:true}).click()
+ const wizard=page.getByRole('dialog',{name:'流式导入向导'})
+ await wizard.getByLabel('格式',{exact:true}).selectOption('xlsx')
+ await expect(wizard.getByLabel('文件编码',{exact:true})).toHaveCount(0)
+ await wizard.getByRole('button',{name:'选择数据文件',exact:true}).click()
+ const sheet=wizard.getByLabel('Excel 工作表',{exact:true})
+ await expect(sheet).toHaveValue('First')
+ await sheet.selectOption('Second')
+ await expect(wizard.locator('.file-sample')).toContainText('Second sheet record')
+ await expect(sheet).toHaveValue('Second')
+ await wizard.getByRole('button',{name:'启用写入',exact:true}).click()
+ await wizard.getByRole('button',{name:'确认执行',exact:true}).click()
+ const calls=await page.evaluate(()=> (window as any).__dbexCalls)
+ const chosen=calls.filter((x:any)=>x.action==='selectFileWorksheet').at(-1)
+ const request=calls.filter((x:any)=>x.action==='startFileTransfer').at(-1).request
+ expect(chosen).toMatchObject({id:'sql',sheet:'Second'})
+ expect(request).toMatchObject({format:'xlsx',worksheet:'Second',direction:'import',database:'app',entity:'users',mapping:[{source:'name',target:'name',conversion:'auto'}]})
+ expect(request.token).not.toBe(chosen.token)
 })

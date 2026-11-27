@@ -14,7 +14,7 @@ onMounted(()=>void act(reload))
 </script>
 <template>
  <Teleport to="body"><div class="modal-backdrop"><section class="dialog browse-profiles-dialog" role="dialog" :aria-label="t('浏览配置')">
- <header class="dialog-header"><div><h2>{{t('浏览配置')}}</h2><span class="muted-text">{{database}} / {{entity}}</span></div><button class="icon-button" :disabled="busy" @click="emit('close')">×</button></header>
+ <header class="dialog-header"><div><h2>{{t('浏览配置')}}</h2><span class="muted-text">{{database}} / {{entity}}</span></div><button class="icon-button" :aria-label="t('关闭')" :disabled="busy" @click="emit('close')">×</button></header>
  <div class="browse-profiles-list"><button v-for="p in profiles" :key="p.id" :class="['browse-profile-row',{active:selected===p.id}]" @click="choose(p)" @dblclick="emit('apply',p)"><strong>{{p.name}}</strong><span>{{new Date(p.updatedAt).toLocaleString()}}</span></button><p v-if="!profiles.length" class="muted-text">{{t('暂无浏览配置')}}</p></div>
  <div class="dialog-body"><label class="field field-wide">{{t('名称')}}<input v-model="name" :disabled="busy" :aria-label="t('名称')" maxlength="200"/></label><p v-if="error" class="inline-message error field-wide">{{localize(error)}}</p></div>
  <footer class="dialog-footer"><button class="btn secondary" :disabled="busy||!name.trim()" @click="save()">{{t('另存当前配置')}}</button><button class="btn secondary" :disabled="busy||!selected||!name.trim()" @click="save(true)">{{t('更新配置')}}</button><button class="btn secondary danger-text" :disabled="busy||!selected" @click="remove">{{t('删除')}}</button><span class="toolbar-spacer"/><button class="btn primary" :disabled="busy||!selected" @click="emit('apply',profiles.find(p=>p.id===selected)!)">{{t('应用配置')}}</button></footer>

@@ -64,6 +64,23 @@ const sort = ref('{}')
 const showMongoFilters = ref(false)
 const filterMode = ref<'builder' | 'text'>('builder')
 const visualFilter = ref<BrowseFilter>(newBrowseFilter())
+const sqlWhere=ref(''),sqlWhereParameters=ref('[]')
+function rawFilterDraft():BrowseFilter{
+ const raw={text:sqlWhere.value,parameters:JSON.parse(sqlWhereParameters.value)}
+ const value:BrowseFilter={...newBrowseFilter(),sort:[...visualFilter.value.sort],raw}
+ compileMysqlFilter(entity.value.database,entity.value.entity,value,props.session.kind==='sqlite'?'sqlite':'mysql')
+ return value
+}
+function setSqlFilterDraft(value:BrowseFilter){
+ const {raw,...builder}=value
+ visualFilter.value=builder
+ if(raw){sqlWhere.value=raw.text;sqlWhereParameters.value=JSON.stringify(raw.parameters);filterMode.value='text'}
+ else {sqlWhere.value='';sqlWhereParameters.value='[]';filterMode.value='builder'}
+}
+function openBrowseProfiles(){
+ try{if(isMysql.value&&filterMode.value==='text')rawFilterDraft();profileDialog.value=true}
+ catch(e){filterError.value=messageOf(e);showMongoFilters.value=true}
+}
 const appliedMysql = ref<BrowseFilter>(newBrowseFilter())
 const appliedMongo = ref({ filter: '{}', projection: '{}', sort: '{}' })
 const browsePageSize = ref<number>(pageSizeFor(preferences.value,props.session.kind))
@@ -94,6 +111,7 @@ async function restoreLocator(){
  const saved=locatorReturn.value;if(!saved||!guardGridDraft())return
  if(await loadData(saved.offset,saved.mongo,saved.mysql,saved.size,saved.page)){
   locatorReturn.value=undefined;visualFilter.value=saved.mysql
+  if(isMysql.value)setSqlFilterDraft(saved.mysql)
   if(isMongo.value){filterMode.value='text';filter.value=saved.mongo.filter;projection.value=saved.mongo.projection;sort.value=saved.mongo.sort}
  }
 }
@@ -122,7 +140,7 @@ const sqlQuerySummary = ref('')
 const sqlQueryParameters = ref<SqlValue[]>([])
 const filterError = ref('')
 const mongoQuery = ref('')
-const filtersActive = computed(() => (databaseCapabilities(props.session.kind).browser==='relational') ? appliedMysql.value.groups.length > 0 || appliedMysql.value.sort.length > 0 : [appliedMongo.value.filter, appliedMongo.value.projection, appliedMongo.value.sort].some(value => { try { return Object.keys(JSON.parse(value || '{}')).length > 0 } catch { return true } }))
+const filtersActive = computed(() => (databaseCapabilities(props.session.kind).browser==='relational') ? !!appliedMysql.value.raw?.text.trim() || appliedMysql.value.groups.length > 0 || appliedMysql.value.sort.length > 0 : [appliedMongo.value.filter, appliedMongo.value.projection, appliedMongo.value.sort].some(value => { try { return Object.keys(JSON.parse(value || '{}')).length > 0 } catch { return true } }))
 const pipeline = ref('[\n  { "$limit": 100 }\n]')
 const primaryKeys = ref<string[]>([])
 const structure = ref<OperationResult | null>(null)
@@ -305,7 +323,7 @@ function stageColumn(){
 function currentProfile():BrowseProfileDraft{
  let layout=lastGridLayout
  if(!layout)try{layout=normalizeGridLayout(JSON.parse(localStorage.getItem('dbex.grid-layout.v1:'+gridLayoutScope.value)||'null'),result.value?.columns||[])}catch{}
- return {name:'',filterMode:isMongo.value?filterMode.value:'builder',visualFilter:JSON.parse(JSON.stringify(visualFilter.value)),mongo:{filter:filter.value,projection:projection.value,sort:sort.value},pageSize:browsePageSize.value,view:browseView.value,layout}
+ return {name:'',filterMode:filterMode.value,visualFilter:JSON.parse(JSON.stringify(isMysql.value&&filterMode.value==='text'?rawFilterDraft():visualFilter.value)),mongo:{filter:filter.value,projection:projection.value,sort:sort.value},pageSize:browsePageSize.value,view:browseView.value,layout}
 }
 async function applyBrowseProfile(profile:BrowseProfile){
  if(!guardGridDraft()||busy.value)return
@@ -313,6 +331,7 @@ async function applyBrowseProfile(profile:BrowseProfile){
   const mongo=profile.filterMode==='builder'&&isMongo.value?{...compileMongoFilter(profile.visualFilter),projection:'{}'}:profile.mongo
   if(await loadData(0,mongo,profile.visualFilter,profile.pageSize)){
    visualFilter.value=profile.visualFilter;filterMode.value=profile.filterMode
+   if(isMysql.value)setSqlFilterDraft(profile.visualFilter)
    filter.value=mongo.filter;projection.value=mongo.projection;sort.value=mongo.sort
    browseView.value=profile.view;gridLayout.value=profile.layout;lastGridLayout=profile.layout
    if(profile.layout)try{localStorage.setItem('dbex.grid-layout.v1:'+gridLayoutScope.value,JSON.stringify(profile.layout))}catch{}
@@ -509,6 +528,10 @@ async function handleColumnAction(action:ColumnAction,field:string){
         if(!previous||typeof previous!=='object'||Array.isArray(previous))throw new Error('INVALID_FILTER: 筛选或排序条件无效')
         const condition=JSON.stringify(Object.fromEntries([[field,{$eq:''}]]))
         filter.value=Object.keys(previous).length?'{"$and":['+raw+','+condition+']}':condition
+      }else if(isMysql.value&&filterMode.value==='text'){
+        const current=rawFilterDraft().raw!
+        sqlWhere.value=(current.text.trim()?'('+current.text+') AND ':'')+quote(field)+' = ?'
+        sqlWhereParameters.value=JSON.stringify([...current.parameters,''])
       }else{
         const draft=JSON.parse(JSON.stringify(visualFilter.value)) as BrowseFilter
         if(draft.groups.reduce((n,g)=>n+g.rules.length,0)>=50)throw new Error('INVALID_FILTER: 筛选或排序条件无效')
@@ -546,11 +569,15 @@ async function applyVisualFilter() {
 }
 async function applyTextFilter() {
   filterError.value = ''
-  try { await loadData(0, { filter: filter.value, projection: projection.value, sort: sort.value }) }
+  try {
+    if(isMysql.value)await loadData(0,appliedMongo.value,rawFilterDraft())
+    else await loadData(0, { filter: filter.value, projection: projection.value, sort: sort.value })
+  }
   catch (reason) { filterError.value = messageOf(reason) }
 }
 async function resetBrowseFilter() {
   visualFilter.value = newBrowseFilter()
+  sqlWhere.value='';sqlWhereParameters.value='[]'
   filter.value = '{}'; projection.value = '{}'; sort.value = '{}'; filterError.value = ''
   await loadData(0, { filter: '{}', projection: '{}', sort: '{}' }, newBrowseFilter())
 }
@@ -950,7 +977,7 @@ watch(()=>props.node?.id,()=>{
   parameters.value=remembered?.parameters??'[]';lastQuery=undefined;pipeline.value=remembered?.pipeline??'[\n  { "$limit": 100 }\n]'
   browsePageSize.value=pageSizeFor(preferences.value,props.session.kind);customSize.value=browsePageSize.value;browseVisited.value={1:0};profileDialog.value=false;fileWizard.value=undefined;locatorOpen.value=false;locatorReturn.value=undefined;continuous.value=false;appendError.value=''
   redisScanCursors.value=['0'];redisScanIndex.value=0
-  visualFilter.value=newBrowseFilter();appliedMysql.value=newBrowseFilter();appliedMongo.value={filter:'{}',projection:'{}',sort:'{}'}
+  visualFilter.value=newBrowseFilter();sqlWhere.value='';sqlWhereParameters.value='[]';appliedMysql.value=newBrowseFilter();appliedMongo.value={filter:'{}',projection:'{}',sort:'{}'}
   filter.value=remembered?.filter??'{}';projection.value=remembered?.projection??'{}';sort.value=remembered?.sort??'{}';filterMode.value=remembered&&(remembered.filter!=='{}'||remembered.projection!=='{}'||remembered.sort!=='{}')?'text':'builder';filterError.value=''
   totalRows.value=undefined;countLimited.value=false;pageInput.value=1;sqlQuerySummary.value='';sqlQueryParameters.value=[]
   gridDrafts.value=[];inlineCell.value=undefined;columnDraft.value=undefined;fieldDialog.value=undefined;gridLayout.value=undefined;lastGridLayout=undefined;gridUncertain.value=false;gridNeedsRefresh.value=false;gridScope.value={kind:'row',row:-1};
@@ -1035,11 +1062,15 @@ onBeforeUnmount(() => { disposed = true; generation++; if (inspectionTimer) clea
       </div>
     </template>
     <template v-else>
-      <div class="editor-toolbar browser-top-toolbar"><template v-if="tab === 'data' && !isRedis"><button class="btn secondary small" :disabled="busy||!hasEntity||gridDirty||!locatorKeys.length" @click="locatorOpen=true">{{t('定位记录')}}</button><button v-if="locatorReturn" class="btn secondary small" :disabled="busy||gridDirty" @click="restoreLocator">{{t('返回原筛选')}}</button><button class="btn secondary small" :class="{selected:continuous}" :disabled="busy||!result||gridDirty" @click="toggleContinuous">{{t(continuous?'退出连续浏览':'连续浏览')}}</button><button v-if="fileTransferSupported(session.kind)" class="btn secondary small" :disabled="busy||!hasEntity||gridDirty||continuous||node?.readOnly" @click="fileWizard='import'">{{t('流式导入向导')}}</button><button v-if="fileTransferSupported(session.kind)" class="btn secondary small" :disabled="busy||!hasEntity||gridDirty" @click="fileWizard='export'">{{t('流式导出向导')}}</button><button v-if="session.connectionId" class="btn secondary small" :disabled="busy||!hasEntity||gridDirty" @click="profileDialog=true">{{t('浏览配置')}}</button><button class="btn secondary small" :aria-label="t('编辑')" :disabled="busy || !canEditRow || !canWrite" @click="openEdit"><span aria-hidden="true">✎</span> {{ t('编辑') }}</button><button class="btn secondary small" :aria-label="t('查询条件')" :aria-expanded="showMongoFilters" :class="{ 'active-filter': filtersActive || showMongoFilters }" @click="showMongoFilters = !showMongoFilters"><span aria-hidden="true">⌕</span> {{ t('查询条件') }} <span v-if="filtersActive" aria-hidden="true">•</span></button><button class="btn secondary small" :disabled="busy || !hasEntity || !canImportRecords" @click="importData">{{ t('导入') }} {{ isMysql ? 'CSV / JSON' : 'EJSON' }}</button></template><button v-if="isMongo && tab !== 'data'" class="btn secondary small" :disabled="selectedRow < 0 || !result?.documents?.[selectedRow]" @click="viewMongoDocument()">{{ t('查看文档') }}</button><span class="toolbar-spacer"></span><button class="btn secondary small" :disabled="!result?.rows.length" @click="exportData('json')">{{ t('导出当前页 JSON') }}</button><button class="btn secondary small" :disabled="!result?.rows.length" @click="exportData('csv')">CSV</button></div>
+      <div class="editor-toolbar browser-top-toolbar"><template v-if="tab === 'data' && !isRedis"><button class="btn secondary small" :disabled="busy||!hasEntity||gridDirty||!locatorKeys.length" @click="locatorOpen=true">{{t('定位记录')}}</button><button v-if="locatorReturn" class="btn secondary small" :disabled="busy||gridDirty" @click="restoreLocator">{{t('返回原筛选')}}</button><button class="btn secondary small" :class="{selected:continuous}" :disabled="busy||!result||gridDirty" @click="toggleContinuous">{{t(continuous?'退出连续浏览':'连续浏览')}}</button><button v-if="fileTransferSupported(session.kind)" class="btn secondary small" :disabled="busy||!hasEntity||gridDirty||continuous||node?.readOnly" @click="fileWizard='import'">{{t('流式导入向导')}}</button><button v-if="fileTransferSupported(session.kind)" class="btn secondary small" :disabled="busy||!hasEntity||gridDirty" @click="fileWizard='export'">{{t('流式导出向导')}}</button><button v-if="session.connectionId" class="btn secondary small" :disabled="busy||!hasEntity||gridDirty" @click="openBrowseProfiles">{{t('浏览配置')}}</button><button class="btn secondary small" :aria-label="t('编辑')" :disabled="busy || !canEditRow || !canWrite" @click="openEdit"><span aria-hidden="true">✎</span> {{ t('编辑') }}</button><button class="btn secondary small" :aria-label="t('查询条件')" :aria-expanded="showMongoFilters" :class="{ 'active-filter': filtersActive || showMongoFilters }" @click="showMongoFilters = !showMongoFilters"><span aria-hidden="true">⌕</span> {{ t('查询条件') }} <span v-if="filtersActive" aria-hidden="true">•</span></button><button class="btn secondary small" :disabled="busy || !hasEntity || !canImportRecords" @click="importData">{{ t('导入') }} {{ isMysql ? 'CSV / JSON' : 'EJSON' }}</button></template><button v-if="isMongo && tab !== 'data'" class="btn secondary small" :disabled="selectedRow < 0 || !result?.documents?.[selectedRow]" @click="viewMongoDocument()">{{ t('查看文档') }}</button><span class="toolbar-spacer"></span><button class="btn secondary small" :disabled="!result?.rows.length" @click="exportData('json')">{{ t('导出当前页 JSON') }}</button><button class="btn secondary small" :disabled="!result?.rows.length" @click="exportData('csv')">CSV</button></div>
       <section v-if="tab === 'data' && !isRedis && showMongoFilters" class="browse-filter-panel">
-        <header class="filter-panel-header"><span>{{ t('查询条件') }}</span><div v-if="isMongo" class="filter-mode-switch"><button type="button" :class="{ active: filterMode === 'builder' }" @click="filterMode = 'builder'">{{ t('创建工具') }}</button><button type="button" :class="{ active: filterMode === 'text' }" @click="filterMode = 'text'">{{ t('文本') }}</button></div></header>
+        <header class="filter-panel-header"><span>{{ t('查询条件') }}</span><div v-if="isMongo||isMysql" class="filter-mode-switch"><button type="button" :class="{ active: filterMode === 'builder' }" @click="filterMode = 'builder'">{{ t('创建工具') }}</button><button type="button" :class="{ active: filterMode === 'text' }" @click="filterMode = 'text'">{{ t(isMysql?'SQL 条件':'文本') }}</button></div></header>
         <div v-if="filterError" class="inline-message error" role="alert">{{ localize(filterError) }}</div><p v-if="mongoFindRecovery.error.value" class="compact-help">{{ t(mongoFindRecovery.error.value) }}</p><div v-if="mongoFindRecovery.available.value" class="recovery-banner"><span>{{ t('发现未恢复的查询草稿') }}</span><button class="btn secondary small" @click="mongoFindRecovery.restore">{{ t('恢复草稿') }}</button><button class="btn secondary small" @click="mongoFindRecovery.dismiss">{{ t('放弃草稿') }}</button></div>
-        <VisualQueryBuilder v-if="isMysql || filterMode === 'builder'" v-model="visualFilter" :kind="isMysql ? 'mysql' : 'mongodb'" :key="node?.id" :fields="browseFields" :suggestions="field => filterSuggestions(result, field, isMongo)" :disabled="busy || !hasEntity" @apply="applyVisualFilter" @reset="resetBrowseFilter" />
+        <VisualQueryBuilder v-if="filterMode === 'builder'" v-model="visualFilter" :kind="isMysql ? 'mysql' : 'mongodb'" :key="node?.id" :fields="browseFields" :suggestions="field => filterSuggestions(result, field, isMongo)" :disabled="busy || !hasEntity" @apply="applyVisualFilter" @reset="resetBrowseFilter" />
+        <div v-else-if="isMysql" class="sql-browse-filter">
+          <div class="sql-browse-filter-fields"><label>{{t('SQL 条件')}}<textarea v-model="sqlWhere" :aria-label="t('SQL 条件')" placeholder="id >= 100 AND (name LIKE ? OR status IS NULL)" rows="3" spellcheck="false" :disabled="busy"/></label><label>{{t('SQL 参数 JSON 数组')}}<textarea v-model="sqlWhereParameters" :aria-label="t('SQL 参数 JSON 数组')" placeholder='["A%"]' rows="3" spellcheck="false" :disabled="busy"/></label></div>
+          <div class="sql-browse-filter-actions"><span class="muted-text">{{t('仅输入 WHERE 后的条件；支持括号、常用比较、IN、BETWEEN、LIKE、NULL 和常用函数。排序使用列标题菜单。')}}</span><button class="btn primary" :disabled="busy||!hasEntity" @click="applyTextFilter">{{t('查询')}}</button><button class="btn secondary" :disabled="busy||!hasEntity" @click="resetBrowseFilter">{{t('重置筛选')}}</button></div>
+        </div>
         <div v-else class="mongo-filters"><label>Filter<textarea v-model="filter" rows="3" spellcheck="false" /></label><label>Projection<textarea v-model="projection" rows="3" spellcheck="false" /></label><label>Sort<textarea v-model="sort" rows="3" spellcheck="false" /></label><button class="btn primary" :disabled="busy || !hasEntity" @click="applyTextFilter">{{ t('查询') }}</button><button class="btn secondary" :disabled="busy || !hasEntity" @click="resetBrowseFilter">{{ t('重置筛选') }}</button></div>
       </section>
       <div v-if="columnDraft" class="editor-toolbar grid-batch-editor"><strong>{{ columnDraft.field }}</strong><span class="muted-text">{{ t('当前页') }} · {{ result?.rows.length||0 }} {{ t('条记录') }}</span><input :value="columnDraft.text" :aria-label="t('整列修改值')" spellcheck="false" @input="columnDraft.text=($event.target as HTMLInputElement).value;columnDraft.changed=true" @keydown.enter.prevent="stageColumn" @keydown.esc.prevent="columnDraft=undefined" /><button class="btn secondary small" @click="stageColumn">{{ t('暂存修改') }}</button></div>
