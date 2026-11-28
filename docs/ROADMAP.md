@@ -339,3 +339,8 @@ checkpoint continuation. The M12.8 final remote/release gate remains
 pending on the exact candidate. Complex/destructive DDL stays review-only;
 row-difference synchronization belongs to M13. See M12_MIGRATION.md
 for scope, actual local evidence and limitations.
+
+- Release candidate: version 1.1.0, actual published v1.0.0 native upgrade
+  baseline, packaged migration preview/template persistence acceptance,
+  and immutable release publication gated on all 26 integrated/native,
+  compatibility and M12 specialist jobs on the exact master release SHA.

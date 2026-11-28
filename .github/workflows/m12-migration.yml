@@ -2,6 +2,8 @@ name: M12 relational migration
 on:
   pull_request:
     branches: [master]
+  push:
+    branches: [master]
   workflow_dispatch:
 permissions:
   contents: read
@@ -10,7 +12,8 @@ concurrency:
   cancel-in-progress: true
 jobs:
   real-migration:
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'feature/m12-')
+    if: >-
+      github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'feature/m12-') || startsWith(github.event.head_commit.message, 'release: DB EX v1.1.0')
     name: Real structure sync and data transfer (${{ matrix.image }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -42,7 +45,8 @@ jobs:
         run: bash scripts/test-m11-engine-docker.sh "$ENGINE" "$IMAGE"
 
   sqlite-migration:
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'feature/m12-')
+    if: >-
+      github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'feature/m12-') || startsWith(github.event.head_commit.message, 'release: DB EX v1.1.0')
     name: Real SQLite migration workers
     runs-on: ubuntu-latest
     timeout-minutes: 12

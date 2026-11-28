@@ -2,7 +2,7 @@
 
 本地优先的桌面数据库工具，统一管理 **MySQL、MariaDB、MongoDB、Redis、SQLite、ClickHouse**。基于 Electron、Vue 3、TypeScript 与 Monaco，不依赖账号、云端服务或遥测。
 
-已发布版本及下载：[Releases](https://github.com/xzcode/db-ex/releases)。当前代码版本：**1.0.0**。M0–M11 已完成开发，M11 合并候选通过全部 15 项专项兼容性验收；正式发行仍以对应 master 提交的 CI 结果为准。完整范围、验收证据和限制见 [路线图](docs/ROADMAP.md) 与 [M11 兼容性矩阵](docs/M11_COMPATIBILITY.md)。macOS 为 ad-hoc 签名，Windows 未商业代码签名。
+已发布版本及下载：[Releases](https://github.com/xzcode/db-ex/releases)。当前代码版本：**1.1.0**（M12 发布候选）；最新正式发布版本以 Releases 页面为准。M12 核心开发完成，功能候选已通过完整集成、实库及桌面打包 CI。正式发布须通过同一 master 提交的 M11 兼容性、M12 迁移及完整桌面 CI。详见 [M12](docs/M12_MIGRATION.md)、[路线图](docs/ROADMAP.md) 与 [M11 兼容性矩阵](docs/M11_COMPATIBILITY.md)。macOS 为 ad-hoc 签名，Windows 未商业代码签名。
 
 ## 功能
 
@@ -10,17 +10,22 @@
 | --- | --- |
 | 连接与工作区 | 保存/编辑连接、临时连接、测试连接、多会话、资源树、可调整布局、深浅主题 |
 | MySQL | Monaco SQL、选中执行、参数绑定、结果分页、结构与索引查看、主键定位 CRUD、原值冲突检测、显式事务、CSV/JSON 批量导入与当前页导出 |
-| MongoDB | 原生语句编辑器（受控单语句）、智能补全与美化、Canonical EJSON/BSON、集合浏览筛选、文档 CRUD、索引及语法帮助、批量单格/列修改 |\n| MariaDB / SQLite | SQL 查询对象、参数绑定、主键编辑、事务、单格/列修改及引擎专属元数据 |\n| ClickHouse | HTTP/HTTPS 适配器、表/视图浏览、精确类型、参数化查询、受控 DDL、批量插入和当前页导出 |
+| MongoDB | 原生语句编辑器（受控单语句）、智能补全与美化、Canonical EJSON/BSON、集合浏览筛选、文档 CRUD、索引及语法帮助、批量单格/列修改 |
+| MariaDB / SQLite | SQL 查询对象、参数绑定、主键编辑、事务、单格/列修改及引擎专属元数据 |
+| ClickHouse | HTTP/HTTPS 适配器、表/视图浏览、精确类型、参数化查询、受控 DDL、批量插入和当前页导出 |
 | Redis | SCAN、String/Hash/List/Set/ZSet/Stream 浏览与编辑、TTL、String CAS 更新、明确选择 Key 的批量删除、受限命令台 |
 | 高级连接 | 直连、SOCKS5、HTTP CONNECT、SSH 密码/私钥/Agent、最多三个前置跳板、逐级指纹、SSH config 安全导入、TLS/mTLS |
 | 拓扑 | MongoDB URI/副本集/原生节点发现；Redis Standalone、Sentinel、Cluster；发现的新节点沿用代理/SSH 路由 |
+| 结构同步与数据迁移 | 六种数据库原生迁移，普通结构同步与外键依赖排序，跨引擎字段映射、命名迁移配置、任务历史及对象级续传 |
+| 流式文件导入导出 | MySQL、MariaDB、SQLite 的 CSV/JSONL/XLSX/SQL/Parquet，MongoDB 的 CSV/EJSON/XLSX/Parquet，Redis 原生 Key 存档，ClickHouse CSVWithNames/JSONEachRow/Parquet/Native；字段选择、筛选、进度与取消 |
+| 查询和数据工作区 | 可调整编辑器/结果布局、SQL 脚本与多结果、查询历史、单格和批量暂存编辑、浏览配置、高级参数化条件 |
 | 本地持久化 | 内置 AES-256-GCM 加密连接、查询历史和收藏；不回显已保存密码；完整连接备份导入导出 |
 
 ### 写入保护
 
 新会话默认只读。启用写入需要主进程原生确认，每次实际写入再确认目标连接、地址、资源与操作。MySQL 使用参数绑定和只读事务保护；表格修改必须携带实际主键与完整原始记录。MongoDB 使用完整原文档做原子冲突检测。数据库只读账号仍是服务端权限边界。
 
-取消操作会断开当前会话。未提交的 MySQL 事务回滚；已自动提交或已发给服务器的写操作不能承诺撤销，重连后核对结果再决定是否重试。
+独立查询和传输任务可以单独取消；无法安全单独取消的会话操作可能断开当前会话。未提交的 MySQL 事务回滚；已自动提交或已发给服务器的写操作不能承诺撤销，重连后核对结果再决定是否重试。
 
 ## 开发运行
 
@@ -33,7 +38,7 @@ npm ci
 npm run dev
 ```
 
-默认分支 `master` 包含当前预览版；新功能在独立分支推进。
+默认分支 `master` 为稳定分支；新功能在独立分支推进。
 
 ```bash
 npm run typecheck       # 前后端类型检查
@@ -48,12 +53,12 @@ UI 测试首次需 `npx playwright install chromium`；Linux CI 使用 `--with-d
 
 ## 数据使用范围
 
-- **MySQL SQL**：一次一条语句。事务通过专用按钮操作；不执行存储过程、用户/权限/服务器管理命令或可执行注释。SELECT 使用派生表分页，重复列名或不适合该包装的 SQL 会明确报错。表格 CRUD 需要主键，含二进制列的预览不提供文本编辑。导入的原子性依赖 InnoDB；触发器或外部副作用需要另行评估。
+- **MySQL SQL**：支持单语句查询、只读多语句批处理及显式确认的读写脚本。事务通过专用按钮操作；不执行存储过程、用户/权限/服务器管理命令或可执行注释。SELECT 使用派生表分页，重复列名或不适合该包装的 SQL 会明确报错。表格 CRUD 需要主键，含二进制列的预览不提供文本编辑。导入的原子性依赖 InnoDB；触发器或外部副作用需要另行评估。
 - **MongoDB**：编辑与导出使用 Canonical Extended JSON，保留 ObjectId、Int64、Decimal128、Date 等类型。禁止服务端 JavaScript、`$out`、`$merge`；Projection 查询不能直接用作整文档编辑。批量插入有明确的部分成功提示，不承诺跨文档事务。
 - **Redis**：编辑六种基础数据类型；Redis 模块类型、Pub/Sub、阻塞命令、脚本/管理命令不在命令台开放范围。Cluster 的 Key 浏览按主节点选择，SCAN 不是一致性快照，COUNT 只是提示。二进制 String 以 Base64 预览，不允许用文本覆盖；二进制 Key 暂无专用编辑器。
 - **返回量**：一般最多500行、2 MiB渲染结果；MySQL单行/Mongo单文档最多512 KiB。Redis String只读取前64 KiB，单次操作所有节点累计入站超过8 MiB立即断开。MySQL/Mongo的大字段仍需驱动接收当前行/文档后才能判断应用上限。
-- **导入导出**：文件导入最多4 MiB，每批最多500条；SQL/Mongo单批内容最多2 MiB。导出当前已加载的一页，不隐式全库扫描。CSV用 `\N` 表示 null，导出会防御电子表格公式执行；类型保真优先使用 JSON/EJSON。
-- **会话**：每个连接一次只执行一个操作，最长30秒；最多20个同时打开的连接。
+- **导入导出**：当前页导出和流式文件向导是独立入口。流式传输按批次读写并明确选择源对象及筛选条件，不隐式扫描整库，不覆盖已有文件。CSV 使用空值标记，电子表格打开原始 CSV 前请检查公式风险；类型保真优先使用 JSONL/EJSON 或支持精确类型的 Parquet。具体格式和兼容边界见 [Q1–Q5](docs/Q1_Q5_REFINEMENT.md)。
+- **会话与迁移**：普通交互查询与长任务使用不同执行路径。迁移支持独立连接、明确选择的对象、按表事务或按批确认、进度和取消；复杂 DDL、任意跨引擎建表、Redis 跨引擎转换及不确定写入自动重放均不在 M12 范围内。
 
 ## 高级连接说明
 
@@ -86,7 +91,7 @@ npm run test:integration
 
 拓扑测试由 CI 中的 `scripts/start-mongo-replica.sh` 与 `scripts/start-redis-topologies.sh` 初始化独立测试进程；仅 `DB_EX_TOPOLOGY=1` 时执行 `npm run test:topology`，不会使用外部业务 URI。
 
-安装包上传成功时可在 GitHub Actions Artifacts 下载，默认未做受信任发行签名。2026-11-23 验证发现当前账号 Actions 存储配额已满，GitHub 拒绝上传；代码构建与打包后启动验证仍独立执行，工作流摘要记录产物哈希。CI 的可选上传失败不等于产物可下载，正式发行工作流仍要求上传成功。不能把预览构建描述为完成公证或商业发行。
+安装包上传成功时可在 GitHub Actions Artifacts 下载，默认未做受信任发行签名。正式发行要求对应提交的实库、升级兼容性、桌面 CI 和安装包完整性检查通过，五个安装包和三个校验文件全部上传成功。CI 的可选上传失败不等于产物可下载。
 
 [Release candidates](.github/workflows/release.yml) 可手动生成发行候选包。选择签名时需要分别配置 `MAC_CSC_LINK` / `MAC_CSC_KEY_PASSWORD`、`WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD`；macOS 公证还需要 `APPLE_ID`、`APPLE_APP_SPECIFIC_PASSWORD`、`APPLE_TEAM_ID`。缺少凭据会失败，不会悄悄退回未签名产物。工作流不自动发布 GitHub Release。
 

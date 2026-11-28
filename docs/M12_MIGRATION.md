@@ -195,3 +195,16 @@ above describe historical stages, not the current feature list.
 
 Keep stable master at v1.0.0 until the exact final candidate completes
 the required remote checks and release upgrade validation.
+
+### Release gate preparation
+
+The functional candidate 76793e2 passed all seven M12 real-engine jobs, all
+four integrated/native CI jobs (all three installer uploads succeeded), and
+macOS ad-hoc smoke. It is mergeable against the stable v1.0.0 baseline.
+The v1.1.0 candidate adds release metadata and enables the existing
+compatibility matrix on M12 pull requests; the native upgrade baseline
+is the actual published v1.0.0 rather than v0.7.1. No prior release is
+modified. Publication requires all three acceptance workflows (4 + 15 + 7
+successful jobs) on the same master release SHA, and verified delivery
+of the five native installers and three checksum files. M12.8 remains
+open until those exact-candidate checks and release verification finish.

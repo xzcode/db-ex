@@ -13,7 +13,7 @@ concurrency:
 jobs:
   engines:
     if: >-
-      github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'feature/m11-') || startsWith(github.event.head_commit.message, 'release: DB EX v1.')
+      github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'feature/m11-') || startsWith(github.head_ref, 'feature/m12-') || startsWith(github.event.head_commit.message, 'release: DB EX v1.')
     name: TLS and version matrix (${{ matrix.engine }} / ${{ matrix.image }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -49,7 +49,7 @@ jobs:
         run: bash scripts/test-m11-engine-docker.sh "$ENGINE" "$IMAGE"
   cluster:
     if: >-
-      github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'feature/m11-') || startsWith(github.event.head_commit.message, 'release: DB EX v1.')
+      github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'feature/m11-') || startsWith(github.head_ref, 'feature/m12-') || startsWith(github.event.head_commit.message, 'release: DB EX v1.')
     name: ClickHouse two-server replication, distributed reads and recovery
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -65,7 +65,7 @@ jobs:
       - run: bash scripts/test-m11-clickhouse-cluster-docker.sh
   sqlite:
     if: >-
-      github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'feature/m11-') || startsWith(github.event.head_commit.message, 'release: DB EX v1.')
+      github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'feature/m11-') || startsWith(github.head_ref, 'feature/m12-') || startsWith(github.event.head_commit.message, 'release: DB EX v1.')
     name: SQLite large-file, backup, WAL and cancellation
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -82,7 +82,7 @@ jobs:
       - run: node --import tsx scripts/test-m11-sqlite.ts
   upgrade:
     if: >-
-      github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'feature/m11-') || startsWith(github.event.head_commit.message, 'release: DB EX v1.')
+      github.event_name == 'workflow_dispatch' || startsWith(github.head_ref, 'feature/m11-') || startsWith(github.head_ref, 'feature/m12-') || startsWith(github.event.head_commit.message, 'release: DB EX v1.')
     name: Native installation and upgrade (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -110,6 +110,16 @@ jobs:
           elif [[ "$RUNNER_OS" == macOS ]]; then npm exec electron-builder -- --mac dmg --publish never
           else npm exec electron-builder -- --win nsis --publish never
           fi
+      - name: Select previous stable baseline for this release
+        shell: bash
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          case "$version" in
+            1.0.0) previous=0.7.1 ;;
+            1.1.0) previous=1.0.0 ;;
+            *) echo "::error::No upgrade baseline configured for $version"; exit 1 ;;
+          esac
+          echo "DBEX_M11_PREVIOUS_VERSION=$previous" >> "$GITHUB_ENV"
       - name: Download and verify previous public release
         shell: bash
         env:
@@ -121,7 +131,7 @@ jobs:
             macOS) pattern='*.dmg' ;;
             Windows) pattern='*.exe' ;;
           esac
-          gh release download v0.7.1 --repo "$GITHUB_REPOSITORY" --pattern "$pattern" --pattern "SHA256SUMS-$RUNNER_OS-$RUNNER_ARCH.txt" --dir previous
+          gh release download "v$DBEX_M11_PREVIOUS_VERSION" --repo "$GITHUB_REPOSITORY" --pattern "$pattern" --pattern "SHA256SUMS-$RUNNER_OS-$RUNNER_ARCH.txt" --dir previous
           # check-packages normally expects every installer format. This
           # compatibility job builds only the format actually being installed.
           node --input-type=module -e "import {readdir,writeFile,readFile} from 'node:fs/promises';import {createHash} from 'node:crypto';const files=(await readdir('release')).filter(n=>/\\.(dmg|deb|exe)$/.test(n));const lines=[];for(const file of files)lines.push(createHash('sha256').update(await readFile('release/'+file)).digest('hex')+'  '+file);if(lines.length!==1)throw Error('Expected one native installer');await writeFile('release/SHA256SUMS.txt',lines.join('\\n')+'\\n');"
@@ -129,7 +139,6 @@ jobs:
         shell: bash
         env:
           DBEX_M11_PREVIOUS_DIR: previous
-          DBEX_M11_PREVIOUS_VERSION: 0.7.1
           DBEX_M11_CURRENT_DIR: release
         run: |
           if [[ "$RUNNER_OS" == Linux ]]; then xvfb-run -a node scripts/test-m11-upgrade.mjs
