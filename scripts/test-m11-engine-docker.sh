@@ -25,7 +25,7 @@ case "$kind" in
    --innodb-buffer-pool-size=96M --max-connections=24 --ssl-ca=/dbex-tls/ca.pem --ssl-cert=/dbex-tls/server.pem --ssl-key=/dbex-tls/server.key --require-secure-transport=ON >/dev/null
   ready=0
   for i in $(seq 1 90); do
-   if docker exec "$container" "$tool" -uroot "-p$password" -Nse 'SELECT 1' >/dev/null 2>&1; then ready=1; break; fi
+   if docker exec "$container" "$tool" -h 127.0.0.1 --protocol=TCP -uroot "-p$password" --ssl-ca=/dbex-tls/ca.pem --ssl-cert=/dbex-tls/client.pem --ssl-key=/dbex-tls/client.key -Nse 'SELECT 1' >/dev/null 2>&1; then ready=1; break; fi
    sleep 1
   done
   [[ "$ready" == 1 ]] || { docker logs --tail 15 "$container"; exit 1; }
@@ -118,3 +118,18 @@ WRAPPER
 done
 TMPDIR="$fixture" DBEX_M11_ENGINE="$kind" DBEX_M11_PORT="$actual" DBEX_M11_PASSWORD="$password" \
  DBEX_M11_TLS_DIR="$fixture/tls" DBEX_M11_NATIVE_BIN="$fixture/bin" node --import tsx scripts/test-m11-engine.ts
+
+if [[ "${DBEX_M12_MIGRATION:-0}" == 1 ]]; then
+  if [[ "$kind" == mysql || "$kind" == mariadb ]]; then script=scripts/test-m12-relational.ts; else script=scripts/test-m12-other-engines.ts; fi
+  TMPDIR="$fixture" DBEX_M11_ENGINE="$kind" DBEX_M11_PORT="$actual" DBEX_M11_PASSWORD="$password" \
+   DBEX_M11_TLS_DIR="$fixture/tls" node --import tsx "$script"
+  if [[ "$kind" == mysql || "$kind" == mariadb || "$kind" == mongodb || "$kind" == clickhouse ]]; then
+    npm run build:main
+    TMPDIR="$fixture" DBEX_M11_ENGINE="$kind" DBEX_M11_PORT="$actual" DBEX_M11_PASSWORD="$password" \
+      DBEX_M11_TLS_DIR="$fixture/tls" node --import tsx scripts/test-m12-cross-engine.ts
+  fi
+  if [[ "$kind" == mysql || "$kind" == mariadb || "$kind" == mongodb ]]; then
+    TMPDIR="$fixture" DBEX_M11_ENGINE="$kind" DBEX_M11_PORT="$actual" DBEX_M11_PASSWORD="$password" \
+      DBEX_M11_TLS_DIR="$fixture/tls" node --import tsx scripts/test-m12-q-server-files.ts
+  fi
+fi

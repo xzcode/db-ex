@@ -1,4 +1,4 @@
-import mysql from 'mysql2/promise'
+import {openMysqlClient} from '../mysql-client'
 import { metric,metrics } from '../../../shared/object-inspection'
 import type { MysqlOperation } from '../../../shared/types'
 import { MysqlOperations } from '../../operations/mysql'
@@ -14,17 +14,9 @@ export function createMysqlFamilyAdapter(kind:'mysql'|'mariadb'):DatabaseAdapter
   rollback:{action:'mysql.rollback'},
   writes(input,writable){return input.action==='mysql.query'?inspectSql(input.sql,writable).mode==='write':input.action==='mariadb.sequenceRestart'||writes.has(input.action)},
   async connect({config,transport,tls}){
-    const stream=await transport.open(config.host,config.port)
-    let client:Awaited<ReturnType<typeof mysql.createConnection>>|undefined
+    let client:Awaited<ReturnType<typeof openMysqlClient>>|undefined
     try{
-      client=await mysql.createConnection({
-        host:config.tls.servername||config.host,port:config.port,stream,
-        user:config.username||undefined,password:config.password||undefined,
-        database:config.database||undefined,connectTimeout:config.connectTimeoutMs,
-        supportBigNumbers:true,bigNumberStrings:true,dateStrings:true,decimalNumbers:false,jsonStrings:true,
-        multipleStatements:false,flags:['-LOCAL_FILES'],
-        ssl:config.tls.enabled?{ca:tls.ca,cert:tls.cert,key:tls.key,rejectUnauthorized:true,verifyIdentity:true,minVersion:'TLSv1.2'} as import('mysql2').SslOptions:undefined,
-      })
+      client=await openMysqlClient(config,transport,tls)
       // Query one bounded server-version value for the explicit MariaDB profile.
       // Do not advertise a MariaDB profile against a different server family.
       const connected=client
@@ -59,7 +51,7 @@ export function createMysqlFamilyAdapter(kind:'mysql'|'mariadb'):DatabaseAdapter
         transactionActive:()=>operations.transactionActive,
         disconnected:()=>operations.disconnected
       }
-    }catch(error){client?.destroy();stream.destroy();throw error}
+    }catch(error){client?.destroy();throw error}
   },
   preview(database,entity,offset){return {action:'mysql.query',database,sql:'SELECT * FROM '+quoteIdentifier(database)+'.'+quoteIdentifier(entity),offset,limit:100}}
 }}

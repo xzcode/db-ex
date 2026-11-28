@@ -1,0 +1,163 @@
+name: Publish DB EX v1.1.0 from native CI
+on:
+  workflow_run:
+    workflows: ["Verify DB EX", "M11 database and upgrade compatibility", "M12 relational migration"]
+    types: [completed]
+    branches: [master]
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: db-ex-release-v1.1.0
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.repository == 'xzcode/db-ex' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.head_branch == 'master' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      startsWith(github.event.workflow_run.head_commit.message, 'release: DB EX v1.1.0')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - name: Require all three complete acceptance workflows for this master SHA
+        id: gates
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          [[ "$RELEASE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$(git rev-parse HEAD)" == "$RELEASE_SHA" ]]
+          [[ "$(jq -r .version package.json)" == "1.1.0" ]]
+          [[ "$(jq -r .version package-lock.json)" == "1.1.0" ]]
+          if [[ "$(gh api "repos/$repo/git/ref/heads/master" --jq '.object.sha')" != "$RELEASE_SHA" ]]; then
+            echo 'Release candidate superseded; do not publish.'
+            echo 'ready=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          latest_run() {
+            gh api "repos/$repo/actions/workflows/$1/runs?head_sha=$RELEASE_SHA&branch=master&event=push&per_page=100" |
+              jq -c --arg sha "$RELEASE_SHA" --arg repo "$repo" '[.workflow_runs[] | select(.head_sha == $sha and .head_branch == "master" and .event == "push" and .head_repository.full_name == $repo)] | sort_by(.id) | last // {}'
+          }
+          ci="$(latest_run ci.yml)"
+          compatibility="$(latest_run m11-compatibility.yml)"
+          migration="$(latest_run m12-migration.yml)"
+          if ! jq -e '.status == "completed" and .conclusion == "success"' <<< "$ci" >/dev/null ||
+             ! jq -e '.status == "completed" and .conclusion == "success"' <<< "$compatibility" >/dev/null ||
+             ! jq -e '.status == "completed" and .conclusion == "success"' <<< "$migration" >/dev/null; then
+            echo 'All three workflows must finish successfully; no release is created by this invocation.'
+            echo 'ready=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          ci_id="$(jq -r .id <<< "$ci")"
+          m11_id="$(jq -r .id <<< "$compatibility")"
+          m12_id="$(jq -r .id <<< "$migration")"
+          jobs() {
+            gh api --paginate "repos/$repo/actions/runs/$1/jobs?filter=latest&per_page=100" | jq -s '[.[].jobs[]]'
+          }
+          jobs "$ci_id" | jq -e 'length == 4 and all(.[]; .status == "completed" and .conclusion == "success")'
+          jobs "$m11_id" | jq -e 'length == 15 and all(.[]; .status == "completed" and .conclusion == "success")'
+          jobs "$m12_id" | jq -e 'length == 7 and all(.[]; .status == "completed" and .conclusion == "success")'
+          echo "ci_run=$ci_id" >> "$GITHUB_OUTPUT"
+          echo "m11_run=$m11_id" >> "$GITHUB_OUTPUT"
+          echo "m12_run=$m12_id" >> "$GITHUB_OUTPUT"
+          echo 'ready=true' >> "$GITHUB_OUTPUT"
+          echo "Release gates passed: integrated CI $ci_id, M11 $m11_id, M12 $m12_id."
+
+      - name: Download the exact verified native CI packages
+        if: steps.gates.outputs.ready == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_RUN: ${{ steps.gates.outputs.ci_run }}
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$RELEASE_SHA" ]]
+          [[ "$(jq -r .version package.json)" == "1.1.0" ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN" | jq -e --arg sha "$RELEASE_SHA" '.conclusion == "success" and .head_sha == $sha and .event == "push" and .head_branch == "master"'
+          mkdir -p artifacts/mac artifacts/windows artifacts/linux upload
+          gh run download "$CI_RUN" --repo "$GITHUB_REPOSITORY" --name db-ex-native-macOS-ARM64 --dir artifacts/mac
+          gh run download "$CI_RUN" --repo "$GITHUB_REPOSITORY" --name db-ex-native-Windows-X64 --dir artifacts/windows
+          gh run download "$CI_RUN" --repo "$GITHUB_REPOSITORY" --name db-ex-native-Linux-X64 --dir artifacts/linux
+          (cd artifacts/mac && sha256sum -c SHA256SUMS.txt)
+          (cd artifacts/windows && sha256sum -c SHA256SUMS.txt)
+          (cd artifacts/linux && sha256sum -c SHA256SUMS.txt)
+          cp artifacts/mac/DB-EX-1.1.0-mac-arm64.{dmg,zip} upload/
+          cp artifacts/windows/DB-EX-1.1.0-win-x64.exe upload/
+          cp artifacts/linux/DB-EX-1.1.0-linux-x86_64.AppImage artifacts/linux/DB-EX-1.1.0-linux-amd64.deb upload/
+          cp artifacts/mac/SHA256SUMS.txt upload/SHA256SUMS-macOS-ARM64.txt
+          cp artifacts/windows/SHA256SUMS.txt upload/SHA256SUMS-Windows-X64.txt
+          cp artifacts/linux/SHA256SUMS.txt upload/SHA256SUMS-Linux-X64.txt
+          [[ "$(find upload -maxdepth 1 -type f | wc -l)" == 8 ]]
+          for f in upload/*.dmg upload/*.zip upload/*.exe upload/*.AppImage upload/*.deb; do
+            [[ "$(stat -c '%s' "$f")" -gt 1048576 ]]
+          done
+
+      - name: Create or resume draft, verify uploaded files and publish
+        if: steps.gates.outputs.ready == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          repo="$GITHUB_REPOSITORY"
+          tag=v1.1.0
+          [[ "$(gh api "repos/$repo/git/ref/heads/master" --jq '.object.sha')" == "$RELEASE_SHA" ]]
+          releases() {
+            gh api --paginate "repos/$repo/releases?per_page=100" --jq '.[] | select(.tag_name == "v1.1.0")' | jq -sc '.'
+          }
+          existing="$(releases)"
+          count="$(jq 'length' <<< "$existing")"
+          [[ "$count" -le 1 ]]
+          if [[ "$count" == 0 ]]; then
+            if gh api "repos/$repo/git/ref/tags/$tag" >/dev/null 2>&1; then
+              echo "::error::Existing release tag without release"; exit 1
+            fi
+            gh release create "$tag" --repo "$repo" --target "$RELEASE_SHA" --title 'DB EX v1.1.0' --notes-file docs/RELEASE_v1.1.0.md --draft
+            for i in {1..12}; do
+              existing="$(releases)"
+              [[ "$(jq 'length' <<< "$existing")" == 1 ]] && break
+              sleep 2
+            done
+          fi
+          [[ "$(jq 'length' <<< "$existing")" == 1 ]]
+          release_id="$(jq -r '.[0].id' <<< "$existing")"
+          [[ "$release_id" =~ ^[0-9]+$ ]]
+          payload="$(gh api "repos/$repo/releases/$release_id")"
+          # A second workflow_run invocation may arrive after the first has
+          # already published. Never replace a public release or its assets.
+          if jq -e '.draft == false' <<< "$payload" >/dev/null; then
+            jq -e '.prerelease == false and .tag_name == "v1.1.0" and (.assets | length) == 8 and all(.assets[]; .state == "uploaded" and (.digest | startswith("sha256:")))' <<< "$payload" >/dev/null
+            [[ "$(gh api "repos/$repo/git/ref/tags/$tag" --jq '.object.sha')" == "$RELEASE_SHA" ]]
+            echo 'The verified public release already exists; leaving assets unchanged.'
+            exit 0
+          fi
+          jq -e --arg sha "$RELEASE_SHA" '.draft == true and .prerelease == false and .target_commitish == $sha and .tag_name == "v1.1.0"' <<< "$payload" >/dev/null
+          if tag_sha="$(gh api "repos/$repo/git/ref/tags/$tag" --jq '.object.sha' 2>/dev/null)"; then
+            [[ "$tag_sha" == "$RELEASE_SHA" ]]
+          fi
+          gh release upload "$tag" upload/* --repo "$repo" --clobber
+          payload="$(gh api "repos/$repo/releases/$release_id")"
+          jq -e --arg sha "$RELEASE_SHA" '.draft == true and .target_commitish == $sha and (.assets | length) == 8' <<< "$payload" >/dev/null
+          for file in upload/*; do
+            name="$(basename "$file")"
+            size="$(stat -c '%s' "$file")"
+            digest="$(sha256sum "$file" | cut -d ' ' -f 1)"
+            jq -e --arg name "$name" --argjson size "$size" --arg digest "sha256:$digest" '[.assets[] | select(.name == $name and .state == "uploaded" and .size == $size and .digest == $digest)] | length == 1' <<< "$payload" >/dev/null
+          done
+          [[ "$(gh api "repos/$repo/git/ref/heads/master" --jq '.object.sha')" == "$RELEASE_SHA" ]]
+          published="$(gh api -X PATCH "repos/$repo/releases/$release_id" -F draft=false -F prerelease=false -f make_latest=true)"
+          jq -e '.draft == false and .prerelease == false and .tag_name == "v1.1.0"' <<< "$published" >/dev/null
+          [[ "$(gh api "repos/$repo/git/ref/tags/$tag" --jq '.object.sha')" == "$RELEASE_SHA" ]]
+          echo 'Published five verified native installers and three checksum files.'

@@ -279,3 +279,68 @@ MySQL/MongoDB 集成测试用 `DB_EX_INTEGRATION=1` 显式开启，连接 `MYSQL
 - M11 exact candidate `96288fe`: 15/15 specialist jobs, 171 integrated tests, 48 UI cases, all three native package/launch jobs and macOS ad-hoc smoke passed. Both MySQL 8.0 native tool and ClickHouse replica restart regressions passed on real fixtures.
 - PR #20 merged at `599a123`; M0–M11 implementation and defined acceptance are complete.
 - Prepare v1.0.0 as the first stable application release within the documented compatibility limits. Publish only after the same master release SHA passes the complete integrated/native and M11 workflows, including upgrade from the actual published v0.7.1; verify all eight release assets. Keep prior tags/assets unchanged.
+
+### M12: database structure synchronization and data transfer (2026-11-27)
+
+- Target v1.1.0; keep the published v1.0.0 stable baseline unchanged. M13 row-level data synchronization and M14 automation remain later milestones.
+- Initial implementation: MySQL/MariaDB structure comparison and safe additive DDL, independent migration connections and window-owned immutable plans, streamed append copies with per-table transaction boundaries, native confirmation, stale-plan/self-copy checks, task progress/cancel, SQL preview/export and local template.
+- Local real isolated MariaDB 10.11.14 proved 12,001-row exact-value transfer, additive structure sync, duplicate rollback, stale plan rejection, structure+data and cancellation during a blocked insert. Four focused policy tests, fourteen i18n tests and two focused UI cases passed.
+- See [M12 migration scope and evidence](M12_MIGRATION.md). M12 is in progress: remaining engine adapters, richer dependency/object support, mapping, conflict modes, durable task management and final compatibility/release validation are not yet complete.
+
+### M12 second batch — six-engine migration and advanced write modes
+
+- Recovered all four additional engine adapters; ordinary six-engine real
+  baseline migration passed. SQLite million-row transfer and encrypted
+  task journal restart test passed.
+- Explicit upsert/replace modes and bound source condition for supported
+  engines; transactional replacement and incoming-FK guards validated on
+  MariaDB and SQLite. New NoSQL advanced policies require specialist CI.
+- Persistent local task metadata, uncertain-after-interruption handling,
+  safe selection and history deletion. Do not replay a failed write.
+- M12 matrix expanded to SQL-family versions, MongoDB, Redis, ClickHouse
+  and SQLite including the million-row case. Cross-engine mapping, richer
+  object support, durable resume and release gate remain outstanding.
+
+### Desktop UI refinement (2026-11-27)
+
+Independent candidate from v1.0.0, not a change to M12 migration or M13
+data-difference synchronization. Addresses reported header selection,
+global inspector state, catalog preview/resize, shared object and category
+context menus, MongoDB ordinary collection maintenance and three distinct
+new themes. See [UI refinement](UI_REFINEMENT.md) for implementation,
+real test evidence and remaining scope. Await exact CI before merge/release.
+
+### Query workspace refinement (M12 candidate, 2026-11-27)
+
+- Shared resizable saved-query editor/result workspace with bottom/right layouts, persisted divider, maximize/collapse, messages/summary, pinned snapshots, result inspection, grid/tree/JSON and current-page export.
+- MongoDB function overloads and parameter hints; typed query options and guarded native-style mutations; complete-find-only result editing. See [query refinement scope and verification](QUERY_REFINEMENT.md).
+
+## Q1–Q5 — workspace refinement batch
+See [Q1–Q5 refinement evidence and remaining scope](Q1_Q5_REFINEMENT.md). Core grid, field editing, browse profiles, query completion/cancellation, and streaming import/export wizard implemented on the M12 candidate. Remaining deeper parity items and full release gates are explicitly tracked there.
+
+### Q1–Q5 follow-up
+Added typed record locator, continuous read-only page append, column comments/selected export, nested BSON tree editing, read-only multi-result SQL batch, named encrypted file presets, additional input encodings and full conversion-error reports. The previous Traditional Chinese catalog failure is fixed. See Q1_Q5_REFINEMENT.md for evidence, real server matrix and remaining scope.
+
+### Query history and SQL field refinement
+Previous combined Q1–Q5 candidate d565d8f passed full integration and
+three-platform package CI, all seven real M12 jobs including SQL/MongoDB
+file round trips. New candidate adds execution metadata/history dialog,
+calendar/precise time editing and exact read-only SQL binary previews.
+SQL query edit/retarget wiring and other remaining advanced features are
+not claimed complete. See Q1_Q5_REFINEMENT.md.
+
+### M12 final implementation candidate — 2026-11-27
+
+The scoped M12.1–M12.7 implementation is complete: six native engine
+adapters, safe additive schema/dependency synchronization, explicit
+cross-engine existing-object field/type mappings, source predicates,
+encrypted named migration templates, target locking and object-level
+checkpoint continuation. The M12.8 final remote/release gate remains
+pending on the exact candidate. Complex/destructive DDL stays review-only;
+row-difference synchronization belongs to M13. See M12_MIGRATION.md
+for scope, actual local evidence and limitations.
+
+- Release candidate: version 1.1.0, actual published v1.0.0 native upgrade
+  baseline, packaged migration preview/template persistence acceptance,
+  and immutable release publication gated on all 26 integrated/native,
+  compatibility and M12 specialist jobs on the exact master release SHA.

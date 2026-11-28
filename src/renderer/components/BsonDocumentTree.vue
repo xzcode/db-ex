@@ -5,7 +5,8 @@ import { bsonLabel, childType, typeName, type BsonType, type BsonTypeTree } from
 import { formatBsonValue } from '../../shared/bson-display'
 import { activeTypeColor } from '../../shared/bson-palette'
 import { bsonPalette } from '../bson-preferences'
-const props = defineProps<{ document: string; metadata?: BsonTypeTree }>()
+const props = defineProps<{ document: string; metadata?: BsonTypeTree;editable?:boolean }>()
+const emit=defineEmits<{'edit-path':[path:string[]]}>()
 const expanded = ref<string[]>([])
 const parsed = computed(() => { try { return { valid: true as const, value: JSON.parse(props.document) as unknown } } catch { return { valid: false as const } } })
 interface Row { key: string; path: string; type: BsonType; value: string; depth: number; expandable: boolean; open: boolean }
@@ -44,7 +45,7 @@ watch(() => props.document, () => { expanded.value = [] })
     <table v-else class="data-table bson-document-table">
       <thead><tr><th>{{ t('字段') }}</th><th>{{ t('类型') }}</th><th>{{ t('字段值') }}</th></tr></thead>
       <tbody>
-        <tr v-for="row in preview.rows" :key="row.path" :data-bson-type="row.type" :class="{ 'has-bson-color': !!color(row.type) }" :style="color(row.type) ? { '--bson-color': color(row.type) } : {}">
+        <tr v-for="row in preview.rows" :key="row.path" :data-bson-type="row.type" @dblclick="editable&&emit('edit-path',JSON.parse(row.path))" :class="{ 'has-bson-color': !!color(row.type) }" :style="color(row.type) ? { '--bson-color': color(row.type) } : {}">
           <td><div class="bson-tree-field" :style="{ paddingInlineStart: Math.min(row.depth, 24) * 16 + 'px' }"><button v-if="row.expandable" class="ghost-icon bson-expand" type="button" :aria-label="row.key" :aria-expanded="row.open" @click="toggle(row.path)">{{ row.open ? '⌄' : '›' }}</button><span v-else class="bson-expand-spacer"></span><span :title="row.key">{{ row.key }}</span></div></td>
           <td><span class="bson-type-label">{{ t(bsonLabel(row.type)) }}</span></td><td class="bson-tree-value" :title="row.value">{{ row.value }}</td>
         </tr>

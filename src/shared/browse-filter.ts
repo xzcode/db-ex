@@ -1,5 +1,6 @@
 import { parseMongoDocumentEditor } from './bson-editor'
 import type { SqlValue } from './types'
+import {compileSqlBrowsePredicate,type SqlBrowsePredicate} from './sql-browse-predicate'
 
 export const filterOperators = ['eq','ne','lt','lte','gt','gte','contains','notContains','starts','notStarts','ends','notEnds','null','notNull','empty','notEmpty','in','notIn','exists','missing','isType','notType','custom'] as const
 export type FilterOperator = typeof filterOperators[number]
@@ -14,7 +15,7 @@ export type FilterValueTypeMode = 'manual' | 'suggested' | 'auto-object-id'
 export interface FilterRule { field: string; operator: FilterOperator; type: FilterType; value: string; enabled?: boolean; join?: 'and' | 'or'; valueTypeMode?: FilterValueTypeMode }
 export interface FilterGroup { join: 'and' | 'or'; rules: FilterRule[]; joinNext?: 'and' | 'or'; enabled?: boolean }
 export interface SortRule { field: string; direction: 1 | -1 }
-export interface BrowseFilter { join: 'and' | 'or'; groups: FilterGroup[]; sort: SortRule[] }
+export interface BrowseFilter { join: 'and' | 'or'; groups: FilterGroup[]; sort: SortRule[]; raw?:SqlBrowsePredicate }
 export function newBrowseFilter(): BrowseFilter { return { join: 'and', groups: [], sort: [] } }
 export const noValue = (operator: FilterOperator) => ['null','notNull','exists','missing','empty','notEmpty'].includes(operator)
 const fail = (): never => { throw new Error('INVALID_FILTER: 筛选或排序条件无效') }
@@ -52,7 +53,8 @@ function checked(input: unknown, mongo: boolean): BrowseFilter {
     seen.add(field)
     return { field, direction: rule.direction }
   })
-  return { join: join(value.join), groups, sort }
+  if(value.raw!==undefined&&(mongo||groups.length))return fail()
+  return { join: join(value.join), groups, sort, ...(value.raw!==undefined?{raw:value.raw}:{}) }
 }
 function typedValue(rule: FilterRule, value = rule.value): unknown {
   if (value.length > 4096) return fail()
@@ -177,13 +179,15 @@ export function compileMysqlFilter(database:string, entity:string,input:unknown,
     return field+' '+operators[op]+' '+bound.placeholder
   }
   const groups=value.groups.map(group=>combine(group.rules.map(sqlRule),group.rules.map(rule=>rule.join||group.join),sqlJoin)!)
-  const where=combine(groups,value.groups.map(group=>group.joinNext||value.join),sqlJoin)
+  const raw=value.raw===undefined?undefined:compileSqlBrowsePredicate(value.raw,dialect)
+  if(raw)parameters.push(...raw.parameters)
+  const where=raw?raw.sql:combine(groups,value.groups.map(group=>group.joinNext||value.join),sqlJoin)
   const from=' FROM '+quoteBrowseIdentifier(database)+'.'+quoteBrowseIdentifier(entity)+(where?' WHERE '+where:'')
   const order=value.sort.length?' ORDER BY '+value.sort.map(rule=>quoteBrowseIdentifier(rule.field)+(rule.direction===1?' ASC':' DESC')).join(', '):''
   return {sql:'SELECT *'+from+order,countSql:'SELECT COUNT(*) AS total FROM (SELECT 1'+from+' LIMIT 1000001) AS dbex_count',parameters}
 }
 export const MAX_BROWSE_OFFSET=1000000
 export function browseOffset(page:number,size:number):number {
-  if (!Number.isSafeInteger(page)||page<1||![100,200,500].includes(size)||(page-1)*size>MAX_BROWSE_OFFSET) return fail()
+  if (!Number.isSafeInteger(page)||page<1||!Number.isSafeInteger(size)||size<1||size>500||(page-1)*size>MAX_BROWSE_OFFSET) return fail()
   return (page-1)*size
 }

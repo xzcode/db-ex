@@ -56,27 +56,27 @@ export class SqliteOperations {
   private result(sql:string,args:SQLInputValue[],limit:number,offset=0):OperationResult {
     const stmt=this.statement(sql),columns=stmt.columns().map(c=>c.name)
     if(new Set(columns).size!==columns.length)throw new Error('INVALID_INPUT: SQL 查询请为重复字段设置别名')
-    const rows:Record<string,string>[]=[],rawRows:SqlRow[]=[],sqliteTypes:string[][]=[],nullCells:number[][]=[]
-    let bytes=0,exact=true,more=false
+    const rows:Record<string,string>[]=[],rawRows:SqlRow[]=[],sqliteTypes:string[][]=[],nullCells:number[][]=[],binaryCells:Record<string,string>[]=[]
+    let bytes=0,exact=true,more=false,reason:OperationResult['truncationReason']
     for(const row of stmt.iterate(...args)){
-      if(rows.length>=limit){more=true;break}
-      const display:Record<string,string>=Object.create(null),raw:SqlRow=Object.create(null),types:string[]=[],nulls:number[]=[]
+      if(rows.length>=limit){more=true;reason='page';break}
+      const display:Record<string,string>=Object.create(null),raw:SqlRow=Object.create(null),types:string[]=[],nulls:number[]=[],binary:Record<string,string>=Object.create(null)
       let rowExact=true
       for(const [i,col] of columns.entries()){
         const value=row[col]??null
         display[col]=displayCell(value instanceof Uint8Array?Buffer.from(value):value)
         types.push(storageType(value));if(value===null)nulls.push(i)
         if(typeof value==='bigint'){if(value<=BigInt(Number.MAX_SAFE_INTEGER)&&value>=BigInt(Number.MIN_SAFE_INTEGER))raw[col]=Number(value);else rowExact=false}
-        else if(value instanceof Uint8Array)rowExact=false
+        else if(value instanceof Uint8Array){rowExact=false;if(value.byteLength<=512*1024)binary[col]=Buffer.from(value).toString('base64')}
         else if(typeof value==='number'&&!Number.isFinite(value))rowExact=false
         else if(typeof value==='string'&&Buffer.byteLength(value)>512*1024)rowExact=false
         else raw[col]=value
       }
-      const size=Buffer.byteLength(JSON.stringify(display))+Buffer.byteLength(JSON.stringify(raw))
-      if(bytes+size>MAX_BYTES){more=true;break}
-      bytes+=size;rows.push(display);rawRows.push(raw);sqliteTypes.push(types);nullCells.push(nulls);exact=exact&&rowExact
+      const size=Buffer.byteLength(JSON.stringify(display))+Buffer.byteLength(JSON.stringify(raw))+Buffer.byteLength(JSON.stringify(binary))
+      if(bytes+size>MAX_BYTES){more=true;reason=size>MAX_BYTES?'document':'bytes';break}
+      bytes+=size;rows.push(display);rawRows.push(raw);binaryCells.push(binary);sqliteTypes.push(types);nullCells.push(nulls);exact=exact&&rowExact
     }
-    return {columns,rows,rawRows:exact?rawRows:undefined,sqliteTypes,nullCells,nextOffset:more&&rows.length?offset+rows.length:undefined,truncated:more}
+    return {columns,rows,rawRows:exact?rawRows:undefined,...(binaryCells.some(row=>Object.keys(row).length)?{binaryCells}:{}),sqliteTypes,nullCells,nextOffset:more&&rows.length&&reason!=='document'?offset+rows.length:undefined,truncated:more,truncationReason:reason}
   }
   private atomic<T>(fn:()=>T):T{
     this.db.exec('SAVEPOINT dbex_row')
@@ -129,8 +129,8 @@ export class SqliteOperations {
           const params=args.map(v=>bind(sqlRow({v},'SQL').v!))
           if(policy!.mode==='write'){const r=this.statement(policy!.sql).run(...params);return {...emptyResult('语句已执行',Number(r.changes)),transaction:this.transaction}}
           const {limit,offset}=page(op)
-          if(/^EXPLAIN\b/i.test(policy!.sql))return this.result(policy!.sql,params,limit)
-          return this.result('SELECT * FROM ('+policy!.sql+'\n) AS dbex_result LIMIT '+(limit+1)+' OFFSET '+offset,params,limit,offset)
+          if(/^EXPLAIN\b/i.test(policy!.sql))return {...this.result(policy!.sql,params,limit),queryReadOnly:true,nextOffset:undefined}
+          return {...this.result('SELECT * FROM ('+policy!.sql+'\n) AS dbex_result LIMIT '+(limit+1)+' OFFSET '+offset,params,limit,offset),queryReadOnly:true}
         }
         case 'mysql.browse':{
           target(op.database,op.entity)
@@ -149,7 +149,7 @@ export class SqliteOperations {
               const list=indexFields.get(column.name)||[];list.push(indexName+(index.unique_index?' (unique)':''));indexFields.set(column.name,list)
             }
           }
-          return {columns:['name','type','nullable','key','extra','default','indexes'],rows:fields.slice(0,500).map(f=>({name:f.name,type:f.type,nullable:f.notnull?'NO':'YES',key:f.pk?'PRI':'',extra:f.hidden?'GENERATED/HIDDEN':'',default:displayCell(f.dflt_value),indexes:displayCell((indexFields.get(f.name)||[]).join(', '))})),primaryKeys:this.keys(fields),truncated:fields.length>500||indexes.length>500}
+          return {columns:['name','type','nullable','key','extra','default','indexes'],rows:fields.slice(0,500).map(f=>({name:f.name,type:f.type,nullable:f.notnull?'NO':'YES',key:f.pk?'PRI':'',extra:f.hidden?'GENERATED/HIDDEN':'',default:displayCell(f.dflt_value),indexes:displayCell((indexFields.get(f.name)||[]).join(', '))})),primaryKeys:this.keys(fields),objectCapabilities:(()=>{const row=this.statement('SELECT type FROM pragma_table_list WHERE schema=? AND name=?').get(op.database,op.entity);const table=row?.type==='table',key=this.keys(fields).length>0;return {insert:table,update:table&&key,delete:table&&key,import:table,transactional:table}})(),truncated:fields.length>500||indexes.length>500}
         }
         case 'mysql.inspect':{
           const row=this.object(op.database,op.entity),fields=this.fields(op.database,op.entity)
@@ -176,6 +176,10 @@ export class SqliteOperations {
         case 'mysql.updateBatch':{
           if(!Array.isArray(op.edits)||!op.edits.length||op.edits.length>500||Buffer.byteLength(JSON.stringify(op.edits))>MAX_BYTES)throw new Error('LIMIT_EXCEEDED: 单批编辑最多 500 行和 2 MiB')
           const fields=this.writableFields(op.database,op.entity),keys=this.keys(fields),seen=new Set<string>()
+          if(op.queryResult===true){
+            const row=this.statement('SELECT type FROM pragma_table_list WHERE schema=? AND name=?').get(op.database,op.entity)
+            if(this.transaction||row?.type!=='table'||/^sqlite_/i.test(op.entity))throw new Error('QUERY_EDIT: 查询结果无法安全编辑')
+          }
           const edits=op.edits.map(item=>{
             const key=sqlRow(item.key,'主键'),original=sqlRow(item.original,'原始记录'),changes=sqlRow(item.changes,'修改记录')
             if(!Object.keys(changes).length||Object.keys(changes).some(k=>keys.includes(k)))throw new Error('INVALID_INPUT: 批量编辑不能修改主键')

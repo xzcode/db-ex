@@ -7,7 +7,7 @@ import {boundedText,checkAborted,MAX_BYTES,MAX_VALUE_BYTES,page,plainObject,requ
 import {clickHouseIdentifier,clickHouseParameters,inspectClickHouseSql} from './clickhouse-policy'
 import {clickHouseManagementQuery} from './clickhouse-management'
 import {backupPlan,exactId,mergeTreeEngine,mutationPlan,stringLiteral,userDatabase} from './clickhouse-admin'
-import {streamClickHouse} from './clickhouse-transfer'
+import {streamClickHouse,normalizeClickHouseTransfer,type ClickHouseFileOptions} from './clickhouse-transfer'
 import type {ClickHouseTransfer} from '../../shared/types'
 
 const READ_SETTINGS:ClickHouseSettings={
@@ -106,15 +106,19 @@ export class ClickHouseOperations{
   const r=await this.select('SELECT engine FROM system.tables WHERE database={db:String} AND name={table:String} LIMIT 1',{db:database,table:entity},context,1)
   return r.rows[0]?.engine
  }
- async transfer(input:ClickHouseTransfer,path:string,context:OperationContext){
+ async transfer(input:ClickHouseTransfer,path:string,context:OperationContext,options?:ClickHouseFileOptions){
+  input=normalizeClickHouseTransfer(input)
   const db=userDatabase(input.database),entity=resourceName(input.entity,'表')
   if(input.direction==='import'){requireWrite(context);if(!mergeTreeEngine(await this.engine(db,entity,context)))throw new Error('INVALID_OPERATION: ClickHouse import supports MergeTree tables')}
   else if(input.direction!=='export')throw new Error('INVALID_INPUT: ClickHouse transfer')
   const fields=await this.structure(db,entity,context)
   if(fields.truncated||!fields.rows.length)throw new Error('INVALID_OPERATION: ClickHouse transfer metadata unavailable')
-  const columns=fields.rows.filter(r=>!['ALIAS','MATERIALIZED','EPHEMERAL'].includes(r.default_kind||'')).map(r=>clickHouseIdentifier(r.name))
-  const client=this.clientForDatabase(db,130000)
-  try{return await streamClickHouse(client,input,path,clickHouseIdentifier(db)+'.'+clickHouseIdentifier(entity),columns,context.signal)}
+  const allowed=fields.rows.filter(r=>!['ALIAS','MATERIALIZED','EPHEMERAL'].includes(r.default_kind||'')).map(r=>r.name)
+  const names=input.fields||allowed
+  if(!names.length||names.some(name=>!allowed.includes(name))||input.filter&&!fields.rows.some(r=>r.name===input.filter!.field))throw Error('INVALID_INPUT: ClickHouse transfer columns or filter')
+  const columns=names.map(clickHouseIdentifier)
+  const client=this.clientForDatabase(db,options?0:130000)
+  try{return await streamClickHouse(client,input,path,clickHouseIdentifier(db)+'.'+clickHouseIdentifier(entity),columns,context.signal,options)}
   finally{await client.close().catch(()=>{})}
  }
  async execute(op:ClickHouseOperation,context:OperationContext):Promise<OperationResult>{
@@ -130,7 +134,7 @@ export class ClickHouseOperations{
    }
    // Query editor displays a bounded result. It does not rewrite arbitrary SQL
    // or pretend that the first 500 rows represent the complete result set.
-   return this.select(query.sql,params,context,page(op).limit,db)
+   return {...await this.select(query.sql,params,context,page(op).limit,db),queryReadOnly:true}
   }
   const database=resourceName(op.database,'数据库'),entity=resourceName(op.entity,'表')
   const qualified=clickHouseIdentifier(database)+'.'+clickHouseIdentifier(entity)

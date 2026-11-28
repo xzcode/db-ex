@@ -226,3 +226,60 @@ test('MongoDB real database: BSON exactness, filter, aggregation, indexes and op
     await client.close()
   }
 })
+
+
+test('MongoDB real collection maintenance: explicit create, rename, empty and drop; protected targets rejected',{skip:!enabled,timeout:90000},async()=>{
+ const client=await new MongoClient(localUrl('MONGODB_URI','mongodb://127.0.0.1:27017'),{serverSelectionTimeoutMS:10000}).connect()
+ const database=name(),db=client.db(database),ops=new MongoOperations(client)
+ try{
+  const target={database,entity:'items'}
+  await assert.rejects(ops.execute({action:'mongo.createCollection',...target},read),/READ_ONLY/)
+  await assert.rejects(ops.execute({action:'mongo.createCollection',...target},{writable:true,confirmed:false}),/CONFIRMATION_REQUIRED/)
+  await assert.rejects(ops.execute({action:'mongo.createCollection',database:'admin',entity:'dbex_rejected'},write),/PROTECTED_DATABASE/)
+  await ops.execute({action:'mongo.createCollection',...target},write)
+  await db.collection('items').insertMany([{n:1},{n:2}])
+  await db.collection('items').createIndex({n:1})
+  await db.createCollection('existing')
+  await assert.rejects(ops.execute({action:'mongo.renameCollection',...target,newName:'existing'},write),/集合名称已存在/)
+  await assert.rejects(ops.execute({action:'mongo.clearCollection',...target},read),/READ_ONLY/)
+  await ops.execute({action:'mongo.renameCollection',...target,newName:'renamed'},write)
+  assert.equal(await db.collection('renamed').countDocuments(),2)
+  assert.equal((await db.listCollections({name:'items'}).toArray()).length,0)
+  await ops.execute({action:'mongo.clearCollection',database,entity:'renamed'},write)
+  assert.equal(await db.collection('renamed').countDocuments(),0)
+  assert.equal((await db.collection('renamed').listIndexes().toArray()).length,2)
+  await db.createCollection('capped',{capped:true,size:4096})
+  await assert.rejects(ops.execute({action:'mongo.clearCollection',database,entity:'capped'},write),/不支持此集合/)
+  await assert.rejects(ops.execute({action:'mongo.dropCollection',database,entity:'fs.files'},write),/不支持此集合/)
+  await ops.execute({action:'mongo.dropCollection',database,entity:'renamed'},write)
+  assert.equal((await db.listCollections({name:'renamed'}).toArray()).length,0)
+  assert.equal((await db.listCollections({name:'existing'}).toArray()).length,1)
+ }finally{await ops.close();await db.dropDatabase();await client.close()}
+})
+
+test('MongoDB real database: native query signatures and typed guarded writes', {skip: !enabled,timeout:90_000},async()=>{
+ const client=new MongoClient(localUrl('MONGODB_URL','mongodb://127.0.0.1:27017'))
+ const database=name()
+ const operations=new MongoOperations(client)
+ try{
+  await client.connect()
+  const collection=client.db(database).collection('records')
+  const id=new BSON.ObjectId()
+  await collection.insertOne({_id:id,score:1,wide:BSON.Long.fromString('9223372036854775807')})
+  const run=(script:string,context=read)=>operations.execute(compileMongoScript(script,database).operation,context)
+  const found=await run('db.records.find({score:1},{},{hint:"_id_",collation:{locale:"simple"},batchSize:10,maxTimeMS:3000})')
+  assert.equal(found.documents?.length,1)
+  assert.equal(found.queryReadOnly,true)
+  const command='db.records.findOneAndUpdate({_id:ObjectId("'+id.toHexString()+'")},{$set:{score:2}},{returnDocument:"after"})'
+  await assert.rejects(run(command,read),/READ_ONLY/)
+  const updated=await run(command,write)
+  assert.equal(updated.documents?.length,1)
+  assert.equal(JSON.parse(updated.documents![0]).wide.$numberLong,'9223372036854775807')
+  assert.equal((await collection.findOne({_id:id}))?.score,2)
+  await run('db.records.updateMany({score:2},{$set:{score:3}})',write)
+  assert.equal((await collection.findOne({_id:id}))?.score,3)
+  assert.equal((await run('db.records.getIndexes()')).rows.length,1)
+  await run('db.records.deleteOne({score:3})',write)
+  assert.equal(await collection.countDocuments(),0)
+ }finally{await client.db(database).dropDatabase().catch(()=>{});await operations.close().catch(()=>{});await client.close()}
+})

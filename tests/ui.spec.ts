@@ -6,6 +6,8 @@ async function installBridge(page: Page) {
   await page.addInitScript(() => {
 
     const calls: Record<string, unknown>[] = []
+    const migrationJobs:any[]=[]
+    let fileJob:any=null
     const sessions: Record<string, any> = {}
     const savedObjects: any[] = []
     const additionalDbs: Record<string,string[]> = {}
@@ -32,7 +34,29 @@ async function installBridge(page: Page) {
       windowChrome:localStorage.getItem('mock.window-chrome')==='mac-native-controls'?'mac-native-controls':'native',
       workspaceWindowId:localStorage.getItem('mock.workspace-window')||'primary',
       async newWorkspaceWindow(){calls.push({action:'newWorkspaceWindow'});return true},
+      async migrationCatalog(id:string,database?:string){
+        calls.push({action:'migrationCatalog',id,database})
+        return {kind:id==='mongo'?'mongodb':'mysql',databases:id==='sql2'?['other']:['app'],...(database?{objects:id==='mongo'?[{name:'users',type:'collection',engine:'MongoDB'},{name:'audit',type:'collection',engine:'MongoDB'}]:[{name:'users',type:'BASE TABLE',engine:'InnoDB'},{name:'audit',type:'BASE TABLE',engine:'InnoDB'},{name:'user_view',type:'VIEW'}]}:{})}
+      },
+      async migrationFields(id:string,database:string,object:string){calls.push({action:'migrationFields',id,database,object});return id==='mongo'?[{name:'id',type:'Long'},{name:'name',type:'String'}]:[{name:'id',type:'BIGINT'},{name:'name',type:'TEXT'}]},
+      async listMigrationTemplates(){return JSON.parse(localStorage.getItem('mock.migration-templates')||'[]')},
+      async saveMigrationTemplate(input:any,id?:string){const items=JSON.parse(localStorage.getItem('mock.migration-templates')||'[]');const value={id:id||crypto.randomUUID(),name:input.name,request:input.request,updatedAt:Date.now()};localStorage.setItem('mock.migration-templates',JSON.stringify([...items.filter((i:any)=>i.id!==value.id),value]));calls.push({action:'saveMigrationTemplate',input,id});return value},
+      async removeMigrationTemplate(id:string){const items=JSON.parse(localStorage.getItem('mock.migration-templates')||'[]');localStorage.setItem('mock.migration-templates',JSON.stringify(items.filter((i:any)=>i.id!==id)))},
+      async previewMigration(request:any){
+        calls.push({action:'previewMigration',request})
+        const steps=request.mode==='schema'?[{id:'create',name:'users',action:'create',changes:['MISSING TARGET OBJECT'],sql:['CREATE TABLE other.users (id INT)'],executable:true,transfer:false},{id:'review',name:'audit',action:'review',changes:['MODIFY COLUMN id'],sql:[],executable:false,transfer:false},{id:'keep',name:'keep_me',action:'target-only',changes:['TARGET ONLY OBJECT'],sql:[],executable:false,transfer:false}]:request.objects.map((name:string)=>({id:name,name,targetName:request.mappings?.find((m:any)=>m.source===name)?.target,action:'copy',changes:['APPEND DATA — STOP ON CONFLICT'],sql:[],executable:true,transfer:true}))
+        return {id:'plan',request,sourceLabel:'Source',targetLabel:'Target',sourceKind:configs.find(c=>c.id===request.source.connectionId)?.kind||'mysql',targetKind:configs.find(c=>c.id===request.target.connectionId)?.kind||'mysql',expiresAt:Date.now()+600000,steps}
+      },
+      async runMigration(id:string,steps:string[]){
+        calls.push({action:'runMigration',id,steps})
+        const job={id:'migration-job',planId:id,state:'running',phase:'copying',startedAt:Date.now(),total:steps.length,completed:[],created:[],rowsRead:500,rowsCommitted:0,rowsPending:500,bytesRead:4096}
+        migrationJobs.unshift(job);return job
+      },
+      async listMigrationJobs(){return migrationJobs.map(j=>({...j}))},
+      async removeMigrationHistory(id:string){const i=migrationJobs.findIndex(j=>j.id===id);if(i>=0&&migrationJobs[i].state!=='running')migrationJobs.splice(i,1);calls.push({action:'removeMigrationHistory',id})},
+      async cancelMigration(id:string){calls.push({action:'cancelMigration',id});Object.assign(migrationJobs.find(j=>j.id===id),{state:'cancelled',phase:'finished',rowsPending:0})},
       async restoreWorkspaceWindows(restore:boolean){calls.push({action:'restoreWorkspaceWindows',restore})},
+      async runNativeTool(id:string,task:string,database:string,entity?:string){calls.push({action:'runNativeTool',id,task,database,entity});return true},
       async startNativeCli(id:string,database:string){calls.push({action:'startNativeCli',id,database})},
       async readNativeCli(){return {output:'fixture SQL result',status:'ready',running:false,closed:false}},
       async sendNativeCli(id:string,sql:string){calls.push({action:'sendNativeCli',id,sql})},
@@ -58,7 +82,7 @@ async function installBridge(page: Page) {
       async testConnection(config: any, clearSecrets: string[]) { calls.push({ action: 'testConnection', config, clearSecrets }); return '连接成功' },
       async pickConnectionFile(kind: string) { calls.push({ action: 'pickConnectionFile', kind }); return '/test/client.pem' },
       async disconnect(id: string) { calls.push({ action: 'disconnect', id }) },
-      async roots(id: string) { return [{ id: id + '-db', label: id === 'redis' ? 'DB 0' : id === 'sql2' ? 'other' : 'app', kind: id === 'redis' ? 'keyspace' : 'database', database: id === 'sql2' ? 'other' : 'app' },...(additionalDbs[id]||[]).map(database=>({id:id+'-'+database,label:database,kind:'database',database}))] },
+      async roots(id: string) { return [{ id: id + '-db', label: id === 'redis' ? 'DB 0' : id === 'sql2' ? 'other' : 'app', kind: id === 'redis' ? 'keyspace' : 'database', database: id === 'redis' ? '0' : id === 'sql2' ? 'other' : 'app' },...(additionalDbs[id]||[]).map(database=>({id:id+'-'+database,label:database,kind:'database',database}))] },
       async children(id: string, database: string, category?: string) {
         if(id==='ch')return [{id:database+'-events',label:'events',database,entity:'events',kind:'table',metrics:[{label:'存储引擎',value:'MergeTree'},{label:'记录数（估算）',value:'10'}]}]
         if(id==='maria')return [{id:database+'-seq',label:'seq',database,entity:'seq',kind:'table',objectType:'sequence',readOnly:true},{id:database+'-history',label:'history',database,entity:'history',kind:'table',objectType:'system-versioned',readOnly:true}]
@@ -92,20 +116,34 @@ async function installBridge(page: Page) {
 
         if(op.action==='mongo.createDatabase'||op.action==='mysql.createDatabase'){additionalDbs[id]=[...(additionalDbs[id]||[]),op.database];return {columns:[],rows:[],message:'数据库已创建'}}
         if(op.action==='mongo.dropDatabase'||op.action==='mysql.dropDatabase'){additionalDbs[id]=(additionalDbs[id]||[]).filter(name=>name!==op.database);return {columns:[],rows:[],message:'数据库已删除'}}
+        if (op.action === 'mysql.structure' && (window as any).__dbexQueryEditFixture) return {...grid([{name:'id',type:'BIGINT',key:'PRI',extra:''},{name:'name',type:'VARCHAR(50)',key:'',extra:''},{name:'email',type:'VARCHAR(100)',key:'',extra:''}]),primaryKeys:['id'],objectCapabilities:{insert:true,update:true,delete:true,import:true,transactional:true}}
+        if (op.action === 'mysql.query' && (window as any).__dbexQueryEditFixture) {
+          const values=id==='sql2'?[{id:'2',name:'Grace',email:'grace@example.test'}]:rows
+          if(id==='sql'&&(window as any).__dbexBulkFixture&&values.length===1)values.push({id:'2',name:'Grace',email:'grace@example.test'})
+          return {...grid(values),rawRows:values,queryReadOnly:true,columnTypes:['BIGINT','VARCHAR','VARCHAR'],durationMs:4}
+        }
+        if (op.action === 'mysql.structure' && (window as any).__dbexTemporalFixture) return { ...grid([{name:'id',type:'bigint',key:'PRI'},{name:'name',type:'varchar(255)',key:''},{name:'stamp',type:'DATETIME(6)',key:''}]),primaryKeys:['id']}
+        if (op.action === 'mysql.browse' && !op.countOnly && (window as any).__dbexTemporalFixture) {const values=[{id:'1',name:'Ada',stamp:'2024-02-29 12:34:56.123456'}];return {...grid(values),rawRows:values,columnTypes:['BIGINT','VARCHAR','DATETIME'],nullCells:[[]]}}
+        if(op.action==='mysql.query'&&op.sql?.includes('history_failure'))throw new Error('SQL_POLICY: fixture failure')
+        if(op.action==='mysql.query'&&op.sql?.includes('blob_preview'))return {columns:['payload'],rows:[{payload:'base64:AP8B'}],columnTypes:['BLOB'],binaryCells:[{payload:'AP8B'}],queryReadOnly:true,durationMs:3}
         if (op.action === 'mysql.structure') return { ...grid([{ name: 'id', type: 'int', key: 'PRI' }, { name: 'name', type: 'varchar', key: '' }]), primaryKeys: ['id'] }
         if (op.action === 'mysql.browse' && op.countOnly) return { columns: [], rows: [], totalRows: '501', countLimited: false }
-        if (op.action === 'mongo.count') return { columns: [], rows: [], totalRows: '401', countLimited: false }
+        if (op.action === 'mongo.count') return { columns: [], rows: [], totalRows: '401', countLimited: false,queryReadOnly:true }
         if (op.action === 'mysql.query' || op.action === 'mysql.browse') {
           if (op.sql?.includes('slow_query')) await new Promise(resolve => setTimeout(resolve, 400))
           const values = (window as any).__dbexLargeGrid ? Array.from({ length: 500 }, (_, index) => ({ id: String(index + 1), name: 'User ' + (index + 1), email: 'user' + (index + 1) + '@example.test' })) : id === 'sql2' ? [{ id: '2', name: 'Grace', email: 'grace@example.test' }] : rows
           return { ...grid(values), rawRows: values, columnTypes: ['BIGINT','VARCHAR','VARCHAR'], nullCells: values.map(() => []), durationMs: 4, transaction: false, nextOffset: op.action === 'mysql.browse' && (op.offset || 0) < 500 ? (op.offset || 0) + op.limit : undefined }
         }
+        if(op.action==='mysql.updateBatch'&&op.queryResult&&(window as any).__dbexQueryEditFixture){
+          if((window as any).__dbexQueryEditConflict)throw Error('EDIT_CONFLICT: fixture conflict')
+          if(id==='sql')for(const edit of op.edits){const row=rows.find(r=>r.id===edit.key.id);if(row)Object.assign(row,edit.changes)}
+        }
         if(op.action==='mysql.updateBatch'||op.action==='mongo.replaceBatch')return {columns:[],rows:[],affectedRows:op.edits.length,gridBatch:{total:op.edits.length,completed:op.edits.length,atomic:op.action==='mysql.updateBatch'}}
         if (op.action === 'mysql.begin') return { columns: [], rows: [], transaction: true }
         if (op.action === 'mysql.commit' || op.action === 'mysql.rollback') return { columns: [], rows: [], transaction: false }
-        if (op.action === 'mongo.find' || op.action === 'mongo.aggregate') return { columns: ['_id', 'name', 'createdAt', 'score', 'nullable', 'nested'], rows: [{ _id: '64b000000000000000000001', name: 'Ada', createdAt: 'date', score: '7', nullable: 'NULL', nested: '{...}' }, { _id: '64b000000000000000000002', name: 'Grace', score: '7', nullable: 'NULL' }, { _id: '64b000000000000000000003', name: 'Lin', score: '7' }], documents: [document, secondDocument, thirdDocument], bsonTypes: mongoMetadata, durationMs: 3, nextOffset: op.action === 'mongo.find' && (op.offset || 0) < 400 ? (op.offset || 0) + op.limit : undefined }
+        if (op.action === 'mongo.find' || op.action === 'mongo.aggregate') return { columns: ['_id', 'name', 'createdAt', 'score', 'nullable', 'nested'], rows: [{ _id: '64b000000000000000000001', name: 'Ada', createdAt: 'date', score: '7', nullable: 'NULL', nested: '{...}' }, { _id: '64b000000000000000000002', name: 'Grace', score: '7', nullable: 'NULL' }, { _id: '64b000000000000000000003', name: 'Lin', score: '7' }], documents: [document, secondDocument, thirdDocument], bsonTypes: mongoMetadata, queryReadOnly:true, durationMs: 3, nextOffset: op.action === 'mongo.find' && (op.offset || 0) < 400 ? (op.offset || 0) + op.limit : undefined }
         if (op.action === 'mysql.inspect') return { columns: [], rows: [], inspection: { kind: 'table', metrics: [{ label: '存储引擎', value: 'InnoDB' }, { label: '记录数（估算）', value: '1234', format: 'estimate' }, { label: '数据大小', value: '32768', format: 'bytes' }], definition: 'CREATE TABLE users (id BIGINT PRIMARY KEY, name VARCHAR(255));' } }
-        if (op.action === 'mongo.inspect') return { columns: [], rows: [], inspection: { kind: 'collection', metrics: [{ label: '文档数', value: '3' }, { label: '已固定', value: 'false', format: 'boolean' }, { label: '存储大小', value: '32768', format: 'bytes' }], definition: 'db.getSiblingDB("app").createCollection("users");\n\ndb.getSiblingDB("app").getCollection("users").createIndex({ "score": Int32("1") }, { "name": "score_1" });' } }
+        if (op.action === 'mongo.inspect') return { columns: [], rows: [], inspection: { kind: 'collection', metrics: [{ label: '文档数', value: '3' }, { label: '已固定', value: 'false', format: 'boolean' }, { label: '存储大小', value: '32768', format: 'bytes' }], definition: 'db.getSiblingDB("app").createCollection('+JSON.stringify(op.entity)+');\n\ndb.getSiblingDB("app").getCollection('+JSON.stringify(op.entity)+').createIndex({ "score": Int32("1") }, { "name": "score_1" });' } }
         if (op.action === 'redis.inspect') return { columns: [], rows: [], inspection: { kind: 'key', metrics: [{ label: '类型', value: 'string' }, { label: 'TTL（秒）', value: '-1' }, { label: '内存占用', value: '72', format: 'bytes' }], definition: JSON.stringify(['TYPE', op.key]) + '\n' + JSON.stringify(['TTL', op.key]), definitionNote: 'Redis 没有 DDL；以下是只读 Key 检查命令，不是数据备份。' } }
         if (op.action === 'mongo.indexes') return grid([{ name: '_id_', key: '{"_id":1}' }])
         if (op.action === 'redis.nodes') return grid([{ id: '127.0.0.1:6379', host: '127.0.0.1', port: '6379', role: 'master' }, { id: '127.0.0.2:6379', host: '127.0.0.2', port: '6379', role: 'master' }])
@@ -113,7 +151,29 @@ async function installBridge(page: Page) {
         if (op.action === 'redis.get') return { ...grid([{ value: 'hello' }]), value: 'hello', redisType: 'string', ttl: -1, length: 5, truncated: false }
         return { columns: [], rows: [], affectedRows: 1, message: '操作已完成' }
       },
+      async startClickHouseFileTransfer(id:string,input:any){calls.push({sessionId:id,action:'startClickHouseFileTransfer',...input});fileJob={id:'fixture-ch-file',direction:input.direction,state:'running',read:0,committed:0,skipped:0,bytes:0,rowsKnown:false,file:'fixture.'+input.format};return {...fileJob}},
       async clickhouseTransfer(id:string,input:any){calls.push({sessionId:id,action:'clickhouseTransfer',...input});return {bytes:1024}},
+      async executeScriptBatch(id:string,request:any){
+        calls.push({action:'executeScriptBatch',id,request})
+        await new Promise(resolve=>setTimeout(resolve,350))
+        return {script:true,total:3,items:[{sql:'INSERT INTO users VALUES (1)',write:true,result:{columns:[],rows:[],affectedRows:1,message:'操作已完成'}},{sql:'SELECT * FROM users',write:false,result:{...grid([{id:'1',name:'Ada'}]),queryReadOnly:true}}],failedAt:3,error:'DATABASE_ERROR: fixture duplicate',writeFailure:true}
+      },
+      async executeReadBatch(id:string,request:any){calls.push({action:'executeReadBatch',id,request});return {total:2,items:[{sql:'SELECT 1',result:grid([{n:'1'}])},{sql:'SELECT 2',result:grid([{n:'2'}])}]}},
+      async listFilePresets(id:string,database:string,entity:string,direction:string){return JSON.parse(localStorage.getItem('mock.file-presets')||'[]').filter((p:any)=>p.connectionId===id&&p.database===database&&p.entity===entity&&p.direction===direction)},
+      async saveFilePreset(id:string,database:string,entity:string,direction:string,draft:any,presetId?:string){const all=JSON.parse(localStorage.getItem('mock.file-presets')||'[]');const item={...draft,id:presetId||crypto.randomUUID(),connectionId:id,database,entity,direction,kind:sessions[id].kind,updatedAt:new Date().toISOString()};localStorage.setItem('mock.file-presets',JSON.stringify([item,...all.filter((x:any)=>x.id!==item.id)]));return item},
+      async removeFilePreset(id:string,database:string,entity:string,direction:string,presetId:string){const all=JSON.parse(localStorage.getItem('mock.file-presets')||'[]');localStorage.setItem('mock.file-presets',JSON.stringify(all.filter((p:any)=>p.id!==presetId||p.connectionId!==id||p.database!==database||p.entity!==entity||p.direction!==direction)))},
+      async exportFileTransferReport(id:string){calls.push({action:'exportFileTransferReport',id});return true},
+      async executeQuery(id:string,op:any){calls.push({action:'isolatedQuery',id});return (window as any).dbex.execute(id,op)},
+      async cancelQuery(id:string){calls.push({action:'cancelQuery',id});return true},
+      async listBrowseProfiles(id:string,database:string,entity:string){return JSON.parse(localStorage.getItem('mock.browse-profiles')||'[]').filter((p:any)=>p.connectionId===id&&p.database===database&&p.entity===entity)},
+      async saveBrowseProfile(id:string,database:string,entity:string,draft:any,profileId?:string){const all=JSON.parse(localStorage.getItem('mock.browse-profiles')||'[]');const item={...draft,id:profileId||crypto.randomUUID(),connectionId:id,database,entity,kind:sessions[id].kind,updatedAt:new Date().toISOString()};localStorage.setItem('mock.browse-profiles',JSON.stringify([item,...all.filter((x:any)=>x.id!==item.id)]));return item},
+      async deleteBrowseProfile(id:string,database:string,entity:string,profileId:string){const all=JSON.parse(localStorage.getItem('mock.browse-profiles')||'[]');localStorage.setItem('mock.browse-profiles',JSON.stringify(all.filter((p:any)=>p.id!==profileId||p.connectionId!==id||p.database!==database||p.entity!==entity)))},
+      async pickDataFile(id:string,format:string,delimiter:string){calls.push({action:'pickDataFile',id,format,delimiter});return {token:crypto.randomUUID(),name:'fixture.'+format,size:120,format,delimiter,fields:['name'],sample:[{name:'New record'}],...(format==='xlsx'?{worksheet:'First',worksheets:['First','Second']}:{})}},
+      async selectFileWorksheet(id:string,token:string,sheet:string){calls.push({action:'selectFileWorksheet',id,token,sheet});return {token:crypto.randomUUID(),name:'fixture.xlsx',size:120,format:'xlsx',delimiter:',',encoding:'utf-8',worksheet:sheet,worksheets:['First','Second'],fields:['name'],sample:[{name:'Second sheet record'}]}},
+
+      async startFileTransfer(id:string,request:any){calls.push({action:'startFileTransfer',id,request});fileJob={id:'fixture-file-job',direction:request.direction,state:'running',read:0,committed:0,skipped:0,bytes:0,file:'fixture.'+request.format};return {...fileJob}},
+      async getFileTransferJob(){if(fileJob?.state==='running')fileJob={...fileJob,state:'completed',read:501,committed:501,bytes:120};return fileJob},
+      async cancelFileTransfer(id:string){if(fileJob?.id===id)fileJob.state='cancelled'},
       async cancel(id: string) { calls.push({ action: 'cancel', id }) },
       async copyText(value: string) { calls.push({ action: 'copyText', value }) },
       async validateMongoDocument(document: string, original?: string) { calls.push({ action: 'validateMongoDocument', document, original }) },
@@ -926,9 +986,11 @@ test('MariaDB has its own connection form, persisted settings and backup tools',
 })
 
 
-test('top toolbar contains settings only; language, theme and connection creation are centralized',async({page})=>{
+test('top toolbar exposes migration tools and settings; language, theme and connection creation stay centralized',async({page})=>{
  const toolbar=page.locator('.top-actions')
- await expect(toolbar.locator(':scope > *')).toHaveCount(1)
+ await expect(toolbar.locator(':scope > *')).toHaveCount(3)
+ await expect(toolbar.getByRole('button',{name:'结构同步',exact:true})).toBeVisible()
+ await expect(toolbar.getByRole('button',{name:'数据传输',exact:true})).toBeVisible()
  await expect(toolbar.getByRole('button',{name:'偏好设置',exact:true})).toBeVisible()
  await expect(toolbar.locator('select')).toHaveCount(0)
  await toolbar.getByRole('button',{name:'偏好设置',exact:true}).click()
@@ -1078,7 +1140,8 @@ test('macOS integrated title bar reserves native controls and keeps preferences 
    return {bar:css(el),controls:css(el,'::before'),settings:css(el.querySelector('.preferences-button')!)}
  })
  expect(regions).toEqual({bar:'drag',controls:'no-drag',settings:'no-drag'})
- await expect(bar.locator('.top-actions > *')).toHaveCount(1)
+ await expect(bar.locator('.top-actions > *')).toHaveCount(3)
+ await expect(bar.locator('.migration-toolbar-button')).toHaveCount(2)
  const layout=await bar.evaluate(el=>({brand:el.querySelector('.brand')!.getBoundingClientRect().left,bar:el.getBoundingClientRect().left}))
  expect(layout.brand-layout.bar).toBeGreaterThanOrEqual(100)
  await settings.click()
@@ -1086,11 +1149,11 @@ test('macOS integrated title bar reserves native controls and keeps preferences 
  await prefs.locator('[data-preference="theme"]').selectOption('light')
  await prefs.locator('[data-action="save-preferences"]').click()
  await expect(root).toHaveAttribute('data-theme','light')
- await expect(bar).toHaveCSS('background-color','rgb(255, 255, 255)')
+ await expect(bar).toHaveCSS('background-color','rgb(232, 237, 244)')
  await settings.click()
  await prefs.locator('[data-preference="theme"]').selectOption('dark')
  await prefs.locator('[data-action="save-preferences"]').click()
- await expect(bar).toHaveCSS('background-color','rgb(29, 34, 43)')
+ await expect(bar).toHaveCSS('background-color','rgb(36, 43, 54)')
  // Physical left reservation must remain valid when locale direction is RTL.
  await page.evaluate(()=>document.documentElement.dir='rtl')
  await expect(bar).toHaveCSS('direction','ltr')
@@ -1277,10 +1340,15 @@ test('ClickHouse scoped admin actions require preview and write access, and file
  await page.locator('.resource-node[data-object-kind="database"]').first().click()
  await page.locator('.resource-node[data-object-kind="table"]').filter({hasText:'events'}).click()
  const workbench=page.locator('.clickhouse-workbench:visible')
- await workbench.getByLabel('ClickHouse data format').selectOption('parquet')
- await workbench.getByRole('button',{name:'流式导出整表',exact:true}).click()
- await expect.poll(()=>page.evaluate(()=>(window as any).__dbexCalls.filter((c:any)=>c.action==='clickhouseTransfer').at(-1))).toMatchObject({database:'app',entity:'events',format:'parquet',direction:'export'})
- await expect(workbench.getByRole('button',{name:'流式导入',exact:true})).toBeDisabled()
+ await workbench.getByRole('button',{name:'流式导出向导',exact:true}).click()
+ const files=page.getByRole('dialog',{name:'流式导出向导',exact:true})
+ await files.getByLabel('格式',{exact:true}).selectOption('parquet')
+ await files.getByRole('button',{name:'note ↑',exact:true}).click()
+ await files.getByRole('button',{name:'选择数据文件并执行',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=>(window as any).__dbexCalls.filter((c:any)=>c.action==='startClickHouseFileTransfer').at(-1))).toMatchObject({database:'app',entity:'events',format:'parquet',direction:'export',fields:['note','id']})
+ await expect(files.getByText(/操作已完成/)).toBeVisible()
+ await files.getByRole('button',{name:'关闭',exact:true}).last().click()
+ await expect(workbench.getByRole('button',{name:'流式导入向导',exact:true})).toBeDisabled()
  await workbench.getByRole('button',{name:'管理',exact:true}).click()
  await workbench.getByRole('button',{name:'变更任务',exact:true}).click()
  await expect(workbench.getByRole('button',{name:'变更任务…',exact:true})).toBeDisabled()
@@ -1398,4 +1466,783 @@ test('shared preferences update other workspaces without reloading',async({page}
  await expect(page.locator('html')).toHaveAttribute('lang','ar')
  await expect(page.locator('html')).toHaveAttribute('dir','rtl')
  await expect(page.locator('html')).toHaveAttribute('data-theme','light')
+})
+
+
+test('M12 structure sync previews safe DDL and excludes manual or target-only steps',async({page})=>{
+ await page.getByRole('button',{name:'结构同步',exact:true}).click()
+ const dialog=page.getByRole('dialog',{name:'数据库同步与迁移'})
+ const source=dialog.locator('.migration-endpoint').nth(0)
+ const target=dialog.locator('.migration-endpoint').nth(1)
+ await source.locator('select').nth(0).selectOption('sql')
+ await source.locator('select').nth(1).selectOption('app')
+ await target.locator('select').nth(0).selectOption('sql2')
+ await target.locator('select').nth(1).selectOption('other')
+ await dialog.getByRole('button',{name:'比较 / 生成计划',exact:true}).click()
+ const rows=dialog.locator('.migration-plan-list tbody tr')
+ await expect(rows).toHaveCount(3)
+ await expect(rows.filter({hasText:'audit'}).getByRole('checkbox')).toBeDisabled()
+ await expect(rows.filter({hasText:'keep_me'}).getByRole('checkbox')).toBeDisabled()
+ await expect(dialog.locator('textarea')).toHaveValue('CREATE TABLE other.users (id INT);')
+ await dialog.getByRole('button',{name:'导出结构脚本',exact:true}).click()
+ await dialog.getByRole('button',{name:'确认执行',exact:true}).click()
+ await expect(dialog.locator('.migration-progress')).toContainText('500')
+ await expect.poll(()=>page.evaluate(()=>((window as any).__dbexCalls as any[]).filter(c=>c.action==='runMigration').at(-1))).toMatchObject({id:'plan',steps:['create']})
+ await dialog.getByRole('button',{name:'收起',exact:true}).click()
+ await expect(dialog).toHaveCount(0)
+ await page.getByRole('button',{name:'数据传输',exact:true}).click()
+ await expect(dialog.locator('.migration-progress')).toBeVisible()
+ await dialog.getByRole('button',{name:'取消任务',exact:true}).click()
+ await expect(dialog.locator('.migration-progress')).toContainText('已取消')
+})
+test('M12 transfer requires explicitly selected ordinary tables',async({page})=>{
+ await page.getByRole('button',{name:'数据传输',exact:true}).click()
+ const dialog=page.getByRole('dialog',{name:'数据库同步与迁移'})
+ const source=dialog.locator('.migration-endpoint').nth(0)
+ const target=dialog.locator('.migration-endpoint').nth(1)
+ await source.locator('select').nth(0).selectOption('sql')
+ await source.locator('select').nth(1).selectOption('app')
+ await target.locator('select').nth(0).selectOption('sql2')
+ await target.locator('select').nth(1).selectOption('other')
+ await expect(dialog.getByRole('button',{name:'比较 / 生成计划',exact:true})).toBeDisabled()
+ await expect(dialog.locator('.migration-object-list')).not.toContainText('user_view')
+ await dialog.locator('.migration-object-list label').filter({hasText:'users'}).getByRole('checkbox').check()
+ await dialog.getByRole('button',{name:'比较 / 生成计划',exact:true}).click()
+ await expect(dialog.locator('.migration-plan-list tbody tr')).toHaveCount(1)
+ await expect.poll(()=>page.evaluate(()=>((window as any).__dbexCalls as any[]).filter(c=>c.action==='previewMigration').at(-1))).toMatchObject({request:{source:{connectionId:'sql',database:'app'},target:{connectionId:'sql2',database:'other'},mode:'structure-data',objects:['users']}})
+})
+
+
+test('M12 advanced transfer policy and condition require explicit selection before execution',async({page})=>{
+ await page.getByRole('button',{name:'数据传输',exact:true}).click()
+ const dialog=page.getByRole('dialog',{name:'数据库同步与迁移'})
+ const source=dialog.locator('.migration-endpoint').nth(0),target=dialog.locator('.migration-endpoint').nth(1)
+ await source.locator('select').nth(0).selectOption('sql');await source.locator('select').nth(1).selectOption('app')
+ await target.locator('select').nth(0).selectOption('sql2');await target.locator('select').nth(1).selectOption('other')
+ await dialog.locator('.migration-object-list label').filter({hasText:'users'}).getByRole('checkbox').check()
+ await dialog.getByLabel('写入模式',{exact:true}).selectOption('upsert')
+ await dialog.getByLabel('源记录条件',{exact:true}).check()
+ await dialog.getByLabel('筛选字段',{exact:true}).fill('id')
+ await dialog.getByLabel('比较运算符',{exact:true}).selectOption('lte')
+ await dialog.getByLabel('数据类型',{exact:true}).selectOption('Long')
+ await dialog.getByLabel('筛选值',{exact:true}).fill('2')
+ await dialog.getByRole('button',{name:'比较 / 生成计划',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=>((window as any).__dbexCalls as any[]).filter(c=>c.action==='previewMigration').at(-1)?.request)).toMatchObject({policy:'upsert',condition:{field:'id',operator:'lte',type:'Long',value:'2'}})
+ const execute=dialog.getByRole('button',{name:'确认执行',exact:true})
+ await expect(execute).toBeDisabled()
+ await dialog.locator('.migration-plan-list tbody tr').first().getByRole('checkbox').check()
+ await expect(execute).toBeEnabled()
+ await dialog.getByLabel('写入模式',{exact:true}).selectOption('replace')
+ await expect(dialog.getByLabel('源记录条件',{exact:true})).toHaveCount(0)
+ await expect(execute).toBeDisabled()
+})
+
+test('M12 cross-engine mapping and named templates require an explicit confirmed plan',async({page})=>{
+ await page.getByRole('button',{name:'数据传输',exact:true}).click()
+ const dialog=page.getByRole('dialog',{name:'数据库同步与迁移'})
+ const source=dialog.locator('.migration-endpoint').nth(0),target=dialog.locator('.migration-endpoint').nth(1)
+ await source.locator('select').nth(0).selectOption('sql');await source.locator('select').nth(1).selectOption('app')
+ await dialog.getByLabel('传输模式',{exact:true}).selectOption('data')
+ await target.locator('select').nth(0).selectOption('mongo');await target.locator('select').nth(1).selectOption('app')
+ await dialog.locator('.migration-object-list label').filter({hasText:'users'}).getByRole('checkbox').check()
+ await dialog.getByLabel('目标对象',{exact:true}).selectOption('audit')
+ await dialog.getByRole('button',{name:'加载字段',exact:true}).click()
+ await expect(dialog.getByLabel('源字段 1',{exact:true})).toHaveValue('id')
+ await dialog.getByLabel('目标字段 1',{exact:true}).fill('identifier')
+ await dialog.getByLabel('类型转换 1',{exact:true}).selectOption('text')
+ await dialog.getByLabel('SQL 条件',{exact:true}).fill('id >= ?')
+ await dialog.getByLabel('SQL 参数 JSON 数组',{exact:true}).fill('[2]')
+ await dialog.getByLabel('配置名称',{exact:true}).fill('SQL to Mongo')
+ await dialog.getByRole('button',{name:'另存当前配置',exact:true}).click()
+ await expect(dialog.getByLabel('迁移配置',{exact:true}).locator('option')).toHaveCount(2)
+ await dialog.getByLabel('目标字段 1',{exact:true}).fill('changed')
+ await dialog.getByRole('button',{name:'载入配置',exact:true}).click()
+ await expect(dialog.getByLabel('目标字段 1',{exact:true})).toHaveValue('identifier')
+ await dialog.getByRole('button',{name:'比较 / 生成计划',exact:true}).click()
+ await expect(dialog.locator('.migration-plan-list tbody tr')).toContainText('users → audit')
+ await expect.poll(()=>page.evaluate(()=>((window as any).__dbexCalls as any[]).filter(c=>c.action==='previewMigration').at(-1)?.request.mappings[0])).toMatchObject({source:'users',target:'audit',fields:[{source:'id',target:'identifier',conversion:'text'},{source:'name',target:'name',conversion:'auto'}],predicate:{text:'id >= ?',parameters:[2]}})
+ await expect(dialog.getByRole('button',{name:'确认执行',exact:true})).toBeDisabled()
+ await dialog.locator('.migration-plan-list tbody tr').first().getByRole('checkbox').check()
+ await expect(dialog.getByRole('button',{name:'确认执行',exact:true})).toBeEnabled()
+})
+
+test('UI refinement: catalog selection previews metadata and DDL without opening a data tab; inspector follows global state',async({page})=>{
+ await page.evaluate(()=>{(window as any).__dbexCatalogFixture=true})
+ await connect(page,'Mongo Local')
+ await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ await page.locator('[data-object-category="collections"]').click()
+ const list=page.locator('.object-list-panel:visible'),panel=page.locator('.object-inspector:visible'),tabs=page.locator('.object-tabbar:visible')
+ await expect(panel).toBeVisible()
+ await list.locator('tbody tr').filter({hasText:'audit'}).click()
+ await expect(panel.locator('.inspector-object-header strong')).toHaveText('audit')
+ await expect(panel.locator('.object-metrics')).toContainText('文档数')
+ await expect(tabs.locator('.object-tab')).toHaveCount(0)
+ await panel.getByRole('button',{name:'DDL',exact:true}).click()
+ await expect(panel.locator('.inspector-definition')).toContainText('createCollection')
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((c:any)=>c.action==='mongo.inspect').at(-1)?.entity)).toBe('audit')
+ await list.locator('tbody tr').filter({hasText:'users'}).click()
+ await expect(panel.locator('.inspector-object-header strong')).toHaveText('users')
+ await expect(panel.locator('.inspector-definition')).toContainText('createCollection')
+ await panel.getByRole('button',{name:'关闭',exact:true}).click()
+ await expect(panel).toHaveCount(0)
+ await list.locator('tbody tr').filter({hasText:'audit'}).dblclick()
+ await expect(page.locator('.workbench:visible .data-table')).toContainText('Ada')
+ await expect(panel).toHaveCount(0)
+ await page.locator('.workbench:visible').getByRole('button',{name:'对象信息',exact:true}).click()
+ await expect(panel.locator('.object-metrics')).toContainText('文档数')
+ await tabs.getByRole('button',{name:'对象',exact:true}).click()
+ await list.locator('tbody tr').filter({hasText:'users'}).dblclick()
+ await expect(panel.locator('.inspector-object-header strong')).toHaveText('users')
+ await expect(panel).toBeVisible()
+ await expect(page.locator('.workbench:visible .data-table th').last()).toHaveCSS('user-select','none')
+ await expect(page.locator('.resource-node[data-object-category="collections"]')).toHaveCSS('user-select','none')
+ await panel.getByRole('button',{name:'关闭',exact:true}).click()
+ await page.reload()
+ await connect(page,'Mongo Local')
+ await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ await page.locator('[data-object-category="collections"]').click()
+ await expect(panel).toHaveCount(0)
+})
+test('UI refinement: catalog columns resize and remember width; object menu is shared by list and tree',async({page})=>{
+ await page.evaluate(()=>{(window as any).__dbexCatalogFixture=true})
+ await connect(page,'Mongo Local')
+ await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ await page.locator('[data-object-category="collections"]').click()
+ const list=page.locator('.object-list-panel:visible'),menu=page.locator('.database-context-menu')
+ const grip=list.getByRole('separator',{name:'调整列宽: 存储大小',exact:true})
+ const start=Number(await grip.getAttribute('aria-valuenow'))
+ await grip.scrollIntoViewIfNeeded()
+ const bounds=await grip.boundingBox()
+ expect(bounds).toBeTruthy()
+ await page.mouse.move(bounds!.x+bounds!.width/2,bounds!.y+bounds!.height/2)
+ await page.mouse.down();await page.mouse.move(bounds!.x+bounds!.width/2+32,bounds!.y+bounds!.height/2,{steps:4});await page.mouse.up()
+ await expect(grip).toHaveAttribute('aria-valuenow',String(start+32))
+ await grip.focus();await grip.press('ArrowRight');await grip.press('ArrowRight')
+ await expect(grip).toHaveAttribute('aria-valuenow',String(start+56))
+ const row=list.locator('tbody tr').filter({hasText:'users'})
+ await row.click({button:'right'})
+ await expect(menu.getByRole('button',{name:'打开集合',exact:true})).toBeVisible()
+ await expect(menu.getByRole('button',{name:'MongoDump…',exact:true})).toBeVisible()
+ await menu.getByRole('button',{name:'DDL',exact:true}).click()
+ await expect(page.locator('.object-inspector:visible .inspector-definition')).toContainText('createCollection')
+ const tree=page.locator('.resource-node[data-object-kind="collection"]').filter({hasText:'users'})
+ await tree.click({button:'right'})
+ await expect(menu.getByRole('button',{name:'打开集合',exact:true})).toBeVisible()
+ await menu.getByRole('button',{name:'MongoExport…',exact:true}).click()
+ const native=page.getByRole('dialog',{name:'外部工具'})
+ await expect(native.locator('select').first()).toHaveValue('mongo-export')
+ await expect(native.locator('input[readonly]')).toHaveValue('users')
+ await native.getByRole('button',{name:'确认执行',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.find((c:any)=>c.action==='runNativeTool'))).toMatchObject({task:'mongo-export',database:'app',entity:'users'})
+ await native.getByRole('button',{name:'关闭',exact:true}).click()
+ await page.reload()
+ await connect(page,'Mongo Local')
+ await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ await page.locator('[data-object-category="collections"]').click()
+ await expect(grip).toHaveAttribute('aria-valuenow',String(start+56))
+})
+test('UI refinement: MongoDB category menus are type-specific and destructive maintenance is explicitly gated',async({page})=>{
+ await connect(page,'Mongo Local');await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ const menu=page.locator('.database-context-menu')
+ const expected:Record<string,string>={collections:'打开集合列表',views:'打开视图列表',functions:'打开函数列表',indexes:'打开索引列表',pipelines:'打开聚合管道列表',gridfs:'打开存储桶列表',queries:'打开查询列表'}
+ for(const [category,label] of Object.entries(expected)){
+  await page.locator('[data-object-category="'+category+'"]').click({button:'right'})
+  await expect(menu.getByRole('button',{name:label,exact:true})).toBeVisible()
+  await expect(menu.getByRole('button',{name:'新建集合',exact:true})).toHaveCount(category==='collections'?1:0)
+  await page.keyboard.press('Escape')
+ }
+ await page.locator('[data-object-category="collections"]').click()
+ await page.locator('.object-list-panel:visible tbody tr').filter({hasText:'users'}).click({button:'right'})
+ await menu.getByRole('button',{name:'清空集合',exact:true}).click()
+ const dialog=page.getByRole('dialog',{name:'清空集合'})
+ const run=dialog.getByRole('button',{name:'确认执行',exact:true})
+ await expect(run).toBeDisabled()
+ await dialog.getByRole('button',{name:'启用写入',exact:true}).click()
+ await dialog.getByLabel('输入集合名称以确认').fill('wrong')
+ await expect(run).toBeDisabled()
+ await dialog.getByLabel('输入集合名称以确认').fill('users')
+ await run.click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.find((c:any)=>c.action==='mongo.clearCollection'))).toMatchObject({database:'app',entity:'users',confirmed:true})
+ await expect(dialog).toHaveCount(0)
+})
+test('UI refinement: three additional themes persist and use distinct semantic surfaces',async({page})=>{
+ const root=page.locator('html'),settings=page.locator('.topbar').getByRole('button',{name:'偏好设置',exact:true}),prefs=page.getByRole('dialog',{name:'偏好设置'})
+ for(const theme of ['gray','black','soft-light']){
+  await settings.click();await prefs.locator('[data-preference="theme"]').selectOption(theme);await prefs.locator('[data-action="save-preferences"]').click()
+  await expect(root).toHaveAttribute('data-theme',theme)
+  const surfaces=await root.evaluate(el=>{const s=getComputedStyle(el);return ['--bg','--sidebar-bg','--chrome-bg','--header-bg','--inspector-bg','--menu-bg','--editor-bg'].map(k=>s.getPropertyValue(k).trim())})
+  expect(new Set(surfaces).size).toBe(7)
+  if(theme==='black')expect(surfaces[0]).toBe('#000000')
+  if(theme==='soft-light'){expect(surfaces[0]).not.toBe('#ffffff');await expect(root).toHaveCSS('color-scheme','light')}
+ }
+ await page.reload();await expect(root).toHaveAttribute('data-theme','soft-light')
+})
+
+
+test('M12 object context menu opens migration with the selected collection prefilled',async({page})=>{
+ await connect(page,'Mongo Local');await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ await page.locator('[data-object-category="collections"]').click()
+ await page.locator('.object-list-panel:visible tbody tr').filter({hasText:'users'}).click({button:'right'})
+ await page.locator('.database-context-menu').getByRole('button',{name:'数据传输…',exact:true}).click()
+ const dialog=page.getByRole('dialog',{name:'数据库同步与迁移'})
+ await expect(dialog.locator('.migration-endpoint').first().locator('select').first()).toHaveValue('mongo')
+ await expect(dialog.locator('.migration-endpoint').first().locator('select').nth(1)).toHaveValue('app')
+ await expect(dialog.locator('.migration-object-list label').filter({hasText:'users'}).getByRole('checkbox')).toBeChecked()
+})
+
+test('query refinement: real split dragging, layouts, function signatures and pinned result views',async({page})=>{
+ await connect(page,'Mongo Local')
+ await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ await page.locator('[data-object-category="queries"]').click()
+ await page.locator('.object-list-panel:visible').getByRole('button',{name:/新建查询/}).click()
+ const editor=page.locator('.saved-query-editor:visible')
+ const input='.saved-query-editor:visible .native-mongo-editor .monaco-editor'
+ await replaceEditor(page,input,'db.users.find')
+ await page.keyboard.press('Control+Space')
+ await expect(page.locator('.suggest-widget.visible')).toContainText('findOneAndUpdate')
+ await expect(page.locator('.suggest-widget.visible')).toContainText('filter, projection, options')
+ await page.keyboard.press('Escape')
+ await replaceEditor(page,input,'db.users.find()')
+ await editor.getByRole('button',{name:'运行选中 / 全部',exact:true}).click()
+ await expect(editor.locator('.data-table')).toContainText('Ada')
+ const handle=editor.getByRole('separator',{name:'调整查询与结果区域大小'})
+ const before=Number(await handle.getAttribute('aria-valuenow'))
+ const bounds=await handle.boundingBox()
+ expect(bounds).toBeTruthy()
+ await page.mouse.move(bounds!.x+bounds!.width/2,bounds!.y+bounds!.height/2)
+ await page.mouse.down();await page.mouse.move(bounds!.x+bounds!.width/2,bounds!.y+bounds!.height/2+45,{steps:5});await page.mouse.up()
+ await expect.poll(async()=>Number(await handle.getAttribute('aria-valuenow'))).toBeGreaterThan(before)
+ await editor.getByRole('button',{name:'结果在右侧',exact:true}).click()
+ await expect(handle).toHaveAttribute('aria-orientation','vertical')
+ await editor.getByRole('button',{name:'仅结果集',exact:true}).click()
+ await expect(handle).toHaveCount(0)
+ await expect(editor.locator('.data-table')).toBeVisible()
+ await editor.getByRole('button',{name:'结果在下方',exact:true}).click()
+ const panel=editor.locator('.query-result-panel')
+ await panel.getByRole('button',{name:'固定结果',exact:true}).click()
+ await panel.getByRole('button',{name:'JSON',exact:true}).click()
+ await expect(panel.locator('.query-result-json')).toContainText('"$oid"')
+ await panel.getByRole('button',{name:'表格',exact:true}).click()
+ await replaceEditor(page,input,'db.users.countDocuments({})')
+ await editor.getByRole('button',{name:'运行选中 / 全部',exact:true}).click()
+ await expect(panel.locator('.data-table')).toContainText('401')
+ await panel.locator('.result-tab button').first().click()
+ await expect(panel.locator('.data-table')).toContainText('Ada')
+ await expect(panel.getByRole('button',{name:'编辑',exact:true})).toBeDisabled()
+ await expect(panel.getByRole('button',{name:'下一页',exact:true})).toBeDisabled()
+ await panel.getByRole('button',{name:'导出当前页 JSON',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((c:any)=>c.action==='export').at(-1)?.content)).toContain('"$oid"')
+ await panel.getByRole('button',{name:'文档树',exact:true}).click()
+ await expect(panel.locator('.result-document-list')).toBeVisible()
+})
+test('query refinement: immutable pagination and guarded document editing',async({page})=>{
+ await connect(page,'Mongo Local')
+ await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ await page.locator('[data-object-category="queries"]').click()
+ await page.locator('.object-list-panel:visible').getByRole('button',{name:/新建查询/}).click()
+ const editor=page.locator('.saved-query-editor:visible'),panel=editor.locator('.query-result-panel')
+ const input='.saved-query-editor:visible .native-mongo-editor .monaco-editor'
+ const run=editor.getByRole('button',{name:'运行选中 / 全部',exact:true})
+ await replaceEditor(page,input,'db.users.find({score:7},{},{sort:{score:-1},batchSize:10})')
+ await run.click()
+ await expect(panel.locator('.data-table')).toContainText('Ada')
+ await replaceEditor(page,input,'db.users.find({score:99})')
+ await panel.getByRole('button',{name:'下一页',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((c:any)=>c.action==='mongo.find').at(-1))).toMatchObject({filter:'{"score":7}',settings:{batchSize:10}})
+ await editor.getByRole('button',{name:'只读 · 启用写入',exact:true}).click()
+ await expect(panel.getByRole('button',{name:'编辑',exact:true})).toBeEnabled()
+ await panel.getByRole('button',{name:'编辑',exact:true}).click()
+ await expect(page.locator('.query-result-edit')).toBeVisible()
+ await page.locator('.query-result-edit').getByRole('button',{name:'取消',exact:true}).click()
+ await replaceEditor(page,input,'db.users.find({},{name:1})')
+ await run.click()
+ await expect(panel.getByRole('button',{name:'编辑',exact:true})).toBeDisabled()
+ await replaceEditor(page,input,'db.users.aggregate([])')
+ await run.click()
+ await expect(panel.getByRole('button',{name:'编辑',exact:true})).toBeDisabled()
+})
+
+
+test('Q1-Q2: range copy and paste, explicit save-all, column layout and field editor',async({page})=>{
+ await connect(page,'Mongo Local');await openUsers(page)
+ const w=page.locator('.workbench:visible'),grid=w.locator('.data-table').first()
+ await w.getByRole('button',{name:'只读 · 启用写入',exact:true}).click()
+ const cell=(i:number,field:string)=>grid.locator('tr[data-row-index="'+i+'"] [data-grid-field="'+field+'"]')
+ await cell(0,'name').click()
+ await cell(1,'name').click({modifiers:['Shift']})
+ await expect(grid.locator('.grid-range-cell')).toHaveCount(2)
+ await w.getByRole('button',{name:'复制选区',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='copyText').at(-1)?.value)).toBe('Ada\nGrace')
+ await w.locator('.grid-scroll').first().focus()
+ await w.locator('.grid-scroll').first().evaluate(el=>{const data=new DataTransfer();data.setData('text/plain','One\nTwo');el.dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}))})
+ await expect(cell(0,'name')).toHaveText('One');await expect(cell(1,'name')).toHaveText('Two')
+ expect(await page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mongo.replaceBatch').length)).toBe(0)
+ await w.getByRole('button',{name:'保存全部修改',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mongo.replaceBatch').at(-1)?.edits.map((x:any)=>JSON.parse(x.document).name))).toEqual(['One','Two'])
+ await cell(0,'nested').click()
+ await w.getByRole('button',{name:'字段编辑器',exact:true}).click()
+ const field=page.getByRole('dialog',{name:'字段编辑器'})
+ await expect(field).toBeVisible();await expect(field.locator('.view-lines')).toContainText('$numberLong')
+ await replaceEditor(page,'.field-value-dialog .monaco-editor','{"values":[{"$numberLong":"9007199254740993"}]}')
+ await field.getByRole('button',{name:'暂存修改',exact:true}).click()
+ await w.getByRole('button',{name:'保存全部修改',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> JSON.parse((window as any).__dbexCalls.filter((x:any)=>x.action==='mongo.replaceBatch').at(-1)?.edits[0]?.document).nested.values[0].$numberLong)).toBe('9007199254740993')
+ await w.getByRole('button',{name:'列管理',exact:true}).click()
+ const columns=page.getByRole('dialog',{name:'列管理'})
+ await columns.getByLabel('显示 nullable',{exact:true}).uncheck()
+ await columns.getByLabel('固定列 name',{exact:true}).check()
+ await columns.getByRole('button',{name:'关闭',exact:true}).click()
+ await expect(grid.locator('thead th[title="nullable"]')).toHaveCount(0)
+ await expect(grid.locator('thead th[title="name"]')).toHaveCSS('position','sticky')
+ await page.reload();await connect(page,'Mongo Local');await openUsers(page)
+ await expect(w.locator('thead th[title="nullable"]')).toHaveCount(0)
+})
+
+test('Q3: named browse profile and custom page size persist and apply explicitly',async({page})=>{
+ await connect(page,'MySQL Local');await openUsers(page)
+ const w=page.locator('.workbench:visible')
+ const custom=w.getByLabel('自定义每页数量',{exact:true})
+ await custom.fill('75');await custom.press('Enter')
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.browse'&&!x.countOnly).at(-1)?.limit)).toBe(75)
+ await w.getByRole('button',{name:'浏览配置',exact:true}).click()
+ const dialog=page.getByRole('dialog',{name:'浏览配置'})
+ await dialog.getByLabel('名称',{exact:true}).fill('Page 75')
+ await dialog.getByRole('button',{name:'另存当前配置',exact:true}).click()
+ await expect(dialog.getByRole('button',{name:/Page 75/})).toBeVisible()
+ await dialog.getByRole('button',{name:'应用配置',exact:true}).click()
+ await expect(dialog).toHaveCount(0)
+ await custom.fill('50');await custom.press('Enter')
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.browse'&&!x.countOnly).at(-1)?.limit)).toBe(50)
+ await w.getByRole('button',{name:'浏览配置',exact:true}).click()
+ await dialog.getByRole('button',{name:/Page 75/}).click()
+ await dialog.getByRole('button',{name:'应用配置',exact:true}).click()
+ await expect(custom).toHaveValue('75')
+})
+
+test('Q4: typed parameters, current SQL statement and independent stop keep the session',async({page})=>{
+ await connect(page,'MySQL Local')
+ await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ await page.locator('[data-object-kind="query-folder"]').click()
+ await page.locator('.object-list-panel:visible').getByRole('button',{name:/新建查询/}).click()
+ const editor=page.locator('.saved-query-editor:visible')
+ await replaceEditor(page,'.saved-query-editor:visible .query-editor .monaco-editor','SELECT 1; SELECT ? AS n')
+ await editor.getByRole('button',{name:'参数编辑器',exact:true}).click()
+ const params=page.getByRole('dialog',{name:'参数编辑器'})
+ await params.getByRole('button',{name:'添加参数',exact:true}).click()
+ await params.getByLabel('参数值',{exact:true}).fill('9223372036854775807')
+ await params.getByRole('button',{name:'应用',exact:true}).click()
+ await expect(editor.getByLabel('SQL 参数 JSON 数组')).toHaveValue('["9223372036854775807"]')
+ await editor.getByRole('button',{name:'运行当前语句',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.query').at(-1))).toMatchObject({sql:'SELECT ? AS n',parameters:['9223372036854775807']})
+ await replaceEditor(page,'.saved-query-editor:visible .query-editor .monaco-editor','SELECT 1 AS slow_query')
+ await editor.getByLabel('SQL 参数 JSON 数组').fill('[]')
+ await editor.getByRole('button',{name:'运行选中 / 全部',exact:true}).click()
+ await editor.getByRole('button',{name:'停止查询',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.some((x:any)=>x.action==='cancelQuery'))).toBe(true)
+ expect(await page.evaluate(()=> (window as any).__dbexCalls.some((x:any)=>x.action==='disconnect'))).toBe(false)
+})
+
+test('Q5: file preview, mapped import and completed job progress',async({page})=>{
+ await connect(page,'MySQL Local');await openUsers(page)
+ const w=page.locator('.workbench:visible')
+ await w.getByRole('button',{name:'流式导入向导',exact:true}).click()
+ const dialog=page.getByRole('dialog',{name:'流式导入向导'})
+ await dialog.getByRole('button',{name:'选择数据文件',exact:true}).click()
+ await expect(dialog.locator('.file-sample')).toContainText('New record')
+ await dialog.getByRole('button',{name:'启用写入',exact:true}).click()
+ await dialog.getByRole('button',{name:'确认执行',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='startFileTransfer').at(-1)?.request)).toMatchObject({direction:'import',entity:'users',mapping:[{source:'name',target:'name',conversion:'auto'}]})
+ await expect(dialog).toContainText('操作已完成')
+ await expect(dialog).toContainText('501')
+ await dialog.getByRole('button',{name:'关闭',exact:true}).click()
+})
+
+
+test('Q follow-up: nested BSON tree rename and add retain the original document until save',async({page})=>{
+ await connect(page,'Mongo Local');await openUsers(page)
+ const w=page.locator('.workbench:visible')
+ await w.getByRole('button',{name:'只读 · 启用写入',exact:true}).click()
+ await w.locator('tr[data-row-index="0"] [data-grid-field="name"]').click()
+ await w.getByRole('button',{name:'编辑',exact:true}).click()
+ const editor=page.getByRole('dialog',{name:'编辑文档'})
+ await editor.getByRole('button',{name:'编辑文档树',exact:true}).click()
+ const tree=editor.locator('.bson-tree-editor')
+ await tree.getByRole('button',{name:'nested',exact:true}).click()
+ await tree.locator('tr[data-tree-path]').filter({hasText:'values'}).click()
+ await tree.getByRole('button',{name:'重命名字段',exact:true}).click()
+ await tree.getByLabel('字段名称',{exact:true}).fill('renamed')
+ await tree.getByRole('button',{name:'暂存修改',exact:true}).click()
+ await tree.locator('tr[data-tree-path]').filter({hasText:'nested'}).click()
+ await tree.getByRole('button',{name:'新增节点',exact:true}).click()
+ await tree.getByLabel('字段名称',{exact:true}).fill('wide')
+ await tree.getByLabel('节点值',{exact:true}).fill('Long("9007199254740993")')
+ await tree.getByRole('button',{name:'暂存修改',exact:true}).click()
+ expect(await page.evaluate(()=> (window as any).__dbexCalls.some((x:any)=>x.action==='mongo.replace'))).toBe(false)
+ await editor.getByRole('button',{name:'更新',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=>{const x=(window as any).__dbexCalls.filter((x:any)=>x.action==='mongo.replace').at(-1);return x?JSON.parse(x.document).nested:null})).toEqual({renamed:[{$numberLong:'99'},'99'],wide:{$numberLong:'9007199254740993'}})
+})
+
+test('Q follow-up: primary-key locator restores previous filter and continuous preview appends',async({page})=>{
+ await connect(page,'Mongo Local');await openUsers(page)
+ const w=page.locator('.workbench:visible')
+ await w.getByRole('button',{name:'定位记录',exact:true}).click()
+ const locate=page.getByRole('dialog',{name:'定位记录'})
+ await locate.getByLabel('_id',{exact:true}).fill('64b000000000000000000001')
+ await locate.getByRole('button',{name:'定位记录',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=>JSON.parse((window as any).__dbexCalls.filter((x:any)=>x.action==='mongo.find').at(-1)?.filter||'{}'))).toMatchObject({_id:{$eq:{$oid:'64b000000000000000000001'}}})
+ await w.getByRole('button',{name:'返回原筛选',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mongo.find').at(-1)?.filter)).toBe('{}')
+ await w.getByRole('button',{name:'连续浏览',exact:true}).click()
+ await w.getByRole('button',{name:'加载更多',exact:true}).click()
+ await expect(w.locator('.continuous-bar')).toContainText('6')
+ await expect(w.locator('.data-table tbody tr[data-row-index]')).toHaveCount(6)
+ await w.getByRole('button',{name:'退出连续浏览',exact:true}).click()
+ await expect(w.locator('.continuous-bar')).toHaveCount(0)
+ await expect(w.locator('.data-table tbody tr[data-row-index]')).toHaveCount(3)
+})
+
+test('Q follow-up: multi-result read batch and immutable result tabs',async({page})=>{
+ await connect(page,'MySQL Local')
+ await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ await page.locator('[data-object-kind="query-folder"]').click()
+ await page.locator('.object-list-panel:visible').getByRole('button',{name:/新建查询/}).click()
+ const editor=page.locator('.saved-query-editor:visible')
+ await replaceEditor(page,'.saved-query-editor:visible .query-editor .monaco-editor','SELECT 1; SELECT 2')
+ await editor.getByRole('button',{name:'批量查询（只读）',exact:true}).click()
+ await expect(editor.getByRole('button',{name:'语句结果 2',exact:true})).toBeVisible()
+ await editor.getByRole('button',{name:'语句结果 2',exact:true}).click()
+ await expect(editor.locator('.query-result-panel .data-table tbody')).toContainText('2')
+ await expect(editor.getByRole('button',{name:'下一页',exact:true})).toBeDisabled()
+ await expect(editor.getByRole('button',{name:'编辑',exact:true})).toBeDisabled()
+})
+
+test('Q follow-up: named file preset saves format and mapping, requires fresh preview',async({page})=>{
+ await connect(page,'MySQL Local');await openUsers(page)
+ const w=page.locator('.workbench:visible')
+ await w.getByRole('button',{name:'流式导入向导',exact:true}).click()
+ const d=page.getByRole('dialog',{name:'流式导入向导'})
+ await d.getByLabel('文件编码',{exact:true}).selectOption('gb18030')
+ await d.getByRole('button',{name:'选择数据文件',exact:true}).click()
+ await d.getByLabel('配置名称',{exact:true}).fill('Legacy encoding')
+ await d.getByRole('button',{name:'另存当前配置',exact:true}).click()
+ await expect(d.getByLabel('文件传输配置',{exact:true}).locator('option')).toContainText(['文件传输配置','Legacy encoding'])
+ await d.getByRole('button',{name:'应用配置',exact:true}).click()
+ await expect(d.locator('.file-sample')).toHaveCount(0)
+ await expect(d.getByRole('button',{name:'确认执行',exact:true})).toBeDisabled()
+ await expect(d.getByLabel('文件编码',{exact:true})).toHaveValue('gb18030')
+ await d.getByRole('button',{name:'选择数据文件',exact:true}).click()
+ await expect(d.locator('.file-sample')).toContainText('New record')
+})
+
+
+test('Q history: success and failure metrics, filter and load without executing',async({page})=>{
+ await connect(page,'MySQL Local')
+ await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ await page.locator('[data-object-kind="query-folder"]').click()
+ await page.locator('.object-list-panel:visible').getByRole('button',{name:/新建查询/}).click()
+ const editor=page.locator('.saved-query-editor:visible')
+ const input='.saved-query-editor:visible .query-editor .monaco-editor'
+ await replaceEditor(page,input,'SELECT 1 AS history_success')
+ await editor.getByRole('button',{name:'运行选中 / 全部',exact:true}).click()
+ await expect(editor.locator('.query-result-panel .data-table')).toBeVisible()
+ await replaceEditor(page,input,'SELECT 1 AS history_failure')
+ await editor.getByRole('button',{name:'运行选中 / 全部',exact:true}).click()
+ await expect(editor.locator('.inline-message.error').first()).toContainText('SQL_POLICY')
+ await editor.getByRole('button',{name:'查询执行历史',exact:true}).click()
+ const dialog=page.getByRole('dialog',{name:'查询执行历史'})
+ await expect(dialog.locator('tbody')).toContainText('history_success')
+ await expect(dialog.locator('tbody')).toContainText('history_failure')
+ await expect(dialog.locator('tbody')).toContainText('SQL_POLICY')
+ await expect(dialog.locator('tbody')).toContainText('4 ms')
+ await dialog.getByLabel('执行状态',{exact:true}).selectOption('failed')
+ await expect(dialog.locator('tbody tr')).toHaveCount(1)
+ await dialog.getByLabel('执行状态',{exact:true}).selectOption('success')
+ await dialog.locator('tbody tr').first().click()
+ const count=await page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.query').length)
+ await dialog.getByRole('button',{name:'载入到编辑器',exact:true}).click()
+ await expect(dialog).toHaveCount(0)
+ await expect(editor.locator('.view-lines').first()).toContainText('history_success')
+ expect(await page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.query').length)).toBe(count)
+})
+
+test('Q fields: datetime precision stages safely and binary result opens exact hex read-only',async({page})=>{
+ await page.evaluate(()=>{(window as any).__dbexTemporalFixture=true})
+ await connect(page,'MySQL Local');await openUsers(page)
+ const w=page.locator('.workbench:visible')
+ await w.getByRole('button',{name:'只读 · 启用写入',exact:true}).click()
+ await w.locator('tr[data-row-index="0"] [data-grid-field="stamp"]').click()
+ await w.getByRole('button',{name:'字段编辑器',exact:true}).click()
+ const field=page.getByRole('dialog',{name:'字段编辑器'})
+ await expect(field.getByLabel('日期',{exact:true})).toHaveValue('2024-02-29')
+ await expect(field.getByLabel('时间',{exact:true})).toHaveValue('12:34:56.123456')
+ await field.getByLabel('时间',{exact:true}).fill('09:10:11.000001')
+ await field.getByRole('button',{name:'暂存修改',exact:true}).click()
+ await w.getByRole('button',{name:'保存全部修改',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.updateBatch').at(-1)?.edits[0]?.changes.stamp)).toBe('2024-02-29 09:10:11.000001')
+ await page.locator('.resource-node[data-object-kind="query-folder"]').click()
+ await page.locator('.object-list-panel:visible').getByRole('button',{name:/新建查询/}).click()
+ const editor=page.locator('.saved-query-editor:visible')
+ await replaceEditor(page,'.saved-query-editor:visible .query-editor .monaco-editor','SELECT 1 AS blob_preview')
+ await editor.getByRole('button',{name:'运行选中 / 全部',exact:true}).click()
+ await editor.locator('tr[data-row-index="0"] [data-grid-field="payload"]').click()
+ await editor.getByRole('button',{name:'字段编辑器',exact:true}).click()
+ await expect(field.locator('textarea')).toHaveValue('00 ff 01')
+ await expect(field.locator('textarea')).toHaveAttribute('readonly','')
+ await expect(field.getByRole('button',{name:'暂存修改',exact:true})).toHaveCount(0)
+})
+
+
+test('Q SQL result edit: explicit save targets the applied full-row query; projections and snapshots cannot write',async({page})=>{
+ await page.evaluate(()=>{(window as any).__dbexQueryEditFixture=true})
+ await connect(page,'MySQL Local')
+ await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ await page.locator('[data-object-kind="query-folder"]').click()
+ await page.locator('.object-list-panel:visible').getByRole('button',{name:/新建查询/}).click()
+ const editor=page.locator('.saved-query-editor:visible'),input='.saved-query-editor:visible .query-editor .monaco-editor'
+ const panel=editor.locator('.query-result-panel'),edit=panel.getByRole('button',{name:'编辑',exact:true})
+ await replaceEditor(page,input,'SELECT * FROM users WHERE id=1')
+ await editor.getByRole('button',{name:'运行选中 / 全部',exact:true}).click()
+ await expect(panel.locator('.data-table')).toContainText('Ada')
+ await expect(edit).toBeDisabled()
+ await editor.getByRole('button',{name:'只读 · 启用写入',exact:true}).click()
+ await expect(edit).toBeEnabled()
+ await expect(panel.getByRole('button',{name:'删除',exact:true})).toBeDisabled()
+ await panel.getByRole('button',{name:'固定结果',exact:true}).click()
+ await expect(edit).toBeDisabled()
+ await panel.getByRole('button',{name:'结果 1',exact:true}).click()
+ await replaceEditor(page,input,'SELECT * FROM different_table')
+ await edit.click()
+ const dialog=page.getByRole('dialog',{name:'编辑查询记录'})
+ await expect(dialog).toContainText('app.users')
+ await expect(dialog.getByLabel('id',{exact:true})).toHaveCount(0)
+ await dialog.getByLabel('name',{exact:true}).fill('Alicia')
+ await dialog.getByRole('button',{name:'保存修改',exact:true}).click()
+ await expect(dialog).toHaveCount(0)
+ await expect(panel.locator('.data-table')).toContainText('Alicia')
+ const calls=await page.evaluate(()=> (window as any).__dbexCalls)
+ expect(calls.filter((x:any)=>x.action==='mysql.updateBatch').at(-1)).toMatchObject({sessionId:'sql',database:'app',entity:'users',queryResult:true,confirmed:true,edits:[{key:{id:'1'},original:{id:'1',name:'Ada',email:'ada@example.test'},changes:{name:'Alicia'}}]})
+ expect(calls.filter((x:any)=>x.action==='mysql.query').at(-1).sql).toBe('SELECT * FROM users WHERE id=1')
+ await replaceEditor(page,input,'SELECT id,name FROM users')
+ await editor.getByRole('button',{name:'运行选中 / 全部',exact:true}).click()
+ await expect(edit).toBeDisabled()
+})
+
+test('Q query target switch: explicit same-engine target, no auto-run, original save scope and pinned result provenance',async({page})=>{
+ await page.evaluate(()=>{(window as any).__dbexQueryEditFixture=true})
+ await connect(page,'MySQL Other')
+ await connect(page,'MySQL Local')
+ await page.locator('[data-resource-session="sql"] [data-object-kind="database"]').first().click()
+ await page.locator('[data-resource-session="sql"] [data-object-kind="query-folder"]').click()
+ await page.locator('.object-list-panel:visible').getByRole('button',{name:/新建查询/}).click()
+ const editor=page.locator('.saved-query-editor:visible'),input='.saved-query-editor:visible .query-editor .monaco-editor'
+ const panel=editor.locator('.query-result-panel'),run=editor.getByRole('button',{name:'运行选中 / 全部',exact:true})
+ await editor.getByLabel('名称',{exact:true}).fill('Scoped query')
+ await replaceEditor(page,input,'SELECT * FROM users')
+ await run.click()
+ await expect(panel.locator('.data-table')).toContainText('Ada')
+ await panel.getByRole('button',{name:'固定结果',exact:true}).click()
+ const before=await page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.query').length)
+ await editor.getByRole('button',{name:'切换执行目标',exact:true}).click()
+ const dialog=page.getByRole('dialog',{name:'切换执行目标'})
+ await dialog.getByLabel('执行连接',{exact:true}).selectOption('sql2')
+ await expect(dialog.getByLabel('执行数据库',{exact:true})).toHaveValue('other')
+ await dialog.getByRole('button',{name:'切换执行目标',exact:true}).click()
+ await expect(dialog).toHaveCount(0)
+ await expect(editor.locator('.query-context-label')).toContainText('MySQL Other / other')
+ await expect(editor.locator('.query-context-label')).toContainText('MySQL Local / app')
+ expect(await page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.query').length)).toBe(before)
+ await panel.getByRole('button',{name:'结果 1',exact:true}).click()
+ await expect(panel.getByRole('button',{name:'编辑',exact:true})).toBeDisabled()
+ await run.click()
+ await expect(panel.locator('.data-table')).toContainText('Grace')
+ expect(await page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.query').at(-1))).toMatchObject({sessionId:'sql2',database:'other',sql:'SELECT * FROM users'})
+ await panel.getByRole('button',{name:/固定结果 1/}).click()
+ await expect(panel.locator('.data-table')).toContainText('Ada')
+ await panel.getByRole('button',{name:'摘要',exact:true}).click()
+ await expect(panel.locator('.query-result-text')).toContainText('MySQL Local / app')
+ await editor.getByRole('button',{name:'保存',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='saveQueryObject').at(-1)?.item)).toMatchObject({connectionId:'sql',database:'app',name:'Scoped query'})
+ await editor.getByRole('button',{name:'查询执行历史',exact:true}).click()
+ const history=page.getByRole('dialog',{name:'查询执行历史'})
+ await expect(history.locator('tbody tr')).toHaveCount(1)
+ await history.getByRole('button',{name:'关闭',exact:true}).last().click()
+ await panel.getByRole('button',{name:'结果 1',exact:true}).click()
+ await editor.getByRole('button',{name:'只读 · 启用写入',exact:true}).click()
+ await panel.getByRole('button',{name:'编辑',exact:true}).click()
+ const editDialog=page.getByRole('dialog',{name:'编辑查询记录'})
+ await expect(editDialog).toContainText('other.users')
+ await editDialog.getByLabel('name',{exact:true}).fill('Grace II')
+ await editDialog.getByRole('button',{name:'保存修改',exact:true}).click()
+ await expect(editDialog).toHaveCount(0)
+ expect(await page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.updateBatch').at(-1))).toMatchObject({sessionId:'sql2',database:'other',entity:'users',queryResult:true,edits:[{key:{id:'2'},changes:{name:'Grace II'}}]})
+ await page.locator('[data-connection-id="sql2"]').click({button:'right'})
+ await page.locator('.connection-context-menu').getByRole('button',{name:'断开连接',exact:true}).click()
+ await expect(editor.locator('.query-context-label')).toContainText('执行目标已断开')
+ await expect(run).toBeDisabled()
+ await editor.getByRole('button',{name:'切换执行目标',exact:true}).click()
+ await expect(dialog.getByLabel('执行连接',{exact:true})).toHaveValue('sql')
+ await expect(dialog.getByLabel('执行数据库',{exact:true})).toHaveValue('app')
+ await dialog.getByRole('button',{name:'切换执行目标',exact:true}).click()
+ await run.click()
+ await expect(panel.locator('.data-table')).toContainText('Ada')
+ expect(await page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.query').at(-1))).toMatchObject({sessionId:'sql',database:'app'})
+})
+
+
+test('Q mixed script: explicit write mode, individual results and partial failure remain visible',async({page})=>{
+ await connect(page,'MySQL Local')
+ await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ await page.locator('[data-object-kind="query-folder"]').click()
+ await page.locator('.object-list-panel:visible').getByRole('button',{name:/新建查询/}).click()
+ const editor=page.locator('.saved-query-editor:visible')
+ const run=editor.getByRole('button',{name:'执行读写脚本',exact:true})
+ await replaceEditor(page,'.saved-query-editor:visible .query-editor .monaco-editor','INSERT INTO users VALUES (1); SELECT * FROM users; INSERT INTO users VALUES (1)')
+ await expect(run).toBeDisabled()
+ await editor.getByRole('button',{name:'只读 · 启用写入',exact:true}).click()
+ await run.click()
+ await expect(editor.getByRole('button',{name:'停止后续语句',exact:true})).toBeVisible()
+ await expect(editor.locator('.batch-results-strip')).toContainText('2 / 3')
+ await expect(editor.locator('.batch-results-strip')).toContainText('停止于语句 3')
+ await expect(editor.locator('.inline-message.error').first()).toContainText('失败的写入可能部分完成')
+ await expect(editor.locator('.batch-results-strip')).toContainText('写入 1')
+ await editor.locator('.batch-results-strip').getByRole('button',{name:/语句结果 2/}).click()
+ const panel=editor.locator('.query-result-panel')
+ await panel.getByRole('button',{name:'结果 1',exact:true}).click()
+ await expect(panel.locator('.data-table')).toContainText('Ada')
+ await expect(panel.getByRole('button',{name:'编辑',exact:true})).toBeDisabled()
+ expect(await page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='executeScriptBatch').at(-1))).toMatchObject({id:'sql',request:{database:'app',text:'INSERT INTO users VALUES (1); SELECT * FROM users; INSERT INTO users VALUES (1)',parameters:[]}})
+})
+
+
+test('Q SQL bulk edit: inline edits and clipboard paste stage atomically; conflicts require refresh',async({page})=>{
+ await page.evaluate(()=>{(window as any).__dbexQueryEditFixture=true;(window as any).__dbexBulkFixture=true})
+ await connect(page,'MySQL Local')
+ await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ await page.locator('[data-object-kind="query-folder"]').click()
+ await page.locator('.object-list-panel:visible').getByRole('button',{name:/新建查询/}).click()
+ const editor=page.locator('.saved-query-editor:visible'),panel=editor.locator('.query-result-panel')
+ const run=editor.getByRole('button',{name:'运行选中 / 全部',exact:true}),input='.saved-query-editor:visible .query-editor .monaco-editor'
+ await replaceEditor(page,input,'SELECT * FROM users ORDER BY id')
+ await run.click()
+ await expect(panel.locator('.data-table')).toContainText('Grace')
+ await editor.getByRole('button',{name:'只读 · 启用写入',exact:true}).click()
+ await panel.getByRole('button',{name:'批量编辑',exact:true}).click()
+ const cell=(row:number,field:string)=>panel.locator('tr[data-row-index="'+row+'"] [data-grid-field="'+field+'"]')
+ await cell(0,'name').dblclick()
+ const inline=panel.locator('.inline-grid-input')
+ await inline.fill('Alicia');await inline.press('Enter')
+ await expect(cell(0,'name')).toContainText('Alicia')
+ await cell(0,'name').click()
+ await page.evaluate(()=>{
+  const host=document.activeElement!,dt=new DataTransfer();dt.setData('text/plain','Alice\nGrace II')
+  host.dispatchEvent(new ClipboardEvent('paste',{clipboardData:dt,bubbles:true,cancelable:true}))
+ })
+ await expect(cell(0,'name')).toContainText('Alice')
+ await expect(cell(1,'name')).toContainText('Grace II')
+ await cell(0,'id').click()
+ await page.evaluate(()=>{
+  const dt=new DataTransfer();dt.setData('text/plain','999\tWrong')
+  document.activeElement!.dispatchEvent(new ClipboardEvent('paste',{clipboardData:dt,bubbles:true,cancelable:true}))
+ })
+ await expect(panel.locator('[role="alert"]')).toContainText('未暂存任何修改')
+ await expect(cell(0,'name')).toContainText('Alice')
+ await expect(run).toBeDisabled()
+ await expect(editor.getByRole('button',{name:'切换执行目标',exact:true})).toBeDisabled()
+ expect(await page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.updateBatch').length)).toBe(0)
+ await panel.getByRole('button',{name:'保存全部修改',exact:true}).click()
+ await expect(panel.getByRole('button',{name:'批量编辑',exact:true})).toBeVisible()
+ expect(await page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.updateBatch').at(-1))).toMatchObject({sessionId:'sql',database:'app',entity:'users',queryResult:true,edits:[{key:{id:'1'},changes:{name:'Alice'}},{key:{id:'2'},changes:{name:'Grace II'}}]})
+ await panel.getByRole('button',{name:'批量编辑',exact:true}).click()
+ await cell(0,'name').dblclick();await inline.fill('Conflict');await inline.press('Enter')
+ await page.evaluate(()=>{(window as any).__dbexQueryEditConflict=true})
+ await panel.getByRole('button',{name:'保存全部修改',exact:true}).click()
+ await expect(panel.locator('[role="alert"]')).toContainText('EDIT_CONFLICT')
+ await expect(panel.getByRole('button',{name:'保存全部修改',exact:true})).toBeDisabled()
+ await panel.getByRole('button',{name:'取消全部修改',exact:true}).click()
+ await expect(cell(0,'name')).toContainText('Alice')
+})
+
+
+test('Q SQL CTE: qualified output aliases are suggested without executing the query',async({page})=>{
+ await connect(page,'MySQL Local')
+ await page.locator('.resource-node[data-object-kind="database"]').first().click()
+ await page.locator('[data-object-kind="query-folder"]').click()
+ await page.locator('.object-list-panel:visible').getByRole('button',{name:/新建查询/}).click()
+ const input='.saved-query-editor:visible .query-editor .monaco-editor'
+ await replaceEditor(page,input,'WITH sample(output_value) AS (SELECT 1) SELECT * FROM sample s WHERE s.')
+ await page.keyboard.press('Escape')
+ await page.keyboard.press('Control+Space')
+ await expect(page.locator('.suggest-widget.visible')).toContainText('output_value')
+ expect(await page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.query'))).toEqual([])
+})
+
+
+test('Q3 SQL predicate: bound filter, rejection, named profile and filtered SQL export use applied scope',async({page})=>{
+ await connect(page,'MySQL Local');await openUsers(page)
+ const w=page.locator('.workbench:visible')
+ await w.getByRole('button',{name:'查询条件',exact:true}).click()
+ await w.getByRole('button',{name:'SQL 条件',exact:true}).click()
+ const panel=w.locator('.sql-browse-filter'),predicate=panel.getByLabel('SQL 条件',{exact:true}),parameters=panel.getByLabel('SQL 参数 JSON 数组',{exact:true})
+ const text='LOWER(name) LIKE ? AND id BETWEEN 1 AND 100'
+ await predicate.fill(text);await parameters.fill('["a%"]')
+ await panel.getByRole('button',{name:'查询',exact:true}).click()
+ const raw={text,parameters:['a%']}
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.browse').at(-1)?.filter.raw)).toEqual(raw)
+ await w.getByRole('button',{name:'浏览配置',exact:true}).click()
+ const profile=page.getByRole('dialog',{name:'浏览配置'})
+ await profile.getByLabel('名称',{exact:true}).fill('Advanced SQL')
+ await profile.getByRole('button',{name:'另存当前配置',exact:true}).click()
+ await expect(profile.getByRole('button',{name:/Advanced SQL/})).toBeVisible()
+ await profile.getByRole('button',{name:'关闭',exact:true}).click()
+ const before=await page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.browse').length)
+ await predicate.fill('id = 1; DELETE FROM users')
+ await panel.getByRole('button',{name:'查询',exact:true}).click()
+ await expect(w.locator('.browse-filter-panel [role="alert"]')).toContainText('INVALID_FILTER')
+ expect(await page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='mysql.browse').length)).toBe(before)
+ await predicate.fill('id = 2');await parameters.fill('[]')
+ await panel.getByRole('button',{name:'查询',exact:true}).click()
+ await w.getByRole('button',{name:'浏览配置',exact:true}).click()
+ await profile.getByRole('button',{name:/Advanced SQL/}).click()
+ await profile.getByRole('button',{name:'应用配置',exact:true}).click()
+ await expect(predicate).toHaveValue(text)
+ await expect(parameters).toHaveValue('["a%"]')
+ await w.getByRole('button',{name:'流式导出向导',exact:true}).click()
+ const wizard=page.getByRole('dialog',{name:'流式导出向导'})
+ await wizard.getByLabel('格式',{exact:true}).selectOption('sql')
+ await wizard.getByLabel('仅导出当前筛选匹配记录',{exact:true}).check()
+ await wizard.getByRole('button',{name:'确认执行',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=> (window as any).__dbexCalls.filter((x:any)=>x.action==='startFileTransfer').at(-1)?.request)).toMatchObject({direction:'export',format:'sql',database:'app',entity:'users',filter:{raw}})
+})
+
+test('Q5 Excel wizard: re-preview worksheet, field mapping and explicit import token',async({page})=>{
+ await connect(page,'MySQL Local');await openUsers(page)
+ const w=page.locator('.workbench:visible')
+ await w.getByRole('button',{name:'流式导入向导',exact:true}).click()
+ const wizard=page.getByRole('dialog',{name:'流式导入向导'})
+ await wizard.getByLabel('格式',{exact:true}).selectOption('xlsx')
+ await expect(wizard.getByLabel('文件编码',{exact:true})).toHaveCount(0)
+ await wizard.getByRole('button',{name:'选择数据文件',exact:true}).click()
+ const sheet=wizard.getByLabel('Excel 工作表',{exact:true})
+ await expect(sheet).toHaveValue('First')
+ await sheet.selectOption('Second')
+ await expect(wizard.locator('.file-sample')).toContainText('Second sheet record')
+ await expect(sheet).toHaveValue('Second')
+ await wizard.getByRole('button',{name:'启用写入',exact:true}).click()
+ await wizard.getByRole('button',{name:'确认执行',exact:true}).click()
+ const calls=await page.evaluate(()=> (window as any).__dbexCalls)
+ const chosen=calls.filter((x:any)=>x.action==='selectFileWorksheet').at(-1)
+ const request=calls.filter((x:any)=>x.action==='startFileTransfer').at(-1).request
+ expect(chosen).toMatchObject({id:'sql',sheet:'Second'})
+ expect(request).toMatchObject({format:'xlsx',worksheet:'Second',direction:'import',database:'app',entity:'users',mapping:[{source:'name',target:'name',conversion:'auto'}]})
+ expect(request.token).not.toBe(chosen.token)
+})
+
+
+test('Q5 Redis native archive uses explicit matching scope',async({page})=>{
+ await connect(page,'Redis Local')
+ await page.getByRole('button',{name:'导出 Key 存档',exact:true}).click()
+ const wizard=page.getByRole('dialog',{name:'流式导出向导',exact:true})
+ await wizard.getByLabel('Redis Key 匹配模式',{exact:true}).fill('profile:*')
+ await wizard.getByRole('button',{name:'确认执行',exact:true}).click()
+ await expect.poll(()=>page.evaluate(()=>(window as any).__dbexCalls.filter((c:any)=>c.action==='startFileTransfer').at(-1)?.request)).toMatchObject({direction:'export',database:'0',entity:'keyspace',format:'jsonl',redisPattern:'profile:*'})
 })

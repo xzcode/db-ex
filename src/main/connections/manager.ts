@@ -1,19 +1,20 @@
 import { randomUUID } from 'node:crypto'
 import type { MongoCategory } from '../../shared/mongo-catalog'
 import { connectionDisplayEndpoint } from '../../shared/connection-form'
-import { readFile, stat } from 'node:fs/promises'
 import type { ConnectionOptions as TlsConnectionOptions } from 'node:tls'
 import type { ConnectionConfig, DatabaseOperation, DataPreview, ExplorerNode, OperationResult, SessionInfo } from '../../shared/types'
 import { createTransport, type ConnectionTransport } from './transport'
 import {openVerifiedNativeTlsForward} from './native-tls-forward'
 import type {NativeRoute} from '../operations/native-tools'
 import { validateConnection, validateId } from './validation'
-import { mongoUriTlsEnabled } from './mongo-topology'
+import { loadConnectionTls } from './tls-material'
 import { secretValues } from './credentials'
 import type { SqliteProcessFactory } from '../operations/sqlite-client'
 import { databaseError, resourceName, type OperationContext } from '../operations/common'
 import { databaseAdapter, isKnownDatabaseAction, adapterAllowsAction } from './adapters'
 import type { AdapterSession } from './adapters/types'
+import {planReadBatch,planScriptBatch,sessionSensitiveSql} from '../operations/query-batch'
+import type {QueryBatchResult} from '../../shared/query-batch'
 
 interface LiveSession {
   info: SessionInfo
@@ -22,12 +23,8 @@ interface LiveSession {
   transport: ConnectionTransport
   tls: TlsConnectionOptions
   controller?: AbortController
-}
-async function certificate(path?: string): Promise<Buffer | undefined> {
-  if (!path) return undefined
-  const info = await stat(path)
-  if (!info.isFile() || info.size > 2 * 1024 * 1024) throw new Error('TLS_CONFIG: 证书文件必须为不超过2 MiB的普通文件')
-  return readFile(path)
+  isolatedRead?:boolean
+  scriptStop?:{requested:boolean}
 }
 export class SessionManager {
   private readonly sessions = new Map<string, LiveSession>()
@@ -58,14 +55,11 @@ export class SessionManager {
     const adapter = databaseAdapter(config.kind)
     try {
       transport = await createTransport({ ssh: config.ssh, proxy: config.proxy, timeoutMs: config.connectTimeoutMs })
-      const mongoTlsActive = config.kind === 'mongodb' && (config.tls.enabled || mongoUriTlsEnabled(config.uri))
-      const loadTls = config.tls.enabled || config.sentinelTls || mongoTlsActive
-      const [ca, cert, key] = loadTls ? await Promise.all([certificate(config.tls.caPath), certificate(config.tls.certPath), certificate(config.tls.keyPath)]) : []
-      const tls: TlsConnectionOptions = { ca, cert, key, servername: config.tls.servername || undefined, rejectUnauthorized: true, minVersion: 'TLSv1.2' }
+      const tls=await loadConnectionTls(config)
       driver=await adapter.connect({config,transport,tls,sqliteProcessFactory:this.sqliteProcessFactory,sqliteModulePath:this.sqliteModulePath})
       if (generation !== this.generation) throw new Error('SESSION_CLOSED: 窗口已关闭，本次连接已取消')
       const info: SessionInfo = { id: randomUUID(), connectionId, name: config.name, kind: config.kind,
-        displayHost: connectionDisplayEndpoint(config).host, serverVersion:driver.serverVersion, writable: false, transaction: false }
+        displayHost: connectionDisplayEndpoint(config).host, serverVersion:driver.serverVersion,...(config.kind==='redis'?{redisMode:config.redisMode||'standalone' as const}:{}), writable: false, transaction: false }
       this.sessions.set(info.id, { info, driver, transport, config, tls })
       return { ...info }
     } catch (error) {
@@ -146,10 +140,130 @@ export class SessionManager {
       return work(config,signal,route)
     })
   }
-  async clickhouseTransfer(id:string,input:import('../../shared/types').ClickHouseTransfer,path:string){
+  async clickhouseTransfer(id:string,input:import('../../shared/types').ClickHouseTransfer,path:string,parent?:AbortSignal,options?:import('../operations/clickhouse-transfer').ClickHouseFileOptions){
     const session=this.session(id),driver=session.driver
     if(session.info.kind!=='clickhouse'||!driver.transfer)throw new Error('INVALID_OPERATION: ClickHouse transfer')
-    return this.external(id,input.direction==='import',(_config,signal)=>driver.transfer!(input,path,{writable:session.info.writable,confirmed:true,signal}))
+    return this.external(id,input.direction==='import',(_config,signal)=>driver.transfer!(input,path,{writable:session.info.writable,confirmed:true,signal:parent?AbortSignal.any([parent,signal]):signal},options))
+  }
+  /** Saved read-only query execution uses its own authenticated transport.
+   * Cancelling or timing out the temporary query never destroys the explorer's
+   * original connection. Explicit transactions retain their own session. */
+  async executeQuery(id:string,input:DatabaseOperation):Promise<OperationResult>{
+    const session=this.session(id),adapter=databaseAdapter(session.info.kind)
+    if(!input||typeof input!=='object'||!adapterAllowsAction(session.info.kind,input.action)||Buffer.byteLength(JSON.stringify(input))>4*1024*1024)throw new Error('INVALID_OPERATION: 不支持的操作')
+    const eligible=['mysql.query','clickhouse.query','mongo.find','mongo.aggregate','mongo.count','mongo.estimateCount','mongo.indexes'].includes(input.action)
+    const sessionSensitive=input.action==='mysql.query'&&sessionSensitiveSql(input.sql)
+    if(!eligible||sessionSensitive||session.info.transaction||adapter.writes(input,session.info.writable))return this.execute(id,input)
+    return this.external(id,false,async(config,parent)=>{
+      session.isolatedRead=true
+      const signal=AbortSignal.any([parent,AbortSignal.timeout(30000)])
+      let transport:ConnectionTransport|undefined,driver:AdapterSession|undefined
+      let closing:Promise<unknown>|undefined
+      const close=()=>{if(!closing)closing=Promise.allSettled([driver?.close(),transport?.close()]);return closing}
+      const stop=()=>{if(driver)void close();else void transport?.close().catch(()=>{})}
+      signal.addEventListener('abort',stop,{once:true})
+      try{
+        signal.throwIfAborted()
+        transport=await createTransport({ssh:config.ssh,proxy:config.proxy,timeoutMs:config.connectTimeoutMs})
+        signal.throwIfAborted()
+        driver=await adapter.connect({config,transport,tls:session.tls,sqliteProcessFactory:this.sqliteProcessFactory,sqliteModulePath:this.sqliteModulePath})
+        signal.throwIfAborted()
+        const result=await Promise.race([driver.execute(input,{writable:false,confirmed:false,signal}),new Promise<never>((_,reject)=>{
+          signal.addEventListener('abort',()=>reject(new Error('CANCELLED: 查询已停止，原连接保留')),{once:true})
+        })])
+        signal.throwIfAborted()
+        return {...result,disconnected:false}
+      }catch(e){
+        if(signal.aborted)throw new Error(parent.aborted?'CANCELLED: 查询已停止，原连接保留':'TIMEOUT: 查询超时，原连接保留')
+        throw databaseError(e)
+      }finally{
+        signal.removeEventListener('abort',stop)
+        await close()
+        session.isolatedRead=false
+      }
+    })
+  }
+  async executeReadBatch(id:string,request:unknown):Promise<QueryBatchResult>{
+    const session=this.session(id)
+    if(session.info.transaction||session.controller)throw new Error('SESSION_BUSY: 请先提交或回滚当前事务')
+    const operations=planReadBatch(session.info.kind,request),batch:QueryBatchResult={items:[],total:operations.length}
+    let bytes=0
+    for(const [index,operation] of operations.entries()){
+      try{
+        // Each result is a bounded independent read, never a continuation
+        // of a write transaction. Preserve successfully completed results.
+        if(this.session(id).info.transaction)throw new Error('SESSION_BUSY: 请先提交或回滚当前事务')
+        const result=await this.executeQuery(id,operation)
+        const entry={sql:'sql'in operation?operation.sql:'',result}
+        const size=Buffer.byteLength(JSON.stringify(entry))
+        if(bytes+size>32*1024*1024)throw new Error('LIMIT_EXCEEDED: 批量结果预览超过32 MiB，请分批运行查询或使用流式导出')
+        bytes+=size;batch.items.push(entry)
+      }catch(e){batch.failedAt=index+1;batch.error=this.redact(databaseError(e).message);break}
+    }
+    return batch
+  }
+  /** Explicit mixed script. Use one fresh, verified connection and keep
+   * the original explorer session locked for the whole script. Statements
+   * autocommit individually, no implicit outer transaction, no replay. */
+  async executeScriptBatch(id:string,request:unknown,confirmed:boolean):Promise<QueryBatchResult>{
+    const session=this.session(id)
+    if(!session.info.writable||!confirmed)throw new Error('WRITE_CONFIRMATION_REQUIRED: 请先解锁会话，并主动确认写入')
+    const plan=planScriptBatch(session.info.kind,request,session.info.writable)
+    const batch:QueryBatchResult={items:[],total:plan.length,script:true}
+    return this.external(id,true,async(config,parent)=>{
+      const stop={requested:false};session.scriptStop=stop
+      let transport:ConnectionTransport|undefined,driver:AdapterSession|undefined,closing:Promise<unknown>|undefined
+      const close=()=>{if(!closing)closing=Promise.allSettled([driver?.close(),transport?.close()]);return closing}
+      const abort=()=>{if(driver)void close();else void transport?.close().catch(()=>{})}
+      parent.addEventListener('abort',abort,{once:true})
+      let bytes=0
+      try{
+        parent.throwIfAborted()
+        transport=await createTransport({ssh:config.ssh,proxy:config.proxy,timeoutMs:config.connectTimeoutMs})
+        parent.throwIfAborted()
+        driver=await databaseAdapter(config.kind).connect({config,transport,tls:session.tls,sqliteProcessFactory:this.sqliteProcessFactory,sqliteModulePath:this.sqliteModulePath})
+        for(const [index,item] of plan.entries()){
+          if(stop.requested||parent.aborted){
+            batch.failedAt=index+1;batch.error='CANCELLED: 已停止后续语句，已执行的语句不会回滚';break
+          }
+          const signal=AbortSignal.any([parent,AbortSignal.timeout(30000)])
+          let onAbort:(()=>void)|undefined
+          try{
+            const result=await Promise.race([
+              driver.execute(item.operation,{writable:item.write,confirmed:item.write,signal}),
+              new Promise<never>((_,reject)=>{onAbort=()=>reject(new Error(parent.aborted?'CANCELLED: 操作已取消':'TIMEOUT: 操作超过30秒，写入结果请核对'));signal.addEventListener('abort',onAbort,{once:true})})
+            ])
+            signal.throwIfAborted()
+            if(result.disconnected||driver.disconnected?.())throw Error('SESSION_CLOSED: 会话已关闭，请重新连接')
+            const entry={sql:item.operation.sql,result,write:item.write}
+            const size=Buffer.byteLength(JSON.stringify(entry))
+            if(bytes+size>32*1024*1024){
+              // The statement has already executed. Retain its outcome
+              // without the oversized row preview, and stop before the next.
+              batch.items.push({sql:item.operation.sql,write:item.write,previewOmitted:true,result:{columns:[],rows:[],affectedRows:result.affectedRows,durationMs:result.durationMs,message:'结果预览超过上限；语句已执行',truncated:true}})
+              if(index+1<plan.length){batch.failedAt=index+2;batch.error='LIMIT_EXCEEDED: 批量结果预览超过32 MiB，请分批运行查询或使用流式导出'}
+              break
+            }
+            bytes+=size;batch.items.push(entry)
+          }catch(e){
+            batch.failedAt=index+1;batch.error=this.redact(databaseError(e).message)
+            if(item.write)batch.writeFailure=true
+            break
+          }finally{if(onAbort)signal.removeEventListener('abort',onAbort)}
+        }
+        return batch
+      }finally{
+        parent.removeEventListener('abort',abort);session.scriptStop=undefined
+        await close()
+      }
+    })
+  }
+  cancelQuery(id:string):boolean{
+    const session=this.session(id)
+    if(session.scriptStop){session.scriptStop.requested=true;return true}
+    if(!session.isolatedRead||!session.controller)return false
+    session.controller.abort()
+    return true
   }
   async execute(id: string, input: DatabaseOperation): Promise<OperationResult> {
     if (!input || typeof input !== 'object' || !isKnownDatabaseAction(input.action)) throw new Error('INVALID_OPERATION: 不支持的操作')

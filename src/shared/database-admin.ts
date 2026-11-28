@@ -18,3 +18,11 @@ export function validateInitialCollection(value:unknown):string{
   if(typeof value!=='string'||!value||value!==value.trim()||new TextEncoder().encode(value).length>200||value.startsWith('system.')||value.includes('$')||/[\u0000-\u001f\u007f]/.test(value))throw new Error('INVALID_DATABASE: 初始集合名称无效')
   return value
 }
+
+/** Ordinary MongoDB collections only: never apply generic maintenance to
+ * system, GridFS backing collections or dollar-qualified namespaces. */
+export function validateManagedCollection(value:unknown):string{
+ const name=validateInitialCollection(value)
+ if(name.endsWith('.files')||name.endsWith('.chunks')||name.includes('\\'))throw new Error('INVALID_DATABASE: 不支持此集合的通用维护')
+ return name
+}

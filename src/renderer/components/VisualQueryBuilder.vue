@@ -31,6 +31,7 @@ function removeRule(group: number, index: number) {
   model.value.groups[group]?.rules.splice(index,1)
   if (!model.value.groups[group]?.rules.length) model.value.groups.splice(group,1)
 }
+function moveSort(index:number,delta:number){const target=index+delta;if(target<0||target>=model.value.sort.length)return;const [rule]=model.value.sort.splice(index,1);model.value.sort.splice(target,0,rule!)}
 function addSort() {
   if (model.value.sort.length >= 32) return
   model.value.sort.push({ field: props.fields.find(field => !model.value.sort.some(item => item.field === field)) || '', direction:1 })
@@ -89,7 +90,7 @@ function setField(rule:FilterRule){if(noValue(rule.operator)||stringOperators.in
       <input v-if="kind === 'mongodb'" v-model="rule.field" :list="fieldListId" :aria-label="t('排序字段')" :disabled="disabled" spellcheck="false" />
       <select v-else v-model="rule.field" :aria-label="t('排序字段')" :disabled="disabled"><option value="" disabled>{{ t('字段') }}</option><option v-for="field in fields" :key="field">{{ field }}</option></select>
       <select v-model.number="rule.direction" :aria-label="t('排序方式')" :disabled="disabled"><option :value="1">{{ t('升序') }} ↑</option><option :value="-1">{{ t('降序') }} ↓</option></select>
-      <button type="button" class="btn danger-text small" :aria-label="t('移除') + ' ' + t('排序方式') + ' ' + (index+1)" :disabled="disabled" @click="model.sort.splice(index,1)">×</button>
+      <button type="button" class="btn secondary small" :aria-label="t('上移排序')+' '+(index+1)" :disabled="disabled||index===0" @click="moveSort(index,-1)">↑</button><button type="button" class="btn secondary small" :aria-label="t('下移排序')+' '+(index+1)" :disabled="disabled||index===model.sort.length-1" @click="moveSort(index,1)">↓</button><button type="button" class="btn danger-text small" :aria-label="t('移除') + ' ' + t('排序方式') + ' ' + (index+1)" :disabled="disabled" @click="model.sort.splice(index,1)">×</button>
     </div>
     <div class="builder-actions"><button class="btn primary" type="button" :disabled="disabled" @click="emit('apply')">{{ t('应用筛选与排序') }}</button><button class="btn secondary" type="button" :disabled="disabled" @click="emit('reset')">{{ t('重置筛选') }}</button></div>
     <FilterValueDialog v-if="editingRule" :rule="editingRule" :kind="kind" :types="types" :suggestions="suggestions?.(editingRule.field) || []" @close="editing=undefined" @save="saveValue" />

@@ -1,3 +1,5 @@
+import {FilePresetStore} from './storage/file-presets'
+import type {FileTransferPreset} from '../shared/file-transfer'
 import { app, BrowserWindow, clipboard, dialog, ipcMain, shell, utilityProcess, nativeImage, screen, session as electronSession } from 'electron'
 import { windowChromeOptions } from '../shared/window-chrome'
 import { isLocale, resolveLocale, translate, localizeMessage, type Locale } from '../shared/i18n'
@@ -9,9 +11,18 @@ import { readFile, stat, writeFile, mkdir, mkdtemp, rm, chmod } from 'node:fs/pr
 import { pathToFileURL } from 'node:url'
 import type { ConnectionConfig, DatabaseOperation, FileImport, QuerySnippet } from '../shared/types'
 import { ConnectionStore } from './connections/store'
+import {MigrationService} from './migration/service'
+import {FileTransferService} from './file-transfer/service'
+import {normalizeFileTransfer,dataFileFormat,type FileTransferRequest} from '../shared/file-transfer'
+import {MigrationTemplateStore} from './storage/migration-templates'
+import {MigrationHistory} from './migration/history'
+import {migrationPolicyLabel,type MigrationJob,type MigrationTemplate} from '../shared/migration'
 import { SessionManager } from './connections/manager'
+import {planScriptBatch} from './operations/query-batch'
 import { validateId } from './connections/validation'
 import { SnippetStore } from './storage/snippets'
+import {BrowseProfileStore} from './storage/browse-profiles'
+import type {BrowseProfile} from '../shared/browse-profile'
 import { SavedQueryStore } from './storage/saved-queries'
 import { decrypt,encrypt,readJson,writeJson,SerialWrites } from './storage/secure-json'
 import { normalizeQueryScope,queryModeFor,portableQuery,readPortableQuery,type QueryMode,type SavedQuery,type QuerySave } from '../shared/saved-query'
@@ -21,13 +32,29 @@ import { nativeTasks,runNativeTool,toolVersion } from './operations/native-tools
 import { nativeToolTasks,toolNames, type ToolName,type NativeToolTask } from '../shared/preferences'
 import { parseSshConfig } from './connections/ssh-config'
 import { adapterOperationWrites } from './connections/adapters'
-import { transferFormat } from './operations/clickhouse-transfer'
+import { transferFormat,normalizeClickHouseTransfer } from './operations/clickhouse-transfer'
 import { validateMongoDocumentEdit } from './operations/mongodb'
 
 function getSystemLanguage(): string { return app.getPreferredSystemLanguages()[0] || app.getLocale() || 'en' }
 let currentLocale: Locale = 'en'
 const tr = (key: string, values: readonly unknown[] = []) => translate(currentLocale, key, values)
 const store = new ConnectionStore()
+const migrationHistory=new MigrationHistory({
+ async load(){const value=await readJson<{version:number;encrypted:string}>('migration-history.secure.json');if(!value)return [];if(value.version!==1||typeof value.encrypted!=='string')throw new Error('MIGRATION_HISTORY: 迁移历史文件无效');return decrypt<MigrationJob[]>(value.encrypted)},
+ async save(jobs){await writeJson('migration-history.secure.json',{version:1,encrypted:encrypt(jobs)})}
+})
+const migrations=new MigrationService(id=>store.get(id),modulePath=>{
+ const child=utilityProcess.fork(modulePath,[],{stdio:'ignore',serviceName:'DB EX SQLite migration'})
+ return {send:message=>child.postMessage(message),onMessage:callback=>{child.on('message',callback)},onExit:callback=>{child.once('exit',callback)},onError:callback=>{child.on('error',callback)},kill:()=>{child.kill()}}
+},app.isPackaged?join(process.resourcesPath,'app.asar.unpacked','dist-electron','sqlite-worker.cjs'):join(__dirname,'sqlite-worker.cjs'),migrationHistory)
+const migrationTemplates=new MigrationTemplateStore({
+ async read(){const f=await readJson<{version:number;encrypted:string}>('migration-templates.secure.json');if(!f)return [];if(f.version!==1||typeof f.encrypted!=='string')throw Error('MIGRATION_TEMPLATE: 迁移配置无效');return decrypt<MigrationTemplate[]>(f.encrypted)},
+ write:values=>writeJson('migration-templates.secure.json',{version:1,encrypted:encrypt(values)})
+},request=>migrations.validateRequest(request))
+const fileTransfers=new FileTransferService(modulePath=>{
+ const child=utilityProcess.fork(modulePath,[],{stdio:'ignore',serviceName:'DB EX file transfer'})
+ return {send:message=>child.postMessage(message),onMessage:callback=>{child.on('message',callback)},onExit:callback=>{child.once('exit',callback)},onError:callback=>{child.on('error',callback)},kill:()=>{child.kill()}}
+},app.isPackaged?join(process.resourcesPath,'app.asar.unpacked','dist-electron','sqlite-worker.cjs'):join(__dirname,'sqlite-worker.cjs'))
 const sessions = new SessionManager(modulePath=>{
   const child=utilityProcess.fork(modulePath,[],{stdio:'ignore',serviceName:'DB EX SQLite'})
   return {send:message=>child.postMessage(message),onMessage:callback=>{child.on('message',callback)},onExit:callback=>{child.once('exit',callback)},onError:callback=>{child.on('error',callback)},kill:()=>{child.kill()}}
@@ -42,6 +69,23 @@ const savedQueries=new SavedQueryStore({
   },
   write:values=>writeJson('saved-queries.secure.json',{version:1,encrypted:encrypt(values)})
 })
+const browseProfiles=new BrowseProfileStore({
+ async read(){const f=await readJson<{version:number;encrypted:string}>('browse-profiles.secure.json');if(!f)return [];if(f.version!==1||typeof f.encrypted!=='string')throw new Error('INVALID_PROFILE: 浏览配置文件无效');return decrypt<BrowseProfile[]>(f.encrypted)},
+ write:values=>writeJson('browse-profiles.secure.json',{version:1,encrypted:encrypt(values)})
+})
+const filePresets=new FilePresetStore({
+ async read(){const f=await readJson<{version:number;encrypted:string}>('file-presets.secure.json');if(!f)return [];if(f.version!==1||typeof f.encrypted!=='string')throw new Error('FILE_TRANSFER: 配置文件无效');return decrypt<FileTransferPreset[]>(f.encrypted)},
+ write:values=>writeJson('file-presets.secure.json',{version:1,encrypted:encrypt(values)})
+})
+function presetScope(id:string,database:string,entity:string,direction:unknown):import('../shared/file-transfer').FileTransferPresetScope{
+ if(direction!=='import'&&direction!=='export')throw new Error('FILE_TRANSFER: 参数无效')
+ return {...browseScope(id,database,entity),direction}
+}
+function browseScope(id:string,database:string,entity:string){
+ const scope=savedQueryScope(id,database)
+ if(typeof entity!=='string'||!entity||entity.length>200||/[\u0000-\u001f]/.test(entity))throw new Error('INVALID_PROFILE: 浏览配置无效')
+ return {...scope,entity}
+}
 function savedQueryScope(id:string,database:string){
   const info=sessions.info(id)
   return normalizeQueryScope({connectionId:info.connectionId,kind:info.kind,database})
@@ -102,9 +146,9 @@ function writes(op: DatabaseOperation, writable: boolean, kind:import('../shared
 }
 function operationDetail(id: string, op: DatabaseOperation): string {
   const info = sessions.info(id)
-  const target = 'entity' in op ? `${op.database}.${op.entity}` : 'initialCollection' in op ? `${op.database}.${op.initialCollection}` : 'database' in op ? op.database || '' : 'key' in op ? op.key : 'keys' in op ? tr('{0} 个已选择的Key', [op.keys.length]) : ''
+  const target = op.action==='mongo.renameCollection' ? `${op.database}.${op.entity} → ${op.database}.${op.newName}` : 'entity' in op ? `${op.database}.${op.entity}` : 'initialCollection' in op ? `${op.database}.${op.initialCollection}` : 'database' in op ? op.database || '' : 'key' in op ? op.key : 'keys' in op ? tr('{0} 个已选择的Key', [op.keys.length]) : ''
   const count = 'edits' in op ? '\n' + tr('修改 {0} 条选中记录', [op.edits.length]) : 'rows' in op ? '\n' + tr('导入 {0} 行', [op.rows.length]) : 'documents' in op ? '\n' + tr('写入 {0} 个文档', [op.documents.length]) : ''
-  const sql = (op.action === 'mysql.query'||op.action==='clickhouse.query') ? `\n\n${op.sql.slice(0, 1500)}` : op.action==='mariadb.sequenceRestart' ? '\nRESTART WITH '+op.value : op.action==='clickhouse.change' ? '\n\n'+JSON.stringify(op.change,null,2).slice(0,8192) : op.action === 'redis.command' ? '\n' + tr('命令：') + ' ' + op.args[0] : ''
+  const sql = (op.action === 'mysql.query'||op.action==='clickhouse.query') ? `\n\n${op.sql.slice(0, 1500)}` : op.action==='mongo.scriptWrite' ? '\n\n'+op.method+'\nFilter: '+op.filter.slice(0,3000)+'\nUpdate / replacement: '+(op.value||'').slice(0,3000)+'\nOptions: '+(op.options||'{}').slice(0,1000) : op.action==='mariadb.sequenceRestart' ? '\nRESTART WITH '+op.value : op.action==='clickhouse.change' ? '\n\n'+JSON.stringify(op.change,null,2).slice(0,8192) : op.action === 'redis.command' ? '\n' + tr('命令：') + ' ' + op.args[0] : ''
   return `${tr('连接：')} ${info.name}\n${tr('地址：')} ${info.displayHost}\n${tr('操作：')} ${op.action}${target ? '\n' + tr('目标：') + ' ' + target : ''}${count}\n${tr(info.transaction ? '当前有未提交事务。' : '本操作可能立即持久化。')}${sql}`
 }
 async function openText(win: BrowserWindow, title: string, limit = 4 * 1024 * 1024): Promise<FileImport | null> {
@@ -127,6 +171,65 @@ async function saveText(win: BrowserWindow, name: string, content: string, forma
   return true
 }
 function registerIpc(): void {
+  ipcMain.handle('file-transfer:pick',sessionHandler(async(win,id,format:unknown,delimiter:unknown,encoding?:unknown)=>{
+    const selected=dataFileFormat(format)
+    if(selected==='sql'&&sessions.info(id).kind==='mongodb'||sessions.info(id).kind==='redis'&&selected!=='jsonl')throw Error('FILE_TRANSFER: 不支持此数据库或操作')
+    const extensions=selected==='xlsx'?['xlsx']:selected==='parquet'?['parquet']:selected==='sql'?['sql']:selected==='csv'?['csv','txt']:['jsonl','ndjson','txt']
+    const result=await dialog.showOpenDialog(win,{properties:['openFile'],filters:[{name:selected.toUpperCase(),extensions}]})
+    if(result.canceled||!result.filePaths[0])return null
+    assertOwner(win,id)
+    return fileTransfers.pick(win.webContents.id,id,result.filePaths[0],format,delimiter,encoding)
+  }))
+  ipcMain.handle('file-transfer:sheet',sessionHandler((win,id,token:unknown,sheet:unknown)=>fileTransfers.previewSheet(win.webContents.id,id,token,sheet)))
+  ipcMain.handle('file-presets:list',sessionHandler((_win,id,database:string,entity:string,direction:unknown)=>filePresets.list(presetScope(id,database,entity,direction))))
+  ipcMain.handle('file-presets:save',sessionHandler((_win,id,database:string,entity:string,direction:unknown,input:unknown,presetId?:string)=>filePresets.save(presetScope(id,database,entity,direction),input,presetId)))
+  ipcMain.handle('file-presets:remove',sessionHandler((_win,id,database:string,entity:string,direction:unknown,presetId:string)=>filePresets.remove(presetScope(id,database,entity,direction),presetId)))
+  ipcMain.handle('file-transfer:job',handler(win=>fileTransfers.list(win.webContents.id)))
+  ipcMain.handle('file-transfer:cancel',handler((win,id:string)=>fileTransfers.cancel(win.webContents.id,id)))
+  ipcMain.handle('file-transfer:report',handler(async(win,id:string)=>{
+    const result=await dialog.showSaveDialog(win,{defaultPath:'dbex-conversion-errors.csv',filters:[{name:'CSV',extensions:['csv']}]})
+    if(result.canceled||!result.filePath)return false
+    await fileTransfers.saveReport(win.webContents.id,id,result.filePath);return true
+  }))
+  ipcMain.handle('file-transfer:start',sessionHandler(async(win,id,input:unknown)=>{
+    const info=sessions.info(id),request=normalizeFileTransfer(input,info.kind),owner=win.webContents.id
+    const writing=request.direction==='import'
+    if(info.kind==='redis'&&info.redisMode&&info.redisMode!=='standalone')throw Error('FILE_TRANSFER: Redis 存档仅支持独立实例')
+    if(writing&&!info.writable)throw new Error('READ_ONLY: 请先启用当前会话的写入权限')
+    if(info.transaction)throw new Error('SESSION_BUSY: 请先提交或回滚当前事务')
+    let output:string|undefined,filename:string
+    if(writing){
+      const preview=fileTransfers.importPreview(owner,id,request).preview
+      filename=preview.name+(preview.worksheet?' · '+(preview.worksheet==='*'?tr('全部工作表（表头相同）'):preview.worksheet):'')
+    }
+    else{
+      const result=await dialog.showSaveDialog(win,{defaultPath:request.entity.replace(/[^A-Za-z0-9_-]/g,'_')+'.'+request.format,filters:[{name:request.format.toUpperCase(),extensions:[request.format]}]})
+      if(result.canceled||!result.filePath)return null
+      output=result.filePath;filename=basename(output)
+    }
+    const detail=info.name+' · '+info.displayHost+'\n'+request.database+'.'+request.entity+'\n'+filename+'\n'+(info.kind==='redis'?(writing?tr('Redis Key 原生存档')+' · '+request.policy:tr('Redis Key 原生存档')+' · '+(request.redisKeys?tr('选中 Key')+': '+request.redisKeys.length:request.redisPattern)):(writing?request.policy+'\n'+(request.preserveDocuments?'完整 EJSON 文档':request.mapping!.map(m=>m.source+' → '+m.target+' ('+m.conversion+')').join('\n')):'导出全部匹配记录，不覆盖现有文件。CSV 为文本格式；在电子表格中打开前注意公式风险。'))
+    await confirm(win,writing?(request.policy==='replace'?'确认清空目标表并重新传输？':'确认导入文件？'):'确认导出文件？',detail+(writing?'\n'+tr(info.kind==='redis'?'Redis 逐 Key 写入，失败或取消不会回滚已确认的 Key；过期记录将跳过。':info.kind==='mongodb'?'MongoDB 分批写入，失败或取消时可能部分完成。':'关系型目标在独立事务中导入；提交结果不确定时请核对。'):''))
+    assertOwner(win,id)
+    return fileTransfers.start(owner,id,request,output,work=>sessions.external(id,writing,work))
+  }))
+  ipcMain.handle('migration:catalog',handler((win,id:unknown,database?:unknown)=>migrations.catalog(win.webContents.id,id,database)))
+  ipcMain.handle('migration:preview',handler((win,request:unknown)=>migrations.preview(win.webContents.id,request)))
+  ipcMain.handle('migration:fields',handler((win,id:unknown,database:unknown,name:unknown)=>migrations.fields(win.webContents.id,id,database,name)))
+  ipcMain.handle('migration:templates',handler(()=>migrationTemplates.list()))
+  ipcMain.handle('migration:template-save',handler((_win,input:unknown,id?:string)=>migrationTemplates.save(input,id)))
+  ipcMain.handle('migration:template-remove',handler((_win,id:unknown)=>migrationTemplates.remove(id)))
+  ipcMain.handle('migration:resume-preview',handler((win,id:unknown,request:unknown)=>migrations.resumePreview(win.webContents.id,id,request)))
+
+  ipcMain.handle('migration:jobs',handler(win=>migrations.list(win.webContents.id)))
+  ipcMain.handle('migration:remove-history',handler((win,id:unknown)=>migrations.removeHistory(win.webContents.id,id)))
+  ipcMain.handle('migration:cancel',handler((win,id:unknown)=>migrations.cancel(win.webContents.id,id)))
+  ipcMain.handle('migration:run',handler(async(win,planId:unknown,steps:unknown)=>{
+    const owner=win.webContents.id
+    const info=migrations.confirmation(owner,planId,steps)
+    await confirm(win,info.policy==='replace'?'确认清空目标表并重新传输？':info.policy==='upsert'?'确认覆盖匹配的数据？':'确认执行数据库迁移？',tr('源数据库')+': '+info.source+'\n'+tr('目标数据库')+': '+info.target+'\n'+tr('结构变更')+': '+info.ddl+'\n'+tr('数据传输')+': '+info.data+'\n'+tr('写入模式')+': '+tr(migrationPolicyLabel(info.policy,info.kind))+(info.condition?'\n'+tr('源记录条件')+': '+info.condition.field+' '+info.condition.operator+' ('+info.condition.type+') '+JSON.stringify(info.condition.value):'')+'\n\n'+info.names.join(', ')+(info.mappings?'\n\n'+info.mappings.map(m=>m.source+' → '+m.target+'\n'+m.fields.map(f=>f.source+' → '+f.target+' ('+f.conversion+')').join('\n')+(m.predicate?'\n'+m.predicate.text+'\n'+JSON.stringify(m.predicate.parameters):m.mongoFilter?'\n'+m.mongoFilter:'')).join('\n\n').slice(0,5000):'')+'\n\n'+tr('已完成的结构变更和已写入的数据可能无法自动回滚。源与目标结构须在执行前复核。'))
+    if(!windows.has(owner)||quitting)throw new Error('SESSION_CLOSED: 会话已关闭，请重新连接')
+    return migrations.start(owner,planId,steps)
+  }))
   ipcMain.handle('workspace:new-window',handler(()=>{if(windows.size>=8)throw new Error('LIMIT_EXCEEDED: 最多打开8个工作区窗口');createWindow(randomUUID());return true}))
   ipcMain.handle('workspace:restore-windows',handler((win,restore:unknown)=>{
     if(typeof restore!=='boolean'||windowIds.get(win.webContents.id)!==startupWindowId||windowRestoreStarted)return
@@ -223,16 +326,31 @@ function registerIpc(): void {
     if (enabled && !info.writable) await confirm(win, tr('允许修改 {0} 的数据？', [info.name]), `${tr('地址：')} ${info.displayHost}\n${tr('本会话将允许执行写操作，断开连接后恢复只读。数据库账号权限仍然有效。')}`, '解锁此会话')
     return sessions.setWriteAccess(id, enabled)
   }))
-  ipcMain.handle('sessions:execute', sessionHandler(async (win, id: string, operation: DatabaseOperation) => {
+  const executeHandler=(isolated:boolean)=>sessionHandler(async (win, id: string, operation: DatabaseOperation) => {
     const info = sessions.info(id)
     if (writes(operation, info.writable, info.kind)) {
       if (!info.writable || !('confirmed' in operation) || operation.confirmed !== true) throw new Error('WRITE_CONFIRMATION_REQUIRED: 请先解锁会话，并主动确认写入')
-      await confirm(win, operation.action === 'mongo.dropDatabase' || operation.action === 'mysql.dropDatabase' ? '确认永久删除整个数据库？' : '确认执行数据库写操作？', operationDetail(id, operation))
+      await confirm(win, operation.action === 'mongo.dropDatabase' || operation.action === 'mysql.dropDatabase' ? '确认永久删除整个数据库？' : operation.action==='mongo.dropCollection'?'确认永久删除集合？':operation.action==='mongo.clearCollection'?'确认清空集合全部文档？':operation.action==='mongo.scriptWrite'&&['deleteOne','deleteMany','findOneAndDelete'].includes(operation.method)?'确认删除符合筛选条件的文档？':'确认执行数据库写操作？', operationDetail(id, operation))
     }
     const start=Date.now()
-    try { const result=await sessions.execute(id,operation);diagnostic(operation.action,'ok',Date.now()-start);return result }
+    try { const result=await (isolated?sessions.executeQuery(id,operation):sessions.execute(id,operation));diagnostic(operation.action,'ok',Date.now()-start);return result }
     catch(error){diagnostic(operation.action,'error',Date.now()-start);throw error}
+  })
+  ipcMain.handle('sessions:execute',executeHandler(false))
+  ipcMain.handle('sessions:execute-query',executeHandler(true))
+  ipcMain.handle('sessions:read-batch',sessionHandler((_win,id,input:unknown)=>sessions.executeReadBatch(id,input)))
+  ipcMain.handle('sessions:script-batch',sessionHandler(async(win,id,input:unknown)=>{
+    const info=sessions.info(id)
+    if(!info.writable||info.transaction)throw Error('WRITE_CONFIRMATION_REQUIRED: 请先解锁会话，并主动确认写入')
+    const plan=planScriptBatch(info.kind,input,info.writable)
+    const database=plan[0]!.operation.database||''
+    const writes=plan.filter(item=>item.write).length
+    const preview=plan.map((item,i)=>(i+1)+'. '+item.operation.sql).join('\n')
+    const detail=tr('连接：')+' '+info.name+'\n'+tr('地址：')+' '+info.displayHost+'\n'+tr('目标：')+' '+database+'\n'+tr('共 {0} 条语句，其中 {1} 条写入',[plan.length,writes])+'\n'+tr('脚本使用独立连接，逐条执行；已执行的写入可能立即持久化。失败或停止不会回滚前面的语句。')+'\n\n'+preview.slice(0,3000)+(preview.length>3000?'\n…':'')
+    await confirm(win,'确认执行读写 SQL 脚本？',detail)
+    return sessions.executeScriptBatch(id,input,true)
   }))
+  ipcMain.handle('sessions:cancel-query',sessionHandler((_win,id)=>sessions.cancelQuery(id)))
   ipcMain.handle('clipboard:copy-text', handler((_win, value: unknown) => {
     if (typeof value !== 'string' || Buffer.byteLength(value, 'utf8') > 2 * 1024 * 1024) throw new Error('LIMIT_EXCEEDED: 剪贴板文本过大')
     clipboard.writeText(value)
@@ -297,10 +415,27 @@ function registerIpc(): void {
   ipcMain.handle('sessions:cli-stop',sessionHandler(async(_win,id)=>{
     const cli=nativeClis.get(id);if(!cli)return;cli.stop();await nativeCliJobs.get(id);nativeClis.delete(id)
   }))
+  ipcMain.handle('file-transfer:clickhouse',sessionHandler(async(win,id,input:unknown)=>{
+    const info=sessions.info(id),request=normalizeClickHouseTransfer(input),owner=win.webContents.id
+    if(info.kind!=='clickhouse')throw Error('INVALID_INPUT: ClickHouse transfer')
+    const writing=request.direction==='import'
+    if(writing&&!info.writable)throw Error('READ_ONLY: 请先启用当前会话的写入权限')
+    const filters=[{name:request.format.toUpperCase(),extensions:[request.format]}]
+    const selected=writing?await dialog.showOpenDialog(win,{properties:['openFile'],filters}):await dialog.showSaveDialog(win,{defaultPath:request.entity.replace(/[^A-Za-z0-9_-]/g,'_')+'.'+request.format,filters})
+    const path='filePaths'in selected?selected.filePaths[0]:selected.filePath
+    if(selected.canceled||!path)return null
+    const stamp=writing?await stat(path):undefined
+    if(stamp&&(!stamp.isFile()||!stamp.size))throw Error('INVALID_INPUT: ClickHouse transfer file')
+    const detail=info.name+' · '+info.displayHost+'\n'+request.database+'.'+request.entity+'\n'+basename(path)+' · '+request.format+'\n'+(request.fields?.join(', ')||tr('全部字段'))+(request.filter?'\n'+request.filter.field+' = '+JSON.stringify(request.filter.value):'')
+    await confirm(win,writing?'确认导入文件？':'确认导出文件？',detail+'\n'+tr(writing?'流式导入可能部分写入；失败或取消后请核对，不要直接重试。':'导出全部匹配记录，不覆盖已有文件。')+(!writing&&request.format==='csv'?'\n'+tr('原始 CSV 保留原值；在电子表格中打开前请检查公式风险。'):''))
+    assertOwner(win,id)
+    return fileTransfers.startClickHouse(owner,request,path,(signal,options)=>sessions.clickhouseTransfer(id,request,path,signal,options),stamp?{dev:stamp.dev,ino:stamp.ino,size:stamp.size,mtimeMs:stamp.mtimeMs}:undefined)
+  }))
   ipcMain.handle('sessions:clickhouse-transfer',sessionHandler(async(win,id:string,input:import('../shared/types').ClickHouseTransfer)=>{
     const info=sessions.info(id)
     if(info.kind!=='clickhouse'||!input||!['import','export'].includes(input.direction)||typeof input.database!=='string'||typeof input.entity!=='string'||input.database.length>200||input.entity.length>200)throw new Error('INVALID_INPUT: ClickHouse transfer')
     transferFormat(input.format)
+    if(input.fields!==undefined||input.filter!==undefined)throw Error('INVALID_INPUT: use ClickHouse file job for selected columns or filters')
     if(input.direction==='import'&&!info.writable)throw new Error('READ_ONLY: 请先启用当前会话的写入权限')
     const filters=[{name:input.format.toUpperCase(),extensions:[input.format]}]
     const selected=input.direction==='import'?await dialog.showOpenDialog(win,{properties:['openFile'],filters}):await dialog.showSaveDialog(win,{defaultPath:'clickhouse.'+input.format,filters})
@@ -310,6 +445,9 @@ function registerIpc(): void {
     return sessions.clickhouseTransfer(id,input,path)
   }))
   ipcMain.handle('sessions:cancel', sessionHandler((_win, id: string) => disconnectOwned(id)))
+  ipcMain.handle('browse-profiles:list',sessionHandler((_win,id,database:string,entity:string)=>browseProfiles.list(browseScope(id,database,entity))))
+  ipcMain.handle('browse-profiles:save',sessionHandler((_win,id,database:string,entity:string,draft:unknown,profileId?:string)=>browseProfiles.save(browseScope(id,database,entity),draft,profileId)))
+  ipcMain.handle('browse-profiles:delete',sessionHandler((_win,id,database:string,entity:string,profileId:string)=>browseProfiles.remove(browseScope(id,database,entity),profileId)))
   ipcMain.handle('query-objects:list',sessionHandler((_win,id:string,database:string,mode:QueryMode)=>savedQueries.list(savedQueryScope(id,database),mode)))
   ipcMain.handle('query-objects:get',sessionHandler((_win,id:string,database:string,queryId:string)=>savedQueries.get(savedQueryScope(id,database),queryId)))
   ipcMain.handle('query-objects:save',sessionHandler((_win,id:string,database:string,input:QuerySave)=>savedQueries.save(savedQueryScope(id,database),input)))
@@ -364,7 +502,7 @@ function createWindow(id=PRIMARY_WORKSPACE,bounds?:WorkspaceWindow['bounds']): v
   windows.add(contentsId);windowIds.set(contentsId,id)
   win.on('move',scheduleWindows);win.on('resize',scheduleWindows)
   win.on('close',()=>{if(!quitting&&windows.size===1)void persistWindows().catch(()=>{})})
-  win.webContents.once('destroyed', () => {windows.delete(contentsId);windowIds.delete(contentsId);void closeWindowSessions(contentsId);if(!quitting&&windowRestoreStarted)void persistWindows().catch(()=>{})})
+  win.webContents.once('destroyed', () => {windows.delete(contentsId);windowIds.delete(contentsId);void closeWindowSessions(contentsId);void migrations.closeOwner(contentsId);void fileTransfers.closeOwner(contentsId);if(!quitting&&windowRestoreStarted)void persistWindows().catch(()=>{})})
   win.once('ready-to-show', () => win.show())
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   win.webContents.on('will-navigate', event => event.preventDefault())
@@ -383,6 +521,9 @@ app.whenReady().then(async () => {
   electronSession.defaultSession.setPermissionCheckHandler(() => false)
   electronSession.defaultSession.on('will-download', event => event.preventDefault())
   await store.init()
+  // Keep ordinary browsing available if history is damaged; migration
+  // tasks fail before writes when their journal cannot initialize.
+  await migrations.init().catch(()=>{})
   // Preferences are optional; a corrupt preferences file must not prevent opening existing connections.
   await initNativePreferences().catch(()=>{})
   savedWindows=normalizeWorkspaceWindows(await readJson('workspace-windows.json').catch(()=>undefined))
@@ -398,5 +539,5 @@ app.on('before-quit', event => {
   event.preventDefault(); quitting = true
   if(windowSaveTimer)clearTimeout(windowSaveTimer)
   for(const cli of nativeClis.values())cli.stop()
-  void Promise.allSettled([persistWindows(),sessions.closeAll(),...nativeCliJobs.values()]).finally(() => app.quit())
+  void Promise.allSettled([persistWindows(),sessions.closeAll(),migrations.closeAll(),fileTransfers.closeAll(),...nativeCliJobs.values()]).finally(() => app.quit())
 })

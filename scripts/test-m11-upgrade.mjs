@@ -117,6 +117,35 @@ try{
  },state)
  assert.equal(actual.sql?.color,'#abcdef');assert.equal(actual.sql?.group,'Upgrade');assert(actual.secretFields.includes('password'));assert.equal(actual.password,undefined);assert.equal(actual.writable,false)
  assert.equal(actual.result,'upgrade-preserved');assert.equal(actual.note,'keep me');assert.equal(actual.draft,'SELECT 42 AS draft')
+ if(currentVersion==='1.1.0'){
+  // Check the new installed app's real migration IPC and packaged SQLite
+  // worker after the old application's profile has been retained. This is
+  // a read-only preview; no native confirmation is bypassed.
+  const targetFile=join(root,'migration target.sqlite'),target=new DatabaseSync(targetFile)
+  try{target.exec('CREATE TABLE renamed(key_id INTEGER PRIMARY KEY, description TEXT)')}finally{target.close()}
+  const result=await page.evaluate(async ({sourceId,targetFile})=>{
+   const target=await window.dbex.saveConnection({name:'Upgrade migration target',kind:'sqlite',host:'',port:0,filePath:targetFile,ssh:{enabled:false},tls:{enabled:false}})
+   const request={source:{connectionId:sourceId,database:'main'},target:{connectionId:target.id,database:'main'},mode:'data',objects:['records'],mappings:[{source:'records',target:'renamed',fields:[{source:'id',target:'key_id',conversion:'auto'},{source:'note',target:'description',conversion:'auto'}],predicate:{text:'id = ?',parameters:[1]}}]}
+   const fields=await window.dbex.migrationFields(sourceId,'main','records')
+   const plan=await window.dbex.previewMigration(request)
+   const template=await window.dbex.saveMigrationTemplate({name:'Upgrade mapping fixture',request})
+   return {fields,plan,template}
+  },{sourceId:state.sqliteId,targetFile})
+  assert.deepEqual(result.fields.map(f=>f.name),['id','note'])
+  assert.equal(result.plan.steps.length,1)
+  assert.equal(result.plan.steps[0].executable,true)
+  assert.equal(result.plan.steps[0].targetName,'renamed')
+  const stored=JSON.parse(await readFile(join(profile,'migration-templates.secure.json'),'utf8'))
+  assert.equal(stored.version,1);assert.equal(typeof stored.encrypted,'string')
+  assert(!JSON.stringify(stored).includes('Upgrade mapping fixture'))
+  await close()
+  page=await launch(newExe)
+  const reopened=await page.evaluate(()=>window.dbex.listMigrationTemplates())
+  assert.deepEqual(reopened.find(t=>t.id===result.template.id),result.template)
+  const untouched=new DatabaseSync(targetFile)
+  try{assert.equal(untouched.prepare('SELECT COUNT(*) AS n FROM renamed').get().n,0)}finally{untouched.close()}
+  console.log('M12 installed-app mapped migration preview, encrypted template restart and no implicit target write passed')
+ }
  await close()
  if(process.platform==='win32'){
   const uninstall=join(install,'Uninstall DB EX.exe')

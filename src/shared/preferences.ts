@@ -13,8 +13,12 @@ export interface EditorPreferences {
   lineNumbers:boolean; folding:boolean; brackets:boolean; syntax:boolean; insertSpaces:boolean; tabSize:number; wordWrap:boolean;
   fontFamily:typeof editorFonts[number]; fontSize:number; maxHighlightMB:number; customColors:boolean; colors:Record<SyntaxRole,string>
 }
+export const themeChoices=['dark','light','gray','black','soft-light','system'] as const
+export type AppTheme=typeof themeChoices[number]
+export type ResolvedTheme=Exclude<AppTheme,'system'>
+export const isLightTheme=(theme:AppTheme|string)=>theme==='light'||theme==='soft-light'
 export interface AppPreferences {
-  theme:'dark'|'light'|'system'; language:LanguagePreference; alwaysShowTabs:boolean;
+  theme:AppTheme; language:LanguagePreference; alwaysShowTabs:boolean;
   startup:'welcome'|'lastConnection'|'workspace'; completion:boolean; autoCompletion:boolean; firstSuggestion:boolean;
   editor:EditorPreferences;
   records:{ mysqlPageSize:100|200|500; mariadbPageSize:100|200|500; clickhousePageSize:100|200|500; mongoPageSize:100|200|500; sqlitePageSize:100|200|500; fontFamily:typeof gridFonts[number]; fontSize:number; rowHeight:0|26|30|34|40; stripes:0|2|3; recordHistory:boolean };
@@ -38,7 +42,7 @@ export function normalizePreferences(value:unknown):AppPreferences{
  const colors={...d.editor.colors}
  for(const key of syntaxRoles){const color=c[key];if(typeof color==='string'&&/^#[0-9a-f]{6}$/i.test(color))colors[key]=color.toLowerCase()}
  return {
- theme:choice(v.theme,['dark','light','system'] as const,d.theme),language:isLanguagePreference(v.language)?v.language:d.language,
+ theme:choice(v.theme,themeChoices,d.theme),language:isLanguagePreference(v.language)?v.language:d.language,
  alwaysShowTabs:bool(v.alwaysShowTabs,d.alwaysShowTabs),startup:choice(v.startup,['welcome','lastConnection','workspace'] as const,d.startup),
  completion:bool(v.completion,d.completion),autoCompletion:bool(v.autoCompletion,d.autoCompletion),firstSuggestion:bool(v.firstSuggestion,d.firstSuggestion),
  editor:{lineNumbers:bool(e.lineNumbers,d.editor.lineNumbers),folding:bool(e.folding,d.editor.folding),brackets:bool(e.brackets,d.editor.brackets),syntax:bool(e.syntax,d.editor.syntax),insertSpaces:bool(e.insertSpaces,d.editor.insertSpaces),tabSize:int(e.tabSize,2,1,8),wordWrap:bool(e.wordWrap,d.editor.wordWrap),fontFamily:choice(e.fontFamily,editorFonts,'default'),fontSize:int(e.fontSize,13,10,28),maxHighlightMB:int(e.maxHighlightMB,11,1,32),customColors:bool(e.customColors,false),colors},

@@ -86,6 +86,7 @@ export interface SessionInfo {
   kind: DatabaseKind
   displayHost: string
   serverVersion?: string
+  redisMode?: ConnectionConfig['redisMode']
   writable: boolean
   transaction: boolean
 }
@@ -101,6 +102,7 @@ export interface ExplorerNode {
   queryRevision?:string
   queryMode?:import('./saved-query').QueryMode
   readOnly?: boolean
+  maintenanceRestricted?:boolean
   objectType?: 'sequence' | 'system-versioned'
   metrics?: import('./object-inspection').ObjectMetric[]
   database?: string
@@ -125,6 +127,8 @@ export interface OperationResult extends DataPreview {
   ttl?: number
   length?: number
   rawRows?: SqlRow[]
+  /** Complete bounded binary cell previews; never editable SQL originals. */
+  binaryCells?:Record<string,string>[]
   documents?: string[]
   /** Per-document metadata aligned with rows and canonical Extended JSON. */
   bsonTypes?: BsonTypeBranch[]
@@ -134,6 +138,8 @@ export interface OperationResult extends DataPreview {
   backupId?:string
   durationMs?: number
   truncated?: boolean
+  truncationReason?: 'page'|'bytes'|'document'
+  queryReadOnly?:boolean
   message?: string
   transaction?: boolean
   disconnected?: boolean
@@ -153,15 +159,21 @@ export type MysqlOperation =
   | ({ action: 'mysql.browse'; filter: BrowseFilter; countOnly?: boolean; limit?: number; offset?: number } & Entity)
   | ({ action: 'mysql.insert'; values: SqlRow } & Entity & Confirmed)
   | ({ action: 'mysql.update'; key: SqlRow; original: SqlRow; changes: SqlRow } & Entity & Confirmed)
-  | ({action:'mysql.updateBatch';edits:SqlGridEdit[]} & Entity & Confirmed)
+  | ({action:'mysql.updateBatch';edits:SqlGridEdit[];queryResult?:true} & Entity & Confirmed)
   | ({ action: 'mysql.delete'; key: SqlRow; original: SqlRow } & Entity & Confirmed)
   | ({ action: 'mysql.import'; rows: SqlRow[] } & Entity & Confirmed)
   | ({ action: 'mysql.begin' | 'mysql.commit' | 'mysql.rollback' } & Confirmed)
+export interface MongoFindSettings {hint?:string;collation?:string;batchSize?:number;maxTimeMS?:number}
+export type MongoScriptWriteMethod='updateOne'|'updateMany'|'replaceOne'|'deleteOne'|'deleteMany'|'findOneAndUpdate'|'findOneAndReplace'|'findOneAndDelete'
 export type MongoOperation =
   | ({ action: 'mongo.createDatabase'; database: string; initialCollection: string } & Confirmed)
   | ({ action: 'mongo.dropDatabase'; database: string } & Confirmed)
-  | ({ action: 'mongo.find'; filter?: string; projection?: string; sort?: string; offset?: number; limit?: number } & Entity)
+  | ({ action: 'mongo.createCollection' | 'mongo.dropCollection' | 'mongo.clearCollection' } & Entity & Confirmed)
+  | ({ action: 'mongo.renameCollection'; newName:string } & Entity & Confirmed)
+  | ({ action: 'mongo.find'; filter?: string; projection?: string; sort?: string; offset?: number; limit?: number; settings?:MongoFindSettings } & Entity)
   | ({ action: 'mongo.count'; filter?: string } & Entity)
+  | ({ action: 'mongo.estimateCount' } & Entity)
+  | ({action:'mongo.scriptWrite';method:MongoScriptWriteMethod;filter:string;value?:string;options?:string} & Entity & Confirmed)
   | ({ action: 'mongo.aggregate'; pipeline: string; limit?: number } & Entity)
   | ({ action: 'mongo.insert'; documents: string[] } & Entity & Confirmed)
   | ({ action: 'mongo.replace'; original: string; document: string } & Entity & Confirmed)
@@ -189,8 +201,8 @@ export type ClickHouseChange =
   | {kind:'dropPartition'|'detachPartition'|'attachPartition';partitionId:string}
   | {kind:'backup';disk:string;file:string}
   | {kind:'restore';disk:string;file:string;newTable:string}
-export type ClickHouseTransferFormat='csv'|'jsonl'|'parquet'
-export interface ClickHouseTransfer {database:string;entity:string;direction:'import'|'export';format:ClickHouseTransferFormat}
+export type ClickHouseTransferFormat='csv'|'jsonl'|'parquet'|'native'
+export interface ClickHouseTransfer {database:string;entity:string;direction:'import'|'export';format:ClickHouseTransferFormat;fields?:string[];filter?:{field:string;value:string}}
 export type ClickHouseOperation =
   | ({action:'clickhouse.query';database?:string;sql:string;parameters?:Record<string,SqlValue>;limit?:number} & Confirmed)
   | ({action:'clickhouse.browse';limit?:number;offset?:number;sort?:import('./browse-filter').SortRule[];filter?:{field:string;value:string}} & Entity)
@@ -202,6 +214,7 @@ export type ClickHouseOperation =
   | ({action:'clickhouse.insert';rows:SqlRow[]} & Entity & Confirmed)
 export type DatabaseOperation = MysqlOperation | MongoOperation | RedisOperation | ClickHouseOperation
 export interface QuerySnippet {
+  execution?:import('./query-history').QueryExecution
   /** Optional fields keep existing encrypted history files compatible. */
   mongoKind?: 'query' | 'aggregation' | 'script'
   parameters?:string
@@ -222,6 +235,26 @@ export interface NativeCliSnapshot {output:string;status:string;running:boolean;
 export interface DbExAPI {
   readonly windowChrome:import('./window-chrome').WindowChrome
   readonly workspaceWindowId:string
+  selectFileWorksheet(id:string,token:string,sheet:string):Promise<import('./file-transfer').FilePreview>
+  pickDataFile(id:string,format:import('./file-transfer').DataFileFormat,delimiter:string,encoding?:import('./file-transfer').DataFileEncoding):Promise<import('./file-transfer').FilePreview|null>
+  startFileTransfer(id:string,request:import('./file-transfer').FileTransferRequest):Promise<import('./file-transfer').FileTransferJob|null>
+  listFilePresets(id:string,database:string,entity:string,direction:'import'|'export'):Promise<import('./file-transfer').FileTransferPreset[]>
+  saveFilePreset(id:string,database:string,entity:string,direction:'import'|'export',draft:import('./file-transfer').FileTransferPresetDraft,presetId?:string):Promise<import('./file-transfer').FileTransferPreset>
+  removeFilePreset(id:string,database:string,entity:string,direction:'import'|'export',presetId:string):Promise<void>
+  exportFileTransferReport(id:string):Promise<boolean>
+  getFileTransferJob():Promise<import('./file-transfer').FileTransferJob|null>
+  cancelFileTransfer(id:string):Promise<void>
+  migrationFields(id:string,database:string,name:string):Promise<import('./migration').MigrationField[]>
+  listMigrationTemplates():Promise<import('./migration').MigrationTemplate[]>
+  saveMigrationTemplate(input:{name:string;request:import('./migration').MigrationRequest},id?:string):Promise<import('./migration').MigrationTemplate>
+  removeMigrationTemplate(id:string):Promise<void>
+  resumeMigrationPreview(id:string,request:import('./migration').MigrationRequest):Promise<import('./migration').MigrationPlan>
+  migrationCatalog(id:string,database?:string):Promise<import('./migration').MigrationCatalog>
+  previewMigration(request:import('./migration').MigrationRequest):Promise<import('./migration').MigrationPlan>
+  runMigration(planId:string,steps:string[]):Promise<import('./migration').MigrationJob>
+  listMigrationJobs():Promise<import('./migration').MigrationJob[]>
+  removeMigrationHistory(id:string):Promise<void>
+  cancelMigration(id:string):Promise<void>
   newWorkspaceWindow():Promise<boolean>
   restoreWorkspaceWindows(restore:boolean):Promise<void>
   getNativePreferences():Promise<import('./preferences').NativePreferences>
@@ -259,12 +292,20 @@ export interface DbExAPI {
   preview(sessionId: string, database: string, entity: string, offset?: number): Promise<DataPreview>
   redisKeys(sessionId: string, cursor?: string, pattern?: string): Promise<DataPreview>
   redisValue(sessionId: string, key: string): Promise<DataPreview>
+  executeScriptBatch(id:string,request:import('./query-batch').QueryBatchRequest):Promise<import('./query-batch').QueryBatchResult>
+  executeReadBatch(id:string,request:import('./query-batch').QueryBatchRequest):Promise<import('./query-batch').QueryBatchResult>
+  executeQuery(id:string,operation:DatabaseOperation):Promise<OperationResult>
+  cancelQuery(id:string):Promise<boolean>
   execute(sessionId: string, operation: DatabaseOperation): Promise<OperationResult>
+  startClickHouseFileTransfer(sessionId:string,input:ClickHouseTransfer):Promise<import('./file-transfer').FileTransferJob|null>
   clickhouseTransfer(sessionId:string,input:ClickHouseTransfer):Promise<{bytes:number}|null>
   validateMongoDocument(document: string, original?: string): Promise<void>
   copyText(value: string): Promise<void>
   cancel(sessionId: string): Promise<void>
   setWriteAccess(sessionId: string, enabled: boolean): Promise<SessionInfo>
+  listBrowseProfiles(id:string,database:string,entity:string):Promise<import('./browse-profile').BrowseProfile[]>
+  saveBrowseProfile(id:string,database:string,entity:string,draft:import('./browse-profile').BrowseProfileDraft,profileId?:string):Promise<import('./browse-profile').BrowseProfile>
+  deleteBrowseProfile(id:string,database:string,entity:string,profileId:string):Promise<void>
   listSavedQueries(sessionId:string,database:string,mode:import('./saved-query').QueryMode):Promise<import('./saved-query').QuerySummary[]>
   getSavedQuery(sessionId:string,database:string,id:string):Promise<import('./saved-query').SavedQuery>
   saveQueryObject(sessionId:string,database:string,input:import('./saved-query').QuerySave):Promise<import('./saved-query').SavedQuery>

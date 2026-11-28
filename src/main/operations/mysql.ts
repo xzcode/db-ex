@@ -3,7 +3,7 @@ import type { Connection as CoreConnection, FieldPacket, ResultSetHeader } from 
 import type { MysqlOperation, OperationResult, SqlRow, SqlValue } from '../../shared/types'
 import { checkAborted, databaseError, displayCell, emptyResult, MAX_BYTES, MAX_ROWS, MAX_VALUE_BYTES, page, requireWrite, resourceName, sqlRow, TIMEOUT_MS, type OperationContext } from './common'
 import { mysqlObjectCapabilities } from '../../shared/relational-capabilities'
-import { validateDatabaseName } from '../../shared/database-admin'
+import { validateDatabaseName, protectedDatabase } from '../../shared/database-admin'
 import { compileMysqlFilter } from '../../shared/browse-filter'
 import { metric, metrics, mysqlFieldType, type ObjectInspection } from '../../shared/object-inspection'
 import { inspectSql, quoteIdentifier } from './sql-policy'
@@ -14,8 +14,9 @@ interface QueryData {
   columnTypes?: string[]
   header?: ResultSetHeader
   truncated: boolean
+  truncationReason?:OperationResult['truncationReason']
 }
-interface ColumnInfo { name: string; type: string; nullable: boolean; key: string; extra: string }
+interface ColumnInfo { name: string; type: string; nullable: boolean; key: string; extra: string; comment:string }
 interface Structure { columns: ColumnInfo[]; primaryKeys: string[]; indexes: Record<string, unknown>[]; engine: string; tableType:string }
 
 /** One instance per physical connection; transactions cannot bleed between tabs. */
@@ -95,10 +96,10 @@ export class MysqlOperations {
         const structure = await this.structure(operation.database, operation.entity, signal)
         const rows = structure.columns.map(column => ({
           name: column.name, type: column.type, nullable: String(column.nullable), key: column.key,
-          extra: column.extra, engine: structure.engine,
+          extra: column.extra, comment:column.comment, engine: structure.engine,
           indexes: structure.indexes.filter(index => index.Column_name === column.name).map(index => `${index.Key_name}${Number(index.Non_unique) === 0 ? ' (unique)' : ''}`).join(', '),
         }))
-        return { columns: ['name', 'type', 'nullable', 'key', 'extra', 'engine', 'indexes'], rows, primaryKeys: structure.primaryKeys, objectCapabilities:mysqlObjectCapabilities(structure.tableType,structure.engine,structure.primaryKeys.length>0) }
+        return { columns: ['name', 'type', 'nullable', 'key', 'extra','comment', 'engine', 'indexes'], rows, primaryKeys: structure.primaryKeys, objectCapabilities:mysqlObjectCapabilities(structure.tableType,structure.engine,structure.primaryKeys.length>0) }
       }
       case 'mysql.begin': {
         requireWrite(context)
@@ -188,11 +189,12 @@ export class MysqlOperations {
       }
       // Direct ORDER BY + LIMIT ensures the selected ordering isn't discarded
       // by a derived-table pagination wrapper.
-      const data = await this.query(compiled.sql + ' LIMIT ' + (limit + 1) + ' OFFSET ' + offset, compiled.parameters, signal, limit + 1)
+      const data = await this.query(compiled.sql + ' LIMIT ' + (limit + 1) + ' OFFSET ' + offset, compiled.parameters, signal, limit + 1,true,true)
       const more = data.values.length > limit
       if (more) data.values.pop()
       const result = this.result(data)
-      result.nextOffset = more ? offset + limit : undefined
+      result.nextOffset = (more||data.truncated)&&data.truncationReason!=='document'&&result.rows.length ? offset + result.rows.length : undefined
+      if(more&&!data.truncated)result.truncationReason='page'
       result.truncated = result.truncated || more
       return result
     } finally {
@@ -218,14 +220,15 @@ export class MysqlOperations {
       const sql = policy.select
         ? `SELECT * FROM (${policy.sql}\n) AS \`dbex_result\` LIMIT ${limit + 1} OFFSET ${offset}`
         : policy.sql
-      const data = await this.query(sql, parameters, signal, policy.select ? limit + 1 : MAX_ROWS)
+      const data = await this.query(sql, parameters, signal, policy.select ? limit + 1 : MAX_ROWS,true,policy.select)
       if (data.header) return emptyResult(`语句已执行${this.transaction ? '（事务尚未提交）' : ''}`, data.header.affectedRows)
       const hasNext = policy.select && data.values.length > limit
       if (hasNext) data.values.pop()
       const result = this.result(data)
-      result.nextOffset = hasNext ? offset + limit : undefined
+      result.nextOffset = policy.select&&(hasNext||data.truncated)&&data.truncationReason!=='document'&&result.rows.length ? offset + result.rows.length : undefined
+      if(hasNext&&!data.truncated)result.truncationReason='page'
       result.truncated = result.truncated || hasNext
-      return result
+      return {...result,queryReadOnly:policy.mode==='read'}
     } finally {
       if (temporaryReadTransaction && !this.closed) await this.query('ROLLBACK', [], signal, 1, false)
     }
@@ -267,7 +270,7 @@ export class MysqlOperations {
     if (fields.truncated) throw new Error('LIMIT_EXCEEDED: 表字段过多，不能安全编辑')
     const records = this.records(fields)
     const columns = records.map(row => ({
-      name: String(row.Field), type: String(row.Type), nullable: row.Null === 'YES', key: String(row.Key), extra: String(row.Extra),
+      name: String(row.Field), type: String(row.Type), nullable: row.Null === 'YES', key: String(row.Key), extra: String(row.Extra),comment:typeof row.Comment==='string'?row.Comment:'',
     }))
     const engineData = await this.query('SELECT ENGINE,TABLE_TYPE FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? LIMIT 1', [database, entity], signal, 1)
     const engine = String(engineData.values[0]?.[0] ?? '')
@@ -369,9 +372,17 @@ export class MysqlOperations {
     requireWrite(context)
     if(!Array.isArray(operation.edits)||!operation.edits.length||operation.edits.length>MAX_ROWS||Buffer.byteLength(JSON.stringify(operation.edits))>MAX_BYTES)throw new Error('LIMIT_EXCEEDED: 单批编辑最多 500 行和 2 MiB')
     const structure=await this.structure(operation.database,operation.entity,signal)
+    const atomic=structure.engine.toUpperCase()==='INNODB',existing=this.transaction
+    if(operation.queryResult===true){
+      if(existing||!atomic||protectedDatabase(this.kind,operation.database)||!mysqlObjectCapabilities(structure.tableType,structure.engine,structure.primaryKeys.length>0).update)throw new Error('QUERY_EDIT: 查询结果无法安全编辑')
+      // MySQL may report the permanent table in information_schema while
+      // SHOW CREATE TABLE resolves a temporary table on this connection.
+      const ddl=await this.query('SHOW CREATE TABLE '+quoteIdentifier(operation.database)+'.'+quoteIdentifier(operation.entity),[],signal,1)
+      const definition=String(ddl.values[0]?.[1]??'')
+      if(ddl.truncated||!/^CREATE\s+TABLE\b/i.test(definition))throw new Error('QUERY_EDIT: 查询结果无法安全编辑')
+    }
     this.assertRecordWrite(structure,'update')
     if(!mysqlObjectCapabilities(structure.tableType,structure.engine,structure.primaryKeys.length>0).update)throw new Error('READ_ONLY: 只读对象')
-    const atomic=structure.engine.toUpperCase()==='INNODB',existing=this.transaction
     if(existing&&!atomic)throw new Error('TRANSACTION_REQUIRED: 非事务表不能参与批量事务编辑')
     const identities=new Set<string>()
     const edits=operation.edits.map(item=>{
@@ -445,6 +456,7 @@ export class MysqlOperations {
   private result(data: QueryData): OperationResult {
     const records = this.records(data)
     const rows = records.map(row => Object.fromEntries(data.columns.map(column => [column, displayCell(row[column])])))
+    const binaryCells=records.map(row=>Object.fromEntries(Object.entries(row).filter(([,value])=>Buffer.isBuffer(value)&&value.length<=MAX_VALUE_BYTES).map(([key,value])=>[key,(value as Buffer).toString('base64')])))
     const editable = !records.some(row => Object.values(row).some(value => Buffer.isBuffer(value)))
     const rawRows: SqlRow[] | undefined = editable ? records.map(row => Object.fromEntries(Object.entries(row).map(([key, value]) => {
       if (value === null || value === undefined) return [key, null]
@@ -454,13 +466,13 @@ export class MysqlOperations {
       return [key, value]
     })) as SqlRow) : undefined
     return {
-      columns: data.columns, rows, rawRows, columnTypes: data.columnTypes, nullCells: data.values.map(values => values.flatMap((value, index) => value === null || value === undefined ? [index] : [])), truncated: data.truncated,
+      columns: data.columns, rows, rawRows,...(binaryCells.some(row=>Object.keys(row).length)?{binaryCells}:{}), columnTypes: data.columnTypes, nullCells: data.values.map(values => values.flatMap((value, index) => value === null || value === undefined ? [index] : [])), truncated: data.truncated,truncationReason:data.truncationReason,
       message: data.truncated ? '返回量达到上限；请缩小查询范围后重试' : editable ? undefined : '含二进制字段的结果仅供浏览，避免从编码预览误写数据',
     }
   }
 
   /** Prepared statements, event-by-event rows, strict byte cap, never buffered .toArray(). */
-  private query(sql: string, parameters: SqlValue[], signal: AbortSignal, maxRows: number, prepared = true): Promise<QueryData> {
+  private query(sql: string, parameters: SqlValue[], signal: AbortSignal, maxRows: number, prepared = true, drainBoundedPage=false): Promise<QueryData> {
     checkAborted(signal)
     if (this.closed) return Promise.reject(new Error('SESSION_CLOSED: 请重新连接 MySQL'))
     return new Promise((resolve, reject) => {
@@ -494,8 +506,11 @@ export class MysqlOperations {
         if (settled) return
         if (!Array.isArray(value)) { data.header = value as ResultSetHeader; return }
         const rowBytes = Buffer.byteLength(JSON.stringify(value, (_key, item: unknown) => typeof item === 'bigint' ? item.toString() : item))
+        if(data.truncated&&drainBoundedPage&&rowBytes<=MAX_VALUE_BYTES&&value.length<=500)return
         if (data.values.length >= maxRows || bytes + rowBytes > MAX_BYTES || rowBytes > MAX_VALUE_BYTES || value.length > 500) {
           data.truncated = true
+          data.truncationReason=rowBytes>MAX_VALUE_BYTES||value.length>500?'document':bytes+rowBytes>MAX_BYTES?'bytes':'page'
+          if(drainBoundedPage&&data.truncationReason!=='document')return // Drain only a bounded page of individually bounded rows.
           this.destroy()
           finish()
           return

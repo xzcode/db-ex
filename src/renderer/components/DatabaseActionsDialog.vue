@@ -4,9 +4,11 @@ import { t, localize } from '../i18n'
 import type { DatabaseOperation, ExplorerNode, OperationResult, SessionInfo, SqlRow } from '../../shared/types'
 import { validateDatabaseName, validateInitialCollection } from '../../shared/database-admin'
 import { newBrowseFilter } from '../../shared/browse-filter'
+import DataFileWizard from './DataFileWizard.vue'
+import {fileTransferSupported} from '../../shared/file-transfer'
 import { sqlRowsFromFile, csvFromRows } from '../data-format'
 type DatabaseActionMode = 'create'|'drop'|'search'|'import'|'export'|'schema'
-const props=defineProps<{session:SessionInfo;database:string;mode:DatabaseActionMode;existing:string[]}>()
+const props=defineProps<{session:SessionInfo;database:string;mode:DatabaseActionMode;existing:string[];initialEntity?:string}>()
 const emit=defineEmits<{close:[];changed:[database:string];select:[node:ExplorerNode];session:[session:SessionInfo]}>()
 const mongo=computed(()=>props.session.kind==='mongodb')
 const name=ref(''), initial=ref(''), confirmation=ref('')
@@ -15,6 +17,7 @@ const busy=ref(false), error=ref(''), notice=ref('')
 const writable=ref(props.session.writable)
 const format=ref<'json'|'csv'>('json')
 const fileName=ref('')
+const streamWizard=ref(false)
 const importDocuments=ref<string[]>([])
 const importRows=ref<SqlRow[]>([])
 const needsWrite=computed(()=>['create','drop','import'].includes(props.mode))
@@ -41,6 +44,7 @@ async function loadObjects(){
    const views=mongo.value&&props.mode!=='import'?await window.dbex.children(props.session.id,props.database,'views'):[]
    if(disposed)return
    objects.value=[...values,...views].filter(item=>item.entity&&(props.mode!=='import'||!item.readOnly))
+   if(props.initialEntity)entity.value=objects.value.find(item=>item.entity===props.initialEntity)?.id||''
  })
 }
 async function unlock(){
@@ -124,7 +128,8 @@ onMounted(()=>{if(!['create','drop'].includes(props.mode))void loadObjects()})
 onBeforeUnmount(()=>{disposed=true})
 </script>
 <template>
-  <div class="modal-backdrop" @keydown.esc.stop="!busy&&emit('close')">
+  <DataFileWizard v-if="streamWizard&&target?.entity" :session="session" :database="database" :entity="target.entity" :direction="mode==='import'?'import':'export'" @close="streamWizard=false" @session="value=>{writable=value.writable;emit('session',value)}"/>
+  <div v-else class="modal-backdrop" @keydown.esc.stop="!busy&&emit('close')">
     <section class="dialog database-action-dialog" role="dialog" aria-modal="true" :aria-label="t(labels[mode])">
       <header class="dialog-header"><div><span class="eyebrow">{{ session.name }}<template v-if="mode!=='create'"> / {{ database }}</template></span><h2>{{ t(labels[mode]) }}</h2></div><button class="icon-button" :aria-label="t('关闭')" :disabled="busy" @click="emit('close')">×</button></header>
       <div v-if="error" class="inline-message error" role="alert">{{ localize(error) }}</div><div v-if="notice" class="inline-message notice" role="status">{{ localize(notice) }}</div>
@@ -152,7 +157,7 @@ onBeforeUnmount(()=>{disposed=true})
         </template>
         <p v-if="busy" class="compact-help">{{ t('正在执行') }}</p>
       </div>
-      <footer class="dialog-footer"><button class="btn secondary" :disabled="busy" @click="emit('close')">{{ t(mode==='search'?'关闭':'取消') }}</button><button v-if="mode!=='search'" :class="['btn',mode==='drop'?'danger':'primary']" :disabled="!canSubmit" @click="submit">{{ t(mode==='create'?'新建':mode==='drop'?'删除':mode==='import'?'导入':'导出') }}</button></footer>
+      <footer class="dialog-footer"><button v-if="(mode==='import'||mode==='export')&&fileTransferSupported(session.kind)" class="btn primary" :disabled="busy||!target?.entity" @click="streamWizard=true">{{t(mode==='import'?'流式导入向导':'流式导出向导')}}</button><button class="btn secondary" :disabled="busy" @click="emit('close')">{{ t(mode==='search'?'关闭':'取消') }}</button><button v-if="mode!=='search'" :class="['btn',mode==='drop'?'danger':'primary']" :disabled="!canSubmit" @click="submit">{{ t(mode==='create'?'新建':mode==='drop'?'删除':mode==='import'?'导入':'导出') }}</button></footer>
     </section>
   </div>
 </template>

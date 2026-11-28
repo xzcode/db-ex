@@ -22,7 +22,7 @@ export function mongoCatalogNodes(database: string, entries: readonly MongoCatal
   const names = new Set(physical.map(item => item.name))
   let nodes: ExplorerNode[]
   switch (category) {
-    case 'collections': nodes = physical.filter(item=>item.name!=='system.js').map(item=>node('collection',item.name,item.name, item.name.endsWith('.files') && names.has(item.name.slice(0,-6)+'.chunks') || item.name.endsWith('.chunks') && names.has(item.name.slice(0,-7)+'.files'))); break
+    case 'collections': nodes = physical.filter(item=>item.name!=='system.js').map(item=>({...node('collection',item.name,item.name, item.name.endsWith('.files') && names.has(item.name.slice(0,-6)+'.chunks') || item.name.endsWith('.chunks') && names.has(item.name.slice(0,-7)+'.files')),...(item.type==='timeseries'?{maintenanceRestricted:true}:{})})); break
     case 'views': nodes = entries.filter(item=>item.type==='view').map(item=>node('view',item.name,item.name,true)); break
     case 'functions': nodes = names.has('system.js') ? [node('mongo-function','system.js','system.js',true)] : []; break
     case 'indexes': nodes = physical.filter(item=>item.name!=='system.js').map(item=>node('mongo-indexes',item.name,item.name)); break

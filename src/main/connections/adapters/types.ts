@@ -23,7 +23,7 @@ export interface AdapterSession {
   disconnected?:()=>boolean
   beginReadBudget?:()=>{release:()=>void;exceeded:()=>boolean}
   backupTo?: (path:string)=>Promise<unknown>
-  transfer?: (input:import('../../../shared/types').ClickHouseTransfer,path:string,context:OperationContext)=>Promise<{bytes:number}>
+  transfer?: (input:import('../../../shared/types').ClickHouseTransfer,path:string,context:OperationContext,options?:import('../../operations/clickhouse-transfer').ClickHouseFileOptions)=>Promise<{bytes:number}>
 }
 export interface DatabaseAdapter {
   readonly kind:DatabaseKind

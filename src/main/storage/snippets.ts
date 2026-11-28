@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import {normalizeQueryExecution} from '../../shared/query-history'
 import type { QuerySnippet } from '../../shared/types'
 import { decrypt, encrypt, readJson, SerialWrites, writeJson } from './secure-json'
 import { validateId } from '../connections/validation'
@@ -24,7 +25,8 @@ export class SnippetStore {
       if (input.entity !== undefined && (typeof input.entity !== 'string' || input.entity.length > 200)) throw new Error('查询记录参数错误')
       if (input.connectionId !== undefined) validateId(input.connectionId)
       if (input.id) validateId(input.id)
-      const entry: QuerySnippet = { id: input.id || randomUUID(), name: input.name, kind: input.kind, database: input.database, mongoKind: input.mongoKind, entity: input.entity, connectionId: input.connectionId, text: input.text, parameters:input.parameters, favorite: input.favorite, updatedAt: new Date().toISOString() }
+      const execution=normalizeQueryExecution(input.execution)
+      const entry: QuerySnippet = { ...(execution?{execution}:{}),id: input.id || randomUUID(), name: input.name, kind: input.kind, database: input.database, mongoKind: input.mongoKind, entity: input.entity, connectionId: input.connectionId, text: input.text, parameters:input.parameters, favorite: input.favorite, updatedAt: new Date().toISOString() }
       const old = await this.read()
       const result = [entry, ...old.filter(x => x.id !== entry.id)]
       const favorites = result.filter(x => x.favorite)
